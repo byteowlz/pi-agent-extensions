@@ -1,0 +1,19 @@
+{
+  "$schema": "./auto-rename.schema.json",
+  "model": {
+    "provider": "anthropic",
+    "id": "claude-3-5-haiku-20241022"
+  },
+  "fallbackModel": {
+    "provider": "openai",
+    "id": "gpt-4o-mini"
+  },
+  "fallbackDeterministic": "readable-id",
+  "prompt": "Generate a short, descriptive title (max 6 words) for a chat session based on this first message:\n\n<message>\n{{query}}\n</message>\n\nRules:\n- Be concise and specific\n- Use title case\n- No quotes or punctuation at the end\n- Focus on the main topic or intent\n- If unclear, use a generic but relevant title\n\nReply with ONLY the title, nothing else.",
+  "prefix": "",
+  "prefixCommand": "basename $(git rev-parse --show-toplevel 2>/dev/null || pwd)",
+  "prefixOnly": false,
+  "readableIdSuffix": false,
+  "enabled": true,
+  "debug": false
+}
