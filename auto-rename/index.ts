@@ -386,47 +386,27 @@ async function resolveModel(
 	modelConfig: ModelConfig,
 	ctx: ExtensionContext
 ): Promise<{ model: Model<Api> | null; apiKey: string | null; error: string | null }> {
-	const providers = getProviders();
+	const model = ctx.modelRegistry.find(modelConfig.provider, modelConfig.id) as Model<Api> | undefined;
 
-	if (!providers.includes(modelConfig.provider as (typeof providers)[number])) {
+	if (!model) {
+		const providers = Array.from(new Set(ctx.modelRegistry.getAll().map((m) => m.provider)));
 		const availableProviders = providers.slice(0, 5).join(", ");
 		const suffix = providers.length > 5 ? "..." : "";
 		return {
 			model: null,
 			apiKey: null,
-			error: `Provider "${modelConfig.provider}" not found. Available: ${availableProviders}${suffix}`,
-		};
-	}
-
-	const model = getModel(modelConfig.provider as "anthropic", modelConfig.id as "claude-3-5-haiku-20241022") as
-		| Model<Api>
-		| undefined;
-
-	if (!model) {
-		return {
-			model: null,
-			apiKey: null,
-			error: `Model "${modelConfig.id}" not found for provider "${modelConfig.provider}"`,
+			error: `Model "${modelConfig.id}" not found for provider "${modelConfig.provider}". Available providers: ${availableProviders}${suffix}`,
 		};
 	}
 
 	const apiKey = await ctx.modelRegistry.getApiKey(model);
-
-	if (!apiKey) {
-		return {
-			model,
-			apiKey: null,
-			error: `No API key for ${modelConfig.provider}. Set the appropriate environment variable.`,
-		};
-	}
-
-	return { model, apiKey, error: null };
+	return { model, apiKey: apiKey ?? null, error: null };
 }
 
 async function resolveModelWithFallback(config: ResolvedConfig, ctx: ExtensionContext): Promise<ModelResolutionResult> {
 	const primary = await resolveModel(config.model, ctx);
 
-	if (primary.model && primary.apiKey) {
+	if (primary.model) {
 		return { ...primary, source: "primary" };
 	}
 
@@ -437,7 +417,7 @@ async function resolveModelWithFallback(config: ResolvedConfig, ctx: ExtensionCo
 	if (config.fallbackModel) {
 		const fallback = await resolveModel(config.fallbackModel, ctx);
 
-		if (fallback.model && fallback.apiKey) {
+		if (fallback.model) {
 			if (config.debug && ctx.hasUI) {
 				ctx.ui.notify(`[auto-rename] Using fallback model: ${config.fallbackModel.provider}/${config.fallbackModel.id}`, "info");
 			}
@@ -495,7 +475,7 @@ async function tryLlmGeneration(
 	ctx: ExtensionContext,
 	resolution: ModelResolutionResult
 ): Promise<NameGenerationResult | null> {
-	if (!resolution.model || !resolution.apiKey) {
+	if (!resolution.model) {
 		return null;
 	}
 
@@ -513,7 +493,7 @@ async function tryLlmGeneration(
 					},
 				],
 			},
-			{ apiKey: resolution.apiKey }
+		{ apiKey: resolution.apiKey ?? undefined }
 		);
 
 		const name = parseNameFromResponse(response);
@@ -683,7 +663,7 @@ async function handleTest(ctx: ExtensionCommandContext, config: ResolvedConfig):
 
 	const resolution = await resolveModelWithFallback(config, ctx);
 
-	if (resolution.model && resolution.apiKey) {
+	if (resolution.model) {
 		const provider = resolution.source === "primary" ? config.model.provider : config.fallbackModel?.provider;
 		const modelId = resolution.source === "primary" ? config.model.id : config.fallbackModel?.id;
 		ctx.ui.notify(`Model OK: ${provider}/${modelId}`, "info");
@@ -698,31 +678,33 @@ async function handleTest(ctx: ExtensionCommandContext, config: ResolvedConfig):
 
 export default function (pi: ExtensionAPI) {
 	let sessionRenamed = false;
+	let firstPromptHandled = false;
 
-	const setRenamed = () => {
-		sessionRenamed = true;
-	};
+const setRenamed = () => {
+	sessionRenamed = true;
+};
 
-	const checkExistingName = () => {
-		const existingName = pi.getSessionName();
-		if (existingName) {
-			sessionRenamed = true;
-		}
-	};
+const checkExistingName = () => {
+	const existingName = pi.getSessionName();
+	if (!existingName) return;
+	const normalized = existingName.trim().toLowerCase();
+	if (!normalized || normalized === "chat") return;
+	sessionRenamed = true;
+};
 
 	pi.on("session_start", async () => {
 		sessionRenamed = false;
+		firstPromptHandled = false;
 		checkExistingName();
 	});
 
 	pi.on("session_switch", async () => {
 		sessionRenamed = false;
+		firstPromptHandled = false;
 		checkExistingName();
 	});
 
-	pi.on("agent_end", async (_event, ctx) => {
-		if (sessionRenamed) return;
-
+	const renameFromQuery = async (query: string, ctx: ExtensionContext): Promise<void> => {
 		const config = loadConfig(ctx.cwd);
 		if (!config.enabled) return;
 
@@ -732,7 +714,6 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		const prefix = resolvePrefix(config, ctx.cwd, ctx);
-
 		if (config.prefixOnly) {
 			if (!prefix) {
 				debugNotify(ctx, config.debug, "[auto-rename] prefixOnly set but no prefix available", "warning");
@@ -741,12 +722,6 @@ export default function (pi: ExtensionAPI) {
 			pi.setSessionName(prefix);
 			sessionRenamed = true;
 			debugNotify(ctx, config.debug, `[auto-rename] Named (prefix only): ${prefix}`, "info");
-			return;
-		}
-
-		const query = extractFirstUserQuery(ctx);
-		if (!query) {
-			debugNotify(ctx, config.debug, "[auto-rename] No user query found", "warning");
 			return;
 		}
 
@@ -764,6 +739,34 @@ export default function (pi: ExtensionAPI) {
 		pi.setSessionName(fullName);
 		sessionRenamed = true;
 		debugNotify(ctx, config.debug, `[auto-rename] Named (${result.source}): ${fullName}`, "info");
+	};
+
+	pi.on("before_agent_start", async (event, ctx) => {
+		if (sessionRenamed || firstPromptHandled) return;
+		firstPromptHandled = true;
+
+		const prompt = event.prompt?.trim();
+		if (!prompt) return;
+		void renameFromQuery(prompt, ctx);
+	});
+
+	pi.on("agent_end", async (_event, ctx) => {
+		if (sessionRenamed) return;
+
+		const config = loadConfig(ctx.cwd);
+		if (!config.enabled) return;
+
+		if (pi.getSessionName()) {
+			sessionRenamed = true;
+			return;
+		}
+
+		const query = extractFirstUserQuery(ctx);
+		if (!query) {
+			debugNotify(ctx, config.debug, "[auto-rename] No user query found", "warning");
+			return;
+		}
+		void renameFromQuery(query, ctx);
 	});
 
 	pi.registerCommand("auto-rename", {
