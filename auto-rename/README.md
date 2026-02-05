@@ -4,7 +4,7 @@ Automatically generates descriptive session names based on the first user query,
 
 ## Features
 
-- **Automatic naming**: Generates a session name after the first assistant response
+- **Automatic naming**: Generates a session name as soon as the first prompt is sent
 - **Configurable model**: Use any model accessible via pi (Anthropic, OpenAI, Google, etc.)
 - **Fallback model**: Specify an alternative model if the primary fails
 - **Deterministic fallback**: Generate names without LLM if all models fail
@@ -172,7 +172,7 @@ Result: `feature/auth: Add OAuth Support`
 ## How It Works
 
 1. On `session_start`, the extension checks if the session already has a name
-2. After the first `agent_end` event (first assistant response), it:
+2. After the first `before_agent_start` event (first prompt send), it:
    - Resolves the prefix (runs `prefixCommand` if set, otherwise uses static `prefix`)
    - If `prefixOnly` is true: uses just the prefix as the session name
    - Otherwise: extracts the first user message and tries to generate a name:
