@@ -1,0 +1,12 @@
+{
+  "name": "pi-delegate",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.ts",
+  "dependencies": {
+    "@mariozechner/pi-ai": "^0.0.6",
+    "@mariozechner/pi-coding-agent": "^0.0.40",
+    "@mariozechner/pi-tui": "^0.0.6",
+    "@sinclair/typebox": "^0.34.3"
+  }
+}
