@@ -288,10 +288,10 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 	let _currentTodos: TodoItem[] = [];
 
 	// ==========================================================================
-	// todowrite - Main tool for writing todos (matches OpenCode format)
+	// TodoWrite - Main tool for writing todos (matches OpenCode format)
 	// ==========================================================================
 	pi.registerTool({
-		name: "todowrite",
+		name: "TodoWrite",
 		label: "Todo Write",
 		description:
 			"Write a list of todos that will be displayed in the Octo frontend panel. " +
@@ -333,7 +333,7 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 		renderCall(args, theme) {
 			const todos = (args.todos as Array<{ content?: string }>) || [];
 			const count = todos.length;
-			return new Text(theme.fg("toolTitle", theme.bold("todowrite ")) + theme.fg("muted", `(${count} items)`), 0, 0);
+			return new Text(theme.fg("toolTitle", theme.bold("TodoWrite ")) + theme.fg("muted", `(${count} items)`), 0, 0);
 		},
 
 		renderResult(result, { expanded }, theme) {
@@ -349,10 +349,10 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 	});
 
 	// ==========================================================================
-	// todoread - Read current todos
+	// TodoRead - Read current todos
 	// ==========================================================================
 	pi.registerTool({
-		name: "todoread",
+		name: "TodoRead",
 		label: "Todo Read",
 		description: "Read the current list of todos with optional filtering by status or priority.",
 		parameters: TodoReadParams,
@@ -398,7 +398,7 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 			let filterStr = "";
 			if (filter?.status) filterStr += ` status=${filter.status}`;
 			if (filter?.priority) filterStr += ` priority=${filter.priority}`;
-			return new Text(theme.fg("toolTitle", theme.bold("todoread")) + (filterStr ? theme.fg("muted", filterStr) : ""), 0, 0);
+			return new Text(theme.fg("toolTitle", theme.bold("TodoRead")) + (filterStr ? theme.fg("muted", filterStr) : ""), 0, 0);
 		},
 
 		renderResult(result, { expanded }, theme) {
@@ -414,10 +414,10 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 	});
 
 	// ==========================================================================
-	// todo - Unified tool for all todo operations
+	// Todo - Unified tool for all todo operations
 	// ==========================================================================
 	pi.registerTool({
-		name: "todo",
+		name: "Todo",
 		label: "Todo",
 		description:
 			"Unified todo management: add, update, remove, or list todos. " +
@@ -537,7 +537,7 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 			const id = args.id as string | undefined;
 			const content = args.content as string | undefined;
 
-			let text = theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("accent", action);
+			let text = theme.fg("toolTitle", theme.bold("Todo ")) + theme.fg("accent", action);
 			if (id) text += ` ${theme.fg("dim", id)}`;
 			if (content) text += ` ${theme.fg("muted", `"${content.slice(0, 30)}${content.length > 30 ? "..." : ""}"`)}`;
 
