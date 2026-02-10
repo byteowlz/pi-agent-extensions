@@ -284,8 +284,97 @@ function renderTodoList(todos: TodoItem[], theme: Theme, expanded: boolean): str
 // ============================================================================
 
 export default function octoTodosExtension(pi: ExtensionAPI) {
-	// Store reference to current todos for rendering (used for potential future UI features)
+	// Store reference to current todos for rendering and the TUI widget
 	let _currentTodos: TodoItem[] = [];
+
+	// ==========================================================================
+	// TUI Widget - persistent todo display above the editor
+	// ==========================================================================
+
+	const WIDGET_KEY = "octo-todos";
+
+	/**
+	 * Build the widget lines for the current todos.
+	 */
+	function buildWidgetLines(todos: TodoItem[], theme: Theme): string[] {
+		const inProgress = todos.filter((t) => t.status === "in_progress");
+		const pending = todos.filter((t) => t.status === "pending");
+		const completed = todos.filter((t) => t.status === "completed");
+		const cancelled = todos.filter((t) => t.status === "cancelled");
+
+		const summaryParts: string[] = [];
+		if (inProgress.length > 0) summaryParts.push(`${inProgress.length} in progress`);
+		if (pending.length > 0) summaryParts.push(`${pending.length} pending`);
+		if (completed.length > 0) summaryParts.push(`${completed.length} done`);
+		if (cancelled.length > 0) summaryParts.push(`${cancelled.length} cancelled`);
+
+		const lines: string[] = [];
+		lines.push(theme.fg("muted", `Todos: ${summaryParts.join(", ")}`));
+
+		const active = [...inProgress, ...pending];
+		const maxWidgetItems = 8;
+		const displayItems = active.slice(0, maxWidgetItems);
+		for (const todo of displayItems) {
+			const icon = getStatusIcon(todo.status);
+			const priorityLabel = getPriorityLabel(todo.priority);
+			const statusColor = todo.status === "in_progress" ? "success" : "text";
+			let line = theme.fg(statusColor, `  ${icon} ${todo.content}`);
+			if (priorityLabel) {
+				const priorityColor = todo.priority === "high" ? "error" : "dim";
+				line += ` ${theme.fg(priorityColor, priorityLabel)}`;
+			}
+			lines.push(line);
+		}
+		if (active.length > maxWidgetItems) {
+			lines.push(theme.fg("dim", `  ... ${active.length - maxWidgetItems} more`));
+		}
+
+		return lines;
+	}
+
+	/**
+	 * Update the persistent TUI widget showing current todos.
+	 * Called after every tool execution and session event.
+	 */
+	function updateWidget(ctx: ExtensionContext): void {
+		if (!ctx.hasUI) return;
+
+		if (_currentTodos.length === 0) {
+			ctx.ui.setWidget(WIDGET_KEY, undefined);
+			return;
+		}
+
+		ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
+			const lines = buildWidgetLines(_currentTodos, theme);
+			return {
+				render: () => lines,
+				// biome-ignore lint/suspicious/noEmptyBlockStatements: widget is rebuilt on each update
+				invalidate: () => {},
+			};
+		});
+	}
+
+	/**
+	 * Reconstruct todos from file storage on session events.
+	 */
+	function reconstructTodos(ctx: ExtensionContext): void {
+		const config = loadConfig(ctx.cwd);
+		if (!config.enabled) return;
+
+		const sessionId = getSessionId(ctx);
+		const store = loadTodos(ctx.cwd, config, sessionId);
+		_currentTodos = store.todos;
+		updateWidget(ctx);
+	}
+
+	// ==========================================================================
+	// Session event handlers - reconstruct state and update widget
+	// ==========================================================================
+
+	pi.on("session_start", async (_event, ctx) => reconstructTodos(ctx));
+	pi.on("session_switch", async (_event, ctx) => reconstructTodos(ctx));
+	pi.on("session_fork", async (_event, ctx) => reconstructTodos(ctx));
+	pi.on("session_tree", async (_event, ctx) => reconstructTodos(ctx));
 
 	// ==========================================================================
 	// TodoWrite - Main tool for writing todos (matches OpenCode format)
@@ -317,6 +406,7 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 			// Save to storage
 			saveTodos(ctx.cwd, config, normalizedTodos, sessionId);
 			_currentTodos = normalizedTodos;
+			updateWidget(ctx);
 
 			// Return in format that Octo frontend expects
 			return {
@@ -381,6 +471,7 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 			}
 
 			_currentTodos = todos;
+			updateWidget(ctx);
 
 			return {
 				content: [
@@ -463,6 +554,7 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 					todos.push(newTodo);
 					saveTodos(ctx.cwd, config, todos, sessionId);
 					_currentTodos = todos;
+					updateWidget(ctx);
 					return {
 						content: [{ type: "text", text: JSON.stringify({ todos }, null, 2) }],
 						details: { action: "add", todos, added: newTodo },
@@ -493,6 +585,7 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 					todos[index] = updated;
 					saveTodos(ctx.cwd, config, todos, sessionId);
 					_currentTodos = todos;
+					updateWidget(ctx);
 					return {
 						content: [{ type: "text", text: JSON.stringify({ todos }, null, 2) }],
 						details: { action: "update", todos, updated },
@@ -516,6 +609,7 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 					const removed = todos.splice(removeIndex, 1)[0];
 					saveTodos(ctx.cwd, config, todos, sessionId);
 					_currentTodos = todos;
+					updateWidget(ctx);
 					return {
 						content: [{ type: "text", text: JSON.stringify({ todos }, null, 2) }],
 						details: { action: "remove", todos, removed },
@@ -524,6 +618,7 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 
 				default: {
 					_currentTodos = todos;
+					updateWidget(ctx);
 					return {
 						content: [{ type: "text", text: JSON.stringify({ todos }, null, 2) }],
 						details: { action: "list", todos },
