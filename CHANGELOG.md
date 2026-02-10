@@ -4,6 +4,22 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Added - 2026-02-09
+
+#### tmux-delegate extension
+
+New delegation extension that spawns Pi subagents in visible tmux windows instead of hidden child processes. Key features:
+
+- **Live visibility**: Each task runs in its own tmux window, switchable via `tmux select-window`
+- **Octo integration**: Child sessions are created with `parentSession` set, so Octo renders them nested under the parent session in the sidebar
+- **Async by default**: Returns immediately with run ID; use `TmuxDelegateStatus` to check progress
+- **Sync mode**: Set `wait=true` to block until all tasks complete
+- **Output capture**: All output piped through `tee` to both terminal and capture files
+- **Agent discovery**: Uses the same markdown frontmatter agent files as the subagent extension
+- **Parallel tasks**: Spawn multiple tasks in separate tmux windows simultaneously
+
+Tools: `TmuxDelegate`, `TmuxDelegateStatus`
+
 ### Fixed - 2026-02-06
 
 #### OAuth Compatibility - Tool Naming Convention
