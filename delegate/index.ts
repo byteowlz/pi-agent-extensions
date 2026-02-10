@@ -125,8 +125,6 @@ function buildPiArgs(task: DelegateTaskInput, sessionDir?: string, sessionFile?:
 	}
 	if (sessionFile) {
 		args.push("--session", sessionFile);
-	} else if (!sessionDir) {
-		args.push("--no-session");
 	}
 	args.push(task.task);
 	return args;
@@ -239,7 +237,7 @@ export default function registerDelegateExtension(pi: ExtensionAPI): void {
 		parameters: DelegateParams,
 		async execute(_id, params, _onUpdate, ctx) {
 			lastUiContext = ctx;
-			const parentSessionFile = ctx.sessionManager.getSessionFile();
+			const parentSessionFile = ctx.sessionManager?.getSessionFile() ?? null;
 			const tasks = normalizeTasks(params);
 			if (tasks.length === 0) {
 				return {
