@@ -2,8 +2,6 @@
 
 ## Open
 
-### [piext-6fpa] Load MEMORY.md at session start via custom-context-files integration - ensure memory.json can specify additional memory files to load (P1, feature)
-
 ### [piext-3yd5] memory.json configuration file - define LLM models (observer/reflector), token thresholds, observation format, store path. Global (~/.pi/agent/memory.json) and project-local (.pi/memory.json) (P1, feature)
 
 ### [piext-ggnc] Post-session hook to export transcript to hstry/mmry for learning extraction - fires on session_shutdown (P2, feature)
@@ -14,3 +12,6 @@
 
 ### [piext-kcfe] Observational memory pi extension - Mastra-style context compression for long-running agent sessions (P2, epic)
 
+## Closed
+
+- [piext-6fpa] Load MEMORY.md at session start via custom-context-files integration - ensure memory.json can specify additional memory files to load (closed 2026-02-10)
