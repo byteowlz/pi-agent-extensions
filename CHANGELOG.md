@@ -4,6 +4,14 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed - 2026-02-10
+
+#### tmux-delegate: session file lookup crash (piext-v5t2)
+
+**Problem:** `TmuxDelegate` failed with "no active session file. Cannot create child sessions." because `ctx.sessionManager.getSessionFile()` returned `undefined`. This happened because `getSessionFile()` can return `undefined` for sessions that haven't been flushed to disk yet (e.g. no assistant message persisted), or for in-memory sessions.
+
+**Fix:** Use `ctx.sessionManager.getSessionDir()` (always returns a string) as the primary source for the session directory, instead of deriving it from `getSessionFile()`. The parent session file reference is now optional - child sessions are still created and functional even without the `parentSession` link (Octo nesting is a nice-to-have, not required).
+
 ### Added - 2026-02-09
 
 #### tmux-delegate extension

@@ -154,20 +154,24 @@ function shellEscape(s: string): string {
 /**
  * Creates a child session file in the same directory as the parent session.
  * The `parentSession` field in the header is what makes Octo render it nested.
+ * If parentSessionFile is undefined (e.g. in-memory session), the child session
+ * is still created but without the parentSession link.
  */
-function createChildSessionFile(parentSessionFile: string, sessionDir: string, cwd: string): string {
+function createChildSessionFile(parentSessionFile: string | undefined, sessionDir: string, cwd: string): string {
 	fs.mkdirSync(sessionDir, { recursive: true });
 	const id = randomUUID();
 	const filename = `${Date.now()}_${id.slice(0, 8)}.jsonl`;
 	const sessionPath = path.join(sessionDir, filename);
-	const header = {
+	const header: Record<string, unknown> = {
 		type: "session",
 		version: 3,
 		id,
 		timestamp: new Date().toISOString(),
 		cwd,
-		parentSession: parentSessionFile,
 	};
+	if (parentSessionFile) {
+		header.parentSession = parentSessionFile;
+	}
 	fs.writeFileSync(sessionPath, `${JSON.stringify(header)}\n`, "utf-8");
 	return sessionPath;
 }
@@ -532,15 +536,15 @@ export default function registerTmuxDelegate(pi: ExtensionAPI): void {
 				return { content: [{ type: "text", text: "Error: not running inside tmux." }], isError: true, details: {} };
 			}
 
-			const parentSessionFile = ctx.sessionManager?.getSessionFile();
-			if (!parentSessionFile) {
+			const sessionDir = ctx.sessionManager.getSessionDir();
+			if (!sessionDir) {
 				return {
-					content: [{ type: "text", text: "Error: no active session file. Cannot create child sessions." }],
+					content: [{ type: "text", text: "Error: no session directory available. Cannot create child sessions." }],
 					isError: true,
 					details: {},
 				};
 			}
-			const sessionDir = path.dirname(parentSessionFile);
+			const parentSessionFile = ctx.sessionManager.getSessionFile();
 
 			const scope: AgentScope = params.agentScope ?? "user";
 			const discovery = discoverAgents(ctx.cwd, scope);
