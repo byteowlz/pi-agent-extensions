@@ -2,9 +2,10 @@
 
 ## Open
 
-### [piext-3yd5] memory.json configuration file - define LLM models (observer/reflector), token thresholds, observation format, store path. Global (~/.pi/agent/memory.json) and project-local (.pi/memory.json) (P1, feature)
+### [piext-v5t2] TmuxDelegate: ctx.sessionManager.getSessionFile() returns null in normal pi session (P1, bug)
+In a normal pi session (not --no-session, not ephemeral), TmuxDelegate fails with 'no active session file. Cannot create child sessions.' because ctx.sessionManager.getSessionFile() returns null. The session definitely exists (visible at ~/.pi/agent/sessions/--home-wismut-byteowlz-mmry--/). This is the correct pi API to use -- it should return the session file path. Needs investigation: is sessionManager not being passed to the tool execute context properly, or is there a timing issue?
 
-### [piext-v5t2] TmuxDelegate: improve error message when PI_SESSION_FILE is not set - currently says 'no active session file. Cannot create child sessions.' which doesn't explain the cause. Should suggest checking if pi was started with --no-session, or if env vars are not propagated to the shell (P2, bug)
+### [piext-3yd5] memory.json configuration file - define LLM models (observer/reflector), token thresholds, observation format, store path. Global (~/.pi/agent/memory.json) and project-local (.pi/memory.json) (P1, feature)
 
 ### [piext-ggnc] Post-session hook to export transcript to hstry/mmry for learning extraction - fires on session_shutdown (P2, feature)
 
