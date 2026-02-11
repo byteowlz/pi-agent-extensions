@@ -298,7 +298,8 @@ function spawnTaskInTmux(
 	agentName: string,
 	cwd: string,
 	runDir: string,
-	childSessionFile?: string
+	childSessionFile?: string,
+	delegatedFrom?: string
 ): TaskState {
 	const taskId = randomUUID().slice(0, 8);
 	const windowName = `delegate:${agentName}:${taskId}`;
@@ -319,7 +320,8 @@ function spawnTaskInTmux(
 		piArgs.push("--session", childSessionFile);
 	}
 	if (promptFile) piArgs.push("--append-system-prompt", promptFile);
-	piArgs.push(`Task: ${task}`);
+	const prompt = delegatedFrom ? `[delegated from ${delegatedFrom}]\nTask: ${task}` : `Task: ${task}`;
+	piArgs.push(prompt);
 
 	const piCmd = `pi ${piArgs.map(shellEscape).join(" ")}`;
 	const shellCmd = [
@@ -542,6 +544,10 @@ export default function registerTmuxDelegate(pi: ExtensionAPI): void {
 			// Cross-project delegations get their own independent sessions.
 			const parentSessionDir = ctx.sessionManager?.getSessionDir();
 			const parentSessionFile = ctx.sessionManager?.getSessionFile();
+			const parentSessionId = ctx.sessionManager?.getSessionId();
+
+			// Origin tag so child agents know they were delegated, not human-initiated.
+			const delegatedFrom = `${ctx.cwd}${parentSessionId ? ` session:${parentSessionId}` : ""}`;
 
 			const scope: AgentScope = params.agentScope ?? "user";
 			const discovery = discoverAgents(ctx.cwd, scope);
@@ -590,7 +596,7 @@ export default function registerTmuxDelegate(pi: ExtensionAPI): void {
 						: undefined;
 
 				try {
-					const taskState = spawnTaskInTmux(i, t.task, agent, agentName, taskCwd, runDir, childSessionFile);
+					const taskState = spawnTaskInTmux(i, t.task, agent, agentName, taskCwd, runDir, childSessionFile, delegatedFrom);
 					state.tasks.push(taskState);
 				} catch {
 					state.tasks.push({
