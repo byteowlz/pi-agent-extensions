@@ -539,6 +539,8 @@ export default function registerTmuxDelegate(pi: ExtensionAPI): void {
 				return { content: [{ type: "text", text: "Error: not running inside tmux." }], isError: true, details: {} };
 			}
 
+			const cwd = ctx.cwd ?? process.cwd();
+
 			// Session linking: only link child sessions to parent when both the
 			// parent session file exists AND the task runs in the same cwd.
 			// Cross-project delegations get their own independent sessions.
@@ -547,10 +549,10 @@ export default function registerTmuxDelegate(pi: ExtensionAPI): void {
 			const parentSessionId = ctx.sessionManager?.getSessionId();
 
 			// Origin tag so child agents know they were delegated, not human-initiated.
-			const delegatedFrom = `${ctx.cwd}${parentSessionId ? ` session:${parentSessionId}` : ""}`;
+			const delegatedFrom = `${cwd}${parentSessionId ? ` session:${parentSessionId}` : ""}`;
 
 			const scope: AgentScope = params.agentScope ?? "user";
-			const discovery = discoverAgents(ctx.cwd, scope);
+			const discovery = discoverAgents(cwd, scope);
 
 			const taskList = normalizeTasks(params);
 			if (taskList.length === 0) {
@@ -585,11 +587,11 @@ export default function registerTmuxDelegate(pi: ExtensionAPI): void {
 				const t = taskList[i];
 				const agent = t.agentName ? discovery.agents.find((a) => a.name === t.agentName) : undefined;
 				const agentName = t.agentName ?? "task";
-				const taskCwd = t.cwd ?? ctx.cwd;
+				const taskCwd = t.cwd ?? cwd;
 
 				// Only create a linked child session when we have a parent session
 				// file and the task runs in the same working directory (same project).
-				const sameProject = taskCwd === ctx.cwd;
+				const sameProject = taskCwd === cwd;
 				const childSessionFile =
 					parentSessionFile && parentSessionDir && sameProject
 						? createChildSessionFile(parentSessionFile, parentSessionDir, taskCwd)
