@@ -152,26 +152,23 @@ function shellEscape(s: string): string {
 // =============================================================================
 
 /**
- * Creates a child session file in the same directory as the parent session.
+ * Creates a child session file linked to the parent session.
  * The `parentSession` field in the header is what makes Octo render it nested.
- * If parentSessionFile is undefined (e.g. in-memory session), the child session
- * is still created but without the parentSession link.
+ * Only used when the parent session dir is known (same-project delegation).
  */
-function createChildSessionFile(parentSessionFile: string | undefined, sessionDir: string, cwd: string): string {
+function createChildSessionFile(parentSessionFile: string, sessionDir: string, cwd: string): string {
 	fs.mkdirSync(sessionDir, { recursive: true });
 	const id = randomUUID();
 	const filename = `${Date.now()}_${id.slice(0, 8)}.jsonl`;
 	const sessionPath = path.join(sessionDir, filename);
-	const header: Record<string, unknown> = {
+	const header = {
 		type: "session",
 		version: 3,
 		id,
 		timestamp: new Date().toISOString(),
 		cwd,
+		parentSession: parentSessionFile,
 	};
-	if (parentSessionFile) {
-		header.parentSession = parentSessionFile;
-	}
 	fs.writeFileSync(sessionPath, `${JSON.stringify(header)}\n`, "utf-8");
 	return sessionPath;
 }
@@ -301,8 +298,7 @@ function spawnTaskInTmux(
 	agentName: string,
 	cwd: string,
 	runDir: string,
-	sessionFile: string,
-	sessionDir: string
+	childSessionFile?: string
 ): TaskState {
 	const taskId = randomUUID().slice(0, 8);
 	const windowName = `delegate:${agentName}:${taskId}`;
@@ -318,8 +314,10 @@ function spawnTaskInTmux(
 	const piArgs: string[] = ["-p", "--mode", "text"];
 	if (agent?.model) piArgs.push("--model", agent.model);
 	if (agent?.tools && agent.tools.length > 0) piArgs.push("--tools", agent.tools.join(","));
-	piArgs.push("--session-dir", sessionDir);
-	piArgs.push("--session", sessionFile);
+	if (childSessionFile) {
+		piArgs.push("--session-dir", path.dirname(childSessionFile));
+		piArgs.push("--session", childSessionFile);
+	}
 	if (promptFile) piArgs.push("--append-system-prompt", promptFile);
 	piArgs.push(`Task: ${task}`);
 
@@ -355,7 +353,7 @@ function spawnTaskInTmux(
 		paneId,
 		outputFile,
 		exitCodeFile,
-		sessionFile,
+		sessionFile: childSessionFile ?? "",
 		startedAt: Date.now(),
 		model: agent?.model,
 	};
@@ -486,7 +484,9 @@ function renderExpanded(state: RunState, theme: Theme): Container {
 		);
 		container.addChild(new Text(`${theme.fg("muted", "Task: ")}${theme.fg("dim", task.task)}`, 0, 0));
 		container.addChild(new Text(`${theme.fg("muted", "Window: ")}${theme.fg("dim", task.windowName)}`, 0, 0));
-		container.addChild(new Text(`${theme.fg("muted", "Session: ")}${theme.fg("dim", task.sessionFile)}`, 0, 0));
+		if (task.sessionFile) {
+			container.addChild(new Text(`${theme.fg("muted", "Session: ")}${theme.fg("dim", task.sessionFile)}`, 0, 0));
+		}
 
 		if (task.exitCode !== undefined) {
 			const color = task.exitCode === 0 ? "success" : "error";
@@ -522,6 +522,7 @@ export default function registerTmuxDelegate(pi: ExtensionAPI): void {
 			"Each task spawns a separate pi process in its own tmux window for live observation.",
 			"Child sessions are created in the same session directory with parentSession set,",
 			"so Octo renders them nested under the current session.",
+			"Tasks delegated to a different cwd get their own independent session.",
 			"By default returns immediately (async). Set wait=true to block until completion.",
 			"Use TmuxDelegateStatus to check progress and retrieve output.",
 			"Requires running inside a tmux session.",
@@ -536,15 +537,11 @@ export default function registerTmuxDelegate(pi: ExtensionAPI): void {
 				return { content: [{ type: "text", text: "Error: not running inside tmux." }], isError: true, details: {} };
 			}
 
-			const sessionDir = ctx.sessionManager.getSessionDir();
-			if (!sessionDir) {
-				return {
-					content: [{ type: "text", text: "Error: no session directory available. Cannot create child sessions." }],
-					isError: true,
-					details: {},
-				};
-			}
-			const parentSessionFile = ctx.sessionManager.getSessionFile();
+			// Session linking: only link child sessions to parent when both the
+			// parent session file exists AND the task runs in the same cwd.
+			// Cross-project delegations get their own independent sessions.
+			const parentSessionDir = ctx.sessionManager?.getSessionDir();
+			const parentSessionFile = ctx.sessionManager?.getSessionFile();
 
 			const scope: AgentScope = params.agentScope ?? "user";
 			const discovery = discoverAgents(ctx.cwd, scope);
@@ -583,10 +580,17 @@ export default function registerTmuxDelegate(pi: ExtensionAPI): void {
 				const agent = t.agentName ? discovery.agents.find((a) => a.name === t.agentName) : undefined;
 				const agentName = t.agentName ?? "task";
 				const taskCwd = t.cwd ?? ctx.cwd;
-				const childSessionFile = createChildSessionFile(parentSessionFile, sessionDir, taskCwd);
+
+				// Only create a linked child session when we have a parent session
+				// file and the task runs in the same working directory (same project).
+				const sameProject = taskCwd === ctx.cwd;
+				const childSessionFile =
+					parentSessionFile && parentSessionDir && sameProject
+						? createChildSessionFile(parentSessionFile, parentSessionDir, taskCwd)
+						: undefined;
 
 				try {
-					const taskState = spawnTaskInTmux(i, t.task, agent, agentName, taskCwd, runDir, childSessionFile, sessionDir);
+					const taskState = spawnTaskInTmux(i, t.task, agent, agentName, taskCwd, runDir, childSessionFile);
 					state.tasks.push(taskState);
 				} catch {
 					state.tasks.push({
@@ -599,7 +603,7 @@ export default function registerTmuxDelegate(pi: ExtensionAPI): void {
 						paneId: "",
 						outputFile: "",
 						exitCodeFile: "",
-						sessionFile: childSessionFile,
+						sessionFile: childSessionFile ?? "",
 						startedAt: Date.now(),
 						finishedAt: Date.now(),
 						exitCode: 1,
@@ -633,24 +637,28 @@ export default function registerTmuxDelegate(pi: ExtensionAPI): void {
 			}
 
 			const windowList = state.tasks.map((t) => `  ${t.agent}: ${t.windowName}`).join("\n");
-			const sessionList = state.tasks.map((t) => `  ${t.agent}: ${t.sessionFile}`).join("\n");
+			const linkedTasks = state.tasks.filter((t) => t.sessionFile);
+			const lines = [
+				`Spawned ${state.tasks.length} task(s) in tmux windows.`,
+				`Run ID: ${runId}`,
+				"",
+				"Tmux windows:",
+				windowList,
+			];
+			if (linkedTasks.length > 0) {
+				const sessionList = linkedTasks.map((t) => `  ${t.agent}: ${t.sessionFile}`).join("\n");
+				lines.push("", "Child sessions:", sessionList);
+			}
+			lines.push(
+				"",
+				"Use TmuxDelegateStatus to check progress and retrieve output.",
+				"Switch to a tmux window to watch live: tmux select-window -t <name>"
+			);
 			return {
 				content: [
 					{
 						type: "text",
-						text: [
-							`Spawned ${state.tasks.length} task(s) in tmux windows.`,
-							`Run ID: ${runId}`,
-							"",
-							"Tmux windows:",
-							windowList,
-							"",
-							"Child sessions:",
-							sessionList,
-							"",
-							"Use TmuxDelegateStatus to check progress and retrieve output.",
-							"Switch to a tmux window to watch live: tmux select-window -t <name>",
-						].join("\n"),
+						text: lines.join("\n"),
 					},
 				],
 				details: { runId, state },
@@ -735,7 +743,7 @@ export default function registerTmuxDelegate(pi: ExtensionAPI): void {
 				const dur = formatDuration(task.startedAt, task.finishedAt);
 				lines.push(`--- ${task.agent} [${task.status}] (${dur}) ---`);
 				lines.push(`  Window: ${task.windowName}`);
-				lines.push(`  Session: ${task.sessionFile}`);
+				if (task.sessionFile) lines.push(`  Session: ${task.sessionFile}`);
 				lines.push(`  Task: ${task.task}`);
 				if (task.exitCode !== undefined) lines.push(`  Exit: ${task.exitCode}`);
 				if (includeOutput) {

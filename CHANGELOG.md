@@ -6,11 +6,15 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ### Fixed - 2026-02-10
 
-#### tmux-delegate: session file lookup crash (piext-v5t2)
+#### tmux-delegate: session manager crash and cross-project delegation (piext-v5t2)
 
-**Problem:** `TmuxDelegate` failed with "no active session file. Cannot create child sessions." because `ctx.sessionManager.getSessionFile()` returned `undefined`. This happened because `getSessionFile()` can return `undefined` for sessions that haven't been flushed to disk yet (e.g. no assistant message persisted), or for in-memory sessions.
+**Problem:** `TmuxDelegate` crashed with "Cannot read properties of undefined (reading 'getSessionDir')" when `ctx.sessionManager` was undefined at runtime, and previously failed with "no active session file" when `getSessionFile()` returned `undefined`.
 
-**Fix:** Use `ctx.sessionManager.getSessionDir()` (always returns a string) as the primary source for the session directory, instead of deriving it from `getSessionFile()`. The parent session file reference is now optional - child sessions are still created and functional even without the `parentSession` link (Octo nesting is a nice-to-have, not required).
+**Fix:** Made session linking fully optional with graceful fallback:
+- Guard `ctx.sessionManager` access with optional chaining (`?.`)
+- Only create linked child sessions (with `parentSession` in header) when the parent session file exists AND the task runs in the same working directory
+- Cross-project delegations (different `cwd`) get their own independent sessions -- no parent link needed since they live in separate session directories
+- When no session manager is available, tasks still spawn correctly; pi manages its own session in each tmux window
 
 ### Added - 2026-02-09
 
