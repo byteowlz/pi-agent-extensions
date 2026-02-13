@@ -14,10 +14,13 @@
  *   "prefixCommand": "basename $(git rev-parse --show-toplevel 2>/dev/null || pwd)",
  *   "prefixOnly": false,
  *   "readableIdSuffix": false,
+ *   "readableIdEnv": "PI_SESSION_READABLE_ID",
  *   "enabled": true,
  *   "debug": false,
  *   "wordlistPath": "./word_lists.toml",
- *   "wordlist": { "adjectives": [], "nouns": [] }
+ *   "wordlist": { "adjectives": [], "nouns": [] },
+ *   "maxQueryLength": 2000,
+ *   "maxNameLength": 80
  * }
  *
  * Prefix options:
@@ -27,6 +30,7 @@
  *
  * Suffix options:
  * - "readableIdSuffix": If true, append "[readable-id]" to the generated name
+ * - "readableIdEnv": Environment variable that can provide a readable-id suffix override
  *
  * Fallback options:
  * - "fallbackModel": Alternative model if primary fails
@@ -36,6 +40,12 @@
  *   - "words": First 6 words of query
  *   - "none": Don't set a name if LLM fails
  *
+ * Input/output guards:
+ * - "maxQueryLength": Maximum characters of user query sent to the LLM (default 2000).
+ *   Longer queries have their middle section cut out, preserving the beginning and end.
+ * - "maxNameLength": Maximum characters for the generated name (default 80).
+ *   LLM responses exceeding this are truncated at a word boundary with an ellipsis.
+ *
  * The prefixCommand runs in the session's cwd. If it fails, falls back to static prefix.
  */
 
@@ -44,7 +54,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type Api, type Model, complete, getModel, getProviders } from "@mariozechner/pi-ai";
+import { type Api, type Model, complete } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 // ============================================================================
@@ -70,10 +80,13 @@ interface AutoRenameConfig {
 	prefixCommand?: string;
 	prefixOnly?: boolean;
 	readableIdSuffix?: boolean;
+	readableIdEnv?: string;
 	enabled?: boolean;
 	debug?: boolean;
 	wordlistPath?: string;
 	wordlist?: WordlistConfig;
+	maxQueryLength?: number;
+	maxNameLength?: number;
 }
 
 type ResolvedConfig = {
@@ -85,10 +98,13 @@ type ResolvedConfig = {
 	prefixCommand: string | undefined;
 	prefixOnly: boolean;
 	readableIdSuffix: boolean;
+	readableIdEnv: string | undefined;
 	enabled: boolean;
 	debug: boolean;
 	wordlistPath: string | undefined;
 	wordlist: WordlistConfig | undefined;
+	maxQueryLength: number;
+	maxNameLength: number;
 };
 
 interface ModelResolutionResult {
@@ -132,10 +148,13 @@ const DEFAULT_CONFIG: ResolvedConfig = {
 	prefixCommand: undefined,
 	prefixOnly: false,
 	readableIdSuffix: false,
+	readableIdEnv: "PI_SESSION_READABLE_ID",
 	enabled: true,
 	debug: false,
 	wordlistPath: undefined,
 	wordlist: undefined,
+	maxQueryLength: 2000,
+	maxNameLength: 80,
 };
 
 const CONFIG_FILENAME = "auto-rename.json";
@@ -304,6 +323,57 @@ function extractTextFromContent(content: unknown): string | null {
 }
 
 // ============================================================================
+// Input / Output Guards
+// ============================================================================
+
+/**
+ * Truncate the user query to maxQueryLength characters by cutting the middle.
+ * Preserves the beginning (intent/context) and end (specific details/question)
+ * of the query, joining them with a marker so the LLM understands content was
+ * omitted. Both halves are trimmed at word boundaries.
+ */
+function truncateQuery(query: string, maxLength: number): string {
+	if (query.length <= maxLength) return query;
+	const marker = "\n[...truncated...]\n";
+	const budget = maxLength - marker.length;
+	if (budget <= 0) return query.slice(0, maxLength);
+	const headBudget = Math.ceil(budget * 0.6);
+	const tailBudget = budget - headBudget;
+
+	let head = query.slice(0, headBudget);
+	const headSpace = head.lastIndexOf(" ");
+	if (headSpace > headBudget * 0.6) {
+		head = head.slice(0, headSpace);
+	}
+
+	let tail = query.slice(query.length - tailBudget);
+	const tailSpace = tail.indexOf(" ");
+	if (tailSpace >= 0 && tailSpace < tailBudget * 0.4) {
+		tail = tail.slice(tailSpace + 1);
+	}
+
+	return `${head}${marker}${tail}`;
+}
+
+/**
+ * Enforce maxNameLength on an LLM-generated name. Strips trailing
+ * punctuation, truncates at a word boundary, and appends an ellipsis when
+ * trimming was needed.
+ */
+function enforceNameLength(name: string, maxLength: number): string {
+	if (name.length <= maxLength) return name;
+	// Leave room for the ellipsis
+	const limit = maxLength - 3;
+	if (limit <= 0) return name.slice(0, maxLength);
+	const truncated = name.slice(0, limit);
+	const lastSpace = truncated.lastIndexOf(" ");
+	if (lastSpace > limit * 0.4) {
+		return `${truncated.slice(0, lastSpace).replace(/[,;:\s]+$/, "")}...`;
+	}
+	return `${truncated.replace(/[,;:\s]+$/, "")}...`;
+}
+
+// ============================================================================
 // Deterministic Name Generation
 // ============================================================================
 
@@ -441,14 +511,25 @@ async function resolveModelWithFallback(config: ResolvedConfig, ctx: ExtensionCo
 // LLM Name Generation
 // ============================================================================
 
-function parseNameFromResponse(response: { content: Array<{ type: string; text?: string }> }): string | null {
-	const name = response.content
+function parseNameFromResponse(
+	response: { content: Array<{ type: string; text?: string }> },
+	maxNameLength: number
+): string | null {
+	let name = response.content
 		.filter((c): c is { type: "text"; text: string } => c.type === "text")
 		.map((c) => c.text)
 		.join("")
 		.trim()
 		.replace(/^["']|["']$/g, "")
 		.replace(/\.+$/, "");
+
+	if (!name) return null;
+
+	// Strip any leading/trailing whitespace that quote removal may have exposed
+	name = name.trim();
+
+	// Enforce maximum name length
+	name = enforceNameLength(name, maxNameLength);
 
 	return name || null;
 }
@@ -479,7 +560,11 @@ async function tryLlmGeneration(
 		return null;
 	}
 
-	const prompt = config.prompt.replace("{{query}}", query);
+	const trimmedQuery = truncateQuery(query, config.maxQueryLength);
+	if (trimmedQuery.length < query.length && config.debug && ctx.hasUI) {
+		ctx.ui.notify(`[auto-rename] Query truncated from ${query.length} to ${trimmedQuery.length} chars`, "info");
+	}
+	const prompt = config.prompt.replace("{{query}}", trimmedQuery);
 
 	try {
 		const response = await complete(
@@ -493,12 +578,24 @@ async function tryLlmGeneration(
 					},
 				],
 			},
-		{ apiKey: resolution.apiKey ?? undefined }
+			{ apiKey: resolution.apiKey ?? undefined }
 		);
 
-		const name = parseNameFromResponse(response);
+		const name = parseNameFromResponse(response, config.maxNameLength);
 
 		if (name) {
+			// Check if the raw response was longer (name was truncated by enforceNameLength)
+			const rawName = response.content
+				.filter((c): c is { type: "text"; text: string } => c.type === "text")
+				.map((c) => c.text)
+				.join("")
+				.trim();
+			if (rawName.length > config.maxNameLength && config.debug && ctx.hasUI) {
+				ctx.ui.notify(
+					`[auto-rename] LLM name truncated from ${rawName.length} to ${name.length} chars (max ${config.maxNameLength})`,
+					"info"
+				);
+			}
 			return {
 				name,
 				source: resolution.source === "primary" ? "llm-primary" : "llm-fallback",
@@ -566,6 +663,15 @@ function debugNotify(ctx: ExtensionContext, debug: boolean, message: string, lev
 	}
 }
 
+function resolveReadableIdOverride(config: ResolvedConfig): string | null {
+	const envKey = config.readableIdEnv?.trim();
+	if (!envKey) return null;
+	const value = process.env[envKey];
+	if (!value) return null;
+	const trimmed = value.trim();
+	return trimmed ? trimmed : null;
+}
+
 function resolveReadableIdSuffix(
 	config: ResolvedConfig,
 	sessionId: string | null,
@@ -574,6 +680,10 @@ function resolveReadableIdSuffix(
 	ctx: ExtensionContext
 ): string | null {
 	if (!config.readableIdSuffix) return null;
+	const override = resolveReadableIdOverride(config);
+	if (override) {
+		return override === name ? null : override;
+	}
 	if (!sessionId || !wordlist) {
 		debugNotify(ctx, config.debug, "[auto-rename] readableIdSuffix enabled but wordlist or sessionId missing", "warning");
 		return null;
@@ -634,12 +744,15 @@ function handleConfig(ctx: ExtensionCommandContext, config: ResolvedConfig): voi
 		`deterministic=${config.fallbackDeterministic}`,
 		config.wordlistPath ? `wordlistPath=${config.wordlistPath}` : null,
 		config.wordlist ? "wordlist=inline" : null,
+		config.readableIdEnv ? `readableIdEnv=${config.readableIdEnv}` : null,
 		config.prefix ? `prefix="${config.prefix}"` : null,
 		config.prefixCommand
 			? `prefixCmd="${config.prefixCommand.slice(0, 30)}${config.prefixCommand.length > 30 ? "..." : ""}"`
 			: null,
 		config.prefixOnly ? "prefixOnly=true" : null,
 		config.readableIdSuffix ? "readableIdSuffix=true" : null,
+		`maxQuery=${config.maxQueryLength}`,
+		`maxName=${config.maxNameLength}`,
 		`enabled=${config.enabled}`,
 	].filter(Boolean);
 
@@ -680,17 +793,17 @@ export default function (pi: ExtensionAPI) {
 	let sessionRenamed = false;
 	let firstPromptHandled = false;
 
-const setRenamed = () => {
-	sessionRenamed = true;
-};
+	const setRenamed = () => {
+		sessionRenamed = true;
+	};
 
-const checkExistingName = () => {
-	const existingName = pi.getSessionName();
-	if (!existingName) return;
-	const normalized = existingName.trim().toLowerCase();
-	if (!normalized || normalized === "chat") return;
-	sessionRenamed = true;
-};
+	const checkExistingName = () => {
+		const existingName = pi.getSessionName();
+		if (!existingName) return;
+		const normalized = existingName.trim().toLowerCase();
+		if (!normalized || normalized === "chat") return;
+		sessionRenamed = true;
+	};
 
 	pi.on("session_start", async () => {
 		sessionRenamed = false;
