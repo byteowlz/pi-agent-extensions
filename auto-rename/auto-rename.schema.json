@@ -90,6 +90,25 @@
 			"description": "If true, append a deterministic readable-id (adjective-noun-noun) to the generated name.",
 			"default": false
 		},
+		"readableIdEnv": {
+			"type": ["string", "null"],
+			"description": "Environment variable that can provide a readable-id suffix override. When set and non-empty, its value is used instead of the wordlist-derived suffix.",
+			"default": "PI_SESSION_READABLE_ID"
+		},
+		"maxQueryLength": {
+			"type": "integer",
+			"description": "Maximum number of characters from the user query to include in the LLM prompt. Longer queries have their middle cut out, preserving the beginning and end. Prevents excessive token usage on very long first messages.",
+			"default": 2000,
+			"minimum": 100,
+			"maximum": 50000
+		},
+		"maxNameLength": {
+			"type": "integer",
+			"description": "Maximum number of characters allowed for the generated session name (before prefix/suffix). LLM responses exceeding this limit are truncated at a word boundary with an ellipsis.",
+			"default": 80,
+			"minimum": 10,
+			"maximum": 500
+		},
 		"enabled": {
 			"type": "boolean",
 			"description": "Enable or disable auto-rename functionality.",

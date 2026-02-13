@@ -57,6 +57,7 @@ Create `auto-rename.json` in one of these locations (searched in order):
   "prefixCommand": null,
   "prefixOnly": false,
   "readableIdSuffix": false,
+  "readableIdEnv": "PI_SESSION_READABLE_ID",
   "enabled": true,
   "debug": false
 }
@@ -75,6 +76,9 @@ Create `auto-rename.json` in one of these locations (searched in order):
 | `prefixCommand` | string/null | `null` | Shell command to generate dynamic prefix (5s timeout) |
 | `prefixOnly` | boolean | `false` | Skip LLM, use only prefix as full name |
 | `readableIdSuffix` | boolean | `false` | Append `[readable-id]` to generated names |
+| `readableIdEnv` | string/null | `"PI_SESSION_READABLE_ID"` | Environment variable that can provide a readable-id suffix override |
+| `maxQueryLength` | integer | `2000` | Max characters of user query sent to LLM prompt. Longer queries have their middle cut out, preserving beginning and end. |
+| `maxNameLength` | integer | `80` | Max characters for the generated name (before prefix/suffix). LLM responses exceeding this are truncated. |
 | `enabled` | boolean | `true` | Enable/disable auto-rename |
 | `debug` | boolean | `false` | Show debug notifications |
 | `wordlistPath` | string/null | `null` | Override path to `word_lists.toml` (relative to session cwd) |
@@ -124,6 +128,15 @@ Result: `my-project: Fix Authentication Bug`
 }
 ```
 Result: `my-project: Fix Authentication Bug [brisk-sunflower-river]`
+
+**Readable-id override from frontend:**
+```json
+{
+  "readableIdSuffix": true,
+  "readableIdEnv": "PI_SESSION_READABLE_ID"
+}
+```
+Result: `my-project: Fix Authentication Bug [frontend-temp-id]`
 
 **Workspace name only (no LLM):**
 ```json
@@ -181,6 +194,16 @@ Result: `feature/auth: Add OAuth Support`
      3. If both fail, use deterministic fallback (`readable-id`, `truncate`, `words`, or `none`)
    - Combines prefix + generated name and sets via `pi.setSessionName()`
 3. The name appears in the session selector (`/resume`) instead of the first message
+
+### Input and Output Guards
+
+The extension protects against excessively long inputs and outputs:
+
+- **Query truncation** (`maxQueryLength`, default 2000): When the user's first message is very long (e.g., pasting a large code block or document), the middle section is cut out and replaced with a `[...truncated...]` marker. The beginning (60%) and end (40%) of the query are preserved at word boundaries, keeping both the initial context and the trailing question/details. This prevents excessive token usage and keeps costs low.
+
+- **Name length enforcement** (`maxNameLength`, default 80): If the LLM returns a name longer than `maxNameLength` characters, it is truncated at a word boundary with an ellipsis. This ensures session names stay readable in the session selector UI.
+
+Both limits can be tuned in the config. Enable `debug: true` to see notifications when truncation occurs.
 
 ### Error Handling
 

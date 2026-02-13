@@ -14,6 +14,9 @@
   "prefixCommand": "basename $(git rev-parse --show-toplevel 2>/dev/null || pwd)",
   "prefixOnly": false,
   "readableIdSuffix": false,
+  "readableIdEnv": "PI_SESSION_READABLE_ID",
+  "maxQueryLength": 2000,
+  "maxNameLength": 80,
   "enabled": true,
   "debug": false
 }
