@@ -161,6 +161,13 @@ const CONFIG_FILENAME = "auto-rename.json";
 const SUBAGENT_PREFIX_ENV = "PI_SUBAGENT_PREFIX";
 const DEFAULT_WORDLIST_PATH = join(dirname(fileURLToPath(import.meta.url)), "wordlist", "word_lists.toml");
 
+/**
+ * Status key used to notify the Octo runner of title changes.
+ * The runner watches for this key on extension_ui_request events
+ * and broadcasts a canonical session.title_changed event.
+ */
+const TITLE_CHANGED_STATUS_KEY = "octo_title_changed";
+
 // ============================================================================
 // Config Loading
 // ============================================================================
@@ -797,6 +804,16 @@ export default function (pi: ExtensionAPI) {
 		sessionRenamed = true;
 	};
 
+	/**
+	 * Set the session name and notify the Octo runner via a status event.
+	 * The runner picks up the TITLE_CHANGED_STATUS_KEY and broadcasts
+	 * a canonical session.title_changed event to the frontend.
+	 */
+	const setNameAndNotify = (name: string, ctx: ExtensionContext) => {
+		pi.setSessionName(name);
+		ctx.ui.setStatus(TITLE_CHANGED_STATUS_KEY, name);
+	};
+
 	const checkExistingName = () => {
 		const existingName = pi.getSessionName();
 		if (!existingName) return;
@@ -832,7 +849,7 @@ export default function (pi: ExtensionAPI) {
 				debugNotify(ctx, config.debug, "[auto-rename] prefixOnly set but no prefix available", "warning");
 				return;
 			}
-			pi.setSessionName(prefix);
+			setNameAndNotify(prefix, ctx);
 			sessionRenamed = true;
 			debugNotify(ctx, config.debug, `[auto-rename] Named (prefix only): ${prefix}`, "info");
 			return;
@@ -849,7 +866,7 @@ export default function (pi: ExtensionAPI) {
 
 		const suffix = resolveReadableIdSuffix(config, sessionId, wordlist, result.name, ctx);
 		const fullName = formatFullName(prefix, result.name, suffix);
-		pi.setSessionName(fullName);
+		setNameAndNotify(fullName, ctx);
 		sessionRenamed = true;
 		debugNotify(ctx, config.debug, `[auto-rename] Named (${result.source}): ${fullName}`, "info");
 	};
