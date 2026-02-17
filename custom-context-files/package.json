@@ -1,6 +1,7 @@
 {
   "name": "pi-custom-context-files",
   "version": "1.0.0",
+  "type": "module",
   "description": "Automatically load additional context files beyond AGENTS.md/CLAUDE.md with configurable file names",
   "keywords": [
     "pi-package",

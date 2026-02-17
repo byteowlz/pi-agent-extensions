@@ -389,7 +389,7 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 			"priority (high/medium/low). The frontend displays these in a dedicated panel.",
 		parameters: TodoWriteParams,
 
-		async execute(_toolCallId, params, _onUpdate, ctx) {
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const config = loadConfig(ctx.cwd);
 			if (!config.enabled) {
 				return {
@@ -447,7 +447,7 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 		description: "Read the current list of todos with optional filtering by status or priority.",
 		parameters: TodoReadParams,
 
-		async execute(_toolCallId, params, _onUpdate, ctx) {
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const config = loadConfig(ctx.cwd);
 			if (!config.enabled) {
 				return {
@@ -525,7 +525,7 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 			id: Type.Optional(Type.String({ description: "Todo ID (for update/remove)" })),
 		}),
 
-		async execute(_toolCallId, params, _onUpdate, ctx) {
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const config = loadConfig(ctx.cwd);
 			if (!config.enabled) {
 				return {
