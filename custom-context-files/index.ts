@@ -29,11 +29,11 @@
  * 4. The extension automatically loads the specified files at agent start
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { homedir } from "node:os";
+import { join } from "node:path";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 interface ContextFileEntry {
 	names: string[];
@@ -44,7 +44,7 @@ interface ContextConfig {
 	contextFiles?: ContextFileEntry[];
 }
 
-function loadContextConfig(ctx: ExtensionAPI): ContextConfig | null {
+function loadContextConfig(ctx: ExtensionContext): ContextConfig | null {
 	const configs: ContextConfig[] = [];
 	const cwd = process.cwd();
 
@@ -75,14 +75,18 @@ function loadContextConfig(ctx: ExtensionAPI): ContextConfig | null {
 	}
 
 	// Merge configs (project takes precedence over global)
-	return configs.reduce((merged, config) => ({
-		...merged,
-		...config,
-		contextFiles: merged.contextFiles ? (merged.contextFiles || []).concat(config.contextFiles || []) : config.contextFiles,
-	}), {} as ContextConfig);
+	const result = configs.reduce(
+		(merged, config) => {
+			merged.contextFiles = (merged.contextFiles || []).concat(config.contextFiles || []);
+			return Object.assign(merged, config);
+		},
+		{} as Partial<ContextConfig>
+	);
+
+	return result as ContextConfig;
 }
 
-function loadFirstAvailableFile(entry: ContextFileEntry, ctx: ExtensionAPI): string | null {
+function loadFirstAvailableFile(entry: ContextFileEntry, ctx: ExtensionContext): string | null {
 	const cwd = process.cwd();
 
 	for (const filename of entry.names) {
@@ -108,7 +112,7 @@ export default function customContextFilesExtension(pi: ExtensionAPI) {
 		}
 
 		let additionalContent = "";
-		let loadedFiles: string[] = [];
+		const loadedFiles: string[] = [];
 
 		for (const entry of config.contextFiles) {
 			const content = loadFirstAvailableFile(entry, ctx);
