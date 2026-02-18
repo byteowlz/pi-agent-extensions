@@ -1,8 +1,8 @@
 /**
- * Octo Bridge Extension for Pi
+ * Oqto Bridge Extension for Pi
  *
  * Emits granular agent phase status via ctx.ui.setStatus() so that the
- * Octo runner can translate pi's native events into canonical
+ * Oqto runner can translate pi's native events into canonical
  * `agent.working { phase }` events.
  *
  * In RPC mode, setStatus calls become `extension_ui_request` JSON events
@@ -13,7 +13,7 @@
  * (agent_start, agent_end, tool_execution_start, etc.) and PID-based
  * process monitoring to produce the full canonical event stream.
  *
- * Status key: "octo_phase"
+ * Status key: "oqto_phase"
  * Status values:
  *   "generating"                - LLM is producing tokens
  *   "thinking"                  - LLM is in extended thinking mode
@@ -24,8 +24,8 @@
  * The runner's state machine rules:
  *   - agent_start  -> working("generating")
  *   - agent_end    -> idle
- *   - octo_phase=X -> refine phase within working state (never transitions to idle)
- *   - octo_phase=  -> clear phase, fall back to native event inference
+ *   - oqto_phase=X -> refine phase within working state (never transitions to idle)
+ *   - oqto_phase=  -> clear phase, fall back to native event inference
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -34,7 +34,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 // Status helpers
 // ============================================================================
 
-const STATUS_KEY = "octo_phase";
+const STATUS_KEY = "oqto_phase";
 
 /** Set the current phase. The runner reads this from stdout. */
 function setPhase(ctx: ExtensionContext, phase: string, detail?: string): void {
@@ -51,7 +51,7 @@ function clearPhase(ctx: ExtensionContext): void {
 // Extension entry point
 // ============================================================================
 
-export default function octoBridge(pi: ExtensionAPI) {
+export default function oqtoBridge(pi: ExtensionAPI) {
 	// Track whether we are inside an agent run so we only emit phase
 	// updates when the agent is actually working. This avoids confusing
 	// the runner with stale status events between runs.

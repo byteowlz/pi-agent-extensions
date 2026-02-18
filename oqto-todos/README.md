@@ -1,10 +1,10 @@
-# Octo Todos Extension
+# Oqto Todos Extension
 
-A Pi extension that provides todo management tools compatible with Octo's frontend todo panel.
+A Pi extension that provides todo management tools compatible with Oqto's frontend todo panel.
 
 ## Overview
 
-This extension provides a drop-in replacement for OpenCode's `todowrite` and `todoread` tools. Todos created through these tools are automatically displayed in Octo's right sidebar panel.
+This extension provides a drop-in replacement for OpenCode's `todowrite` and `todoread` tools. Todos created through these tools are automatically displayed in Oqto's right sidebar panel.
 
 ## Tools
 
@@ -78,7 +78,7 @@ interface TodoItem {
 
 ## Frontend Integration
 
-The Octo frontend automatically parses `todowrite` tool calls and displays todos in the right sidebar panel. The frontend looks for tool calls with:
+The Oqto frontend automatically parses `todowrite` tool calls and displays todos in the right sidebar panel. The frontend looks for tool calls with:
 - Name containing "todo" or exactly "todowrite"/"todoread"
 - Input containing a `todos` array with the expected structure
 
@@ -88,7 +88,7 @@ The Octo frontend automatically parses `todowrite` tool calls and displays todos
 
 ## Configuration
 
-Create `octo-todos.json` in your project root, `.pi/` directory, or `~/.pi/agent/`:
+Create `oqto-todos.json` in your project root, `.pi/` directory, or `~/.pi/agent/`:
 
 ```json
 {
@@ -113,19 +113,19 @@ Create `octo-todos.json` in your project root, `.pi/` directory, or `~/.pi/agent
 ### Global Installation
 
 ```bash
-cp -r octo-todos ~/.pi/agent/extensions/
+cp -r oqto-todos ~/.pi/agent/extensions/
 ```
 
 ### Project-local Installation
 
 ```bash
-cp -r octo-todos .pi/extensions/
+cp -r oqto-todos .pi/extensions/
 ```
 
 ### Development (Symlink)
 
 ```bash
-ln -s $(pwd)/octo-todos ~/.pi/agent/extensions/octo-todos
+ln -s $(pwd)/oqto-todos ~/.pi/agent/extensions/oqto-todos
 ```
 
 ## Storage
@@ -139,7 +139,7 @@ Todos are stored as JSON files in `.pi/todos/`:
 
 This extension is designed to be compatible with:
 - OpenCode's `todowrite` and `todoread` tools
-- Octo's frontend todo panel
+- Oqto's frontend todo panel
 - Pi's extension system
 
-The output format matches exactly what Octo's frontend expects, ensuring seamless integration.
+The output format matches exactly what Oqto's frontend expects, ensuring seamless integration.

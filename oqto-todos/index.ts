@@ -1,10 +1,10 @@
 /**
- * Octo Todos Extension for Pi
+ * Oqto Todos Extension for Pi
  *
- * Provides a todowrite tool that integrates with Octo's frontend todo panel.
+ * Provides a todowrite tool that integrates with Oqto's frontend todo panel.
  * This is a drop-in replacement for OpenCode's todowrite/todoread tools.
  *
- * The tool outputs todos in a format that Octo's frontend parses and displays
+ * The tool outputs todos in a format that Oqto's frontend parses and displays
  * in the right sidebar panel, matching the expected TodoItem structure.
  *
  * Todo format:
@@ -44,7 +44,7 @@ interface TodoStore {
 	updated_at: string;
 }
 
-interface OctoTodosConfig {
+interface OqtoTodosConfig {
 	enabled: boolean;
 	debug: boolean;
 	storagePath?: string;
@@ -55,10 +55,10 @@ interface OctoTodosConfig {
 // Constants
 // ============================================================================
 
-const CONFIG_FILENAME = "octo-todos.json";
+const CONFIG_FILENAME = "oqto-todos.json";
 const TODOS_FILENAME = "todos.json";
 
-const DEFAULT_CONFIG: OctoTodosConfig = {
+const DEFAULT_CONFIG: OqtoTodosConfig = {
 	enabled: true,
 	debug: false,
 	sessionScoped: true,
@@ -101,14 +101,14 @@ const TodoReadParams = Type.Object({
 // Config Loading
 // ============================================================================
 
-function loadConfig(cwd: string): OctoTodosConfig {
+function loadConfig(cwd: string): OqtoTodosConfig {
 	const paths = [join(cwd, CONFIG_FILENAME), join(cwd, ".pi", CONFIG_FILENAME), join(homedir(), ".pi", "agent", CONFIG_FILENAME)];
 
 	for (const configPath of paths) {
 		if (existsSync(configPath)) {
 			try {
 				const content = readFileSync(configPath, "utf-8");
-				const userConfig = JSON.parse(content) as Partial<OctoTodosConfig>;
+				const userConfig = JSON.parse(content) as Partial<OqtoTodosConfig>;
 				return { ...DEFAULT_CONFIG, ...userConfig };
 			} catch {
 				// Invalid JSON, continue to next path
@@ -123,7 +123,7 @@ function loadConfig(cwd: string): OctoTodosConfig {
 // Todo Storage
 // ============================================================================
 
-function getTodosDir(cwd: string, config: OctoTodosConfig): string {
+function getTodosDir(cwd: string, config: OqtoTodosConfig): string {
 	if (config.storagePath) {
 		if (config.storagePath.startsWith("~")) {
 			return join(homedir(), config.storagePath.slice(1));
@@ -133,7 +133,7 @@ function getTodosDir(cwd: string, config: OctoTodosConfig): string {
 	return join(cwd, ".pi", "todos");
 }
 
-function getTodosPath(cwd: string, config: OctoTodosConfig, sessionId?: string): string {
+function getTodosPath(cwd: string, config: OqtoTodosConfig, sessionId?: string): string {
 	const dir = getTodosDir(cwd, config);
 	if (config.sessionScoped && sessionId) {
 		return join(dir, `${sessionId}.json`);
@@ -141,14 +141,14 @@ function getTodosPath(cwd: string, config: OctoTodosConfig, sessionId?: string):
 	return join(dir, TODOS_FILENAME);
 }
 
-function ensureTodosDir(cwd: string, config: OctoTodosConfig): void {
+function ensureTodosDir(cwd: string, config: OqtoTodosConfig): void {
 	const dir = getTodosDir(cwd, config);
 	if (!existsSync(dir)) {
 		mkdirSync(dir, { recursive: true });
 	}
 }
 
-function loadTodos(cwd: string, config: OctoTodosConfig, sessionId?: string): TodoStore {
+function loadTodos(cwd: string, config: OqtoTodosConfig, sessionId?: string): TodoStore {
 	const path = getTodosPath(cwd, config, sessionId);
 
 	if (!existsSync(path)) {
@@ -164,7 +164,7 @@ function loadTodos(cwd: string, config: OctoTodosConfig, sessionId?: string): To
 	}
 }
 
-function saveTodos(cwd: string, config: OctoTodosConfig, todos: TodoItem[], sessionId?: string): void {
+function saveTodos(cwd: string, config: OqtoTodosConfig, todos: TodoItem[], sessionId?: string): void {
 	ensureTodosDir(cwd, config);
 	const path = getTodosPath(cwd, config, sessionId);
 	const store: TodoStore = {
@@ -283,7 +283,7 @@ function renderTodoList(todos: TodoItem[], theme: Theme, expanded: boolean): str
 // Extension Entry Point
 // ============================================================================
 
-export default function octoTodosExtension(pi: ExtensionAPI) {
+export default function oqtoTodosExtension(pi: ExtensionAPI) {
 	// Store reference to current todos for rendering and the TUI widget
 	let _currentTodos: TodoItem[] = [];
 
@@ -291,7 +291,7 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 	// TUI Widget - persistent todo display above the editor
 	// ==========================================================================
 
-	const WIDGET_KEY = "octo-todos";
+	const WIDGET_KEY = "oqto-todos";
 
 	/**
 	 * Build the widget lines for the current todos.
@@ -383,7 +383,7 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 		name: "TodoWrite",
 		label: "Todo Write",
 		description:
-			"Write a list of todos that will be displayed in the Octo frontend panel. " +
+			"Write a list of todos that will be displayed in the Oqto frontend panel. " +
 			"This replaces the entire todo list. Use for task planning and tracking. " +
 			"Todos have: content (task description), status (pending/in_progress/completed/cancelled), " +
 			"priority (high/medium/low). The frontend displays these in a dedicated panel.",
@@ -408,7 +408,7 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 			_currentTodos = normalizedTodos;
 			updateWidget(ctx);
 
-			// Return in format that Octo frontend expects
+			// Return in format that Oqto frontend expects
 			return {
 				content: [
 					{
@@ -513,7 +513,7 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 		description:
 			"Unified todo management: add, update, remove, or list todos. " +
 			"Actions: add (new todo), update (modify existing), remove (delete), list (show all). " +
-			"Todos are displayed in the Octo frontend panel.",
+			"Todos are displayed in the Oqto frontend panel.",
 		parameters: Type.Object({
 			action: StringEnum(["add", "update", "remove", "list"] as const),
 			// For add

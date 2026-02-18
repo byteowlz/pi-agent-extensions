@@ -13,7 +13,7 @@ Removed both `delegate/` and `tmux-delegate/` in favor of [pi-subagents](https:/
 **Why:**
 - Both extensions spawned pi subprocesses but captured only raw text output. pi-subagents uses `--mode json` to get structured event streams with token/cost tracking, tool call history, and proper abort propagation.
 - tmux-delegate had multiple bugs that were never caught because the tmux visibility feature was not relied on: wrong `execute()` parameter order (params swapped between pi v0.50 and v0.52), broken exit code capture (`$PIPESTATUS` unavailable in zsh), and child sessions never created due to the parameter bug.
-- The "watch live in tmux" value proposition is covered by Octo child sessions and `onUpdate` streaming.
+- The "watch live in tmux" value proposition is covered by Oqto child sessions and `onUpdate` streaming.
 - pi-subagents additionally provides chain execution with `{previous}` placeholders, a TUI clarification overlay, agent management CRUD, skill injection, artifact management, and async background execution.
 
 ### Fixed - 2026-02-10
@@ -35,7 +35,7 @@ Removed both `delegate/` and `tmux-delegate/` in favor of [pi-subagents](https:/
 New delegation extension that spawns Pi subagents in visible tmux windows instead of hidden child processes. Key features:
 
 - **Live visibility**: Each task runs in its own tmux window, switchable via `tmux select-window`
-- **Octo integration**: Child sessions are created with `parentSession` set, so Octo renders them nested under the parent session in the sidebar
+- **Oqto integration**: Child sessions are created with `parentSession` set, so Oqto renders them nested under the parent session in the sidebar
 - **Async by default**: Returns immediately with run ID; use `TmuxDelegateStatus` to check progress
 - **Sync mode**: Set `wait=true` to block until all tasks complete
 - **Output capture**: All output piped through `tee` to both terminal and capture files
@@ -54,7 +54,7 @@ Tools: `TmuxDelegate`, `TmuxDelegateStatus`
 
 **Changes:**
 
-**octo-todos extension:**
+**oqto-todos extension:**
 - `todowrite` → `TodoWrite`
 - `todoread` → `TodoRead`  
 - `todo` → `Todo`
@@ -82,8 +82,8 @@ Tools: `TmuxDelegate`, `TmuxDelegateStatus`
 
 - **auto-rename**: Automatic session naming using LLM
 - **custom-context-files**: Inject custom context into sessions
-- **octo-todos**: Todo management integration with Octo frontend
-- **octo-bridge**: Bridge for Octo platform integration
+- **oqto-todos**: Todo management integration with Oqto frontend
+- **oqto-bridge**: Bridge for Oqto platform integration
 - **delegate**: Spawn subagent processes for task delegation
 
 ### Infrastructure

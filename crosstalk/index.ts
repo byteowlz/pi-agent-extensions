@@ -668,7 +668,7 @@ function normalizeTargetToken(raw: string): { kind: "session" | "name"; value: s
 	if (prefix === "name") {
 		return { kind: "name", value: rest };
 	}
-	if (prefix === "octo" || prefix === "main" || prefix === "pi") {
+	if (prefix === "oqto" || prefix === "main" || prefix === "pi") {
 		return { kind: "name", value: rest || prefix };
 	}
 

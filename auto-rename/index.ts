@@ -162,11 +162,11 @@ const SUBAGENT_PREFIX_ENV = "PI_SUBAGENT_PREFIX";
 const DEFAULT_WORDLIST_PATH = join(dirname(fileURLToPath(import.meta.url)), "wordlist", "word_lists.toml");
 
 /**
- * Status key used to notify the Octo runner of title changes.
+ * Status key used to notify the Oqto runner of title changes.
  * The runner watches for this key on extension_ui_request events
  * and broadcasts a canonical session.title_changed event.
  */
-const TITLE_CHANGED_STATUS_KEY = "octo_title_changed";
+const TITLE_CHANGED_STATUS_KEY = "oqto_title_changed";
 
 // ============================================================================
 // Config Loading
@@ -805,7 +805,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	/**
-	 * Set the session name and notify the Octo runner via a status event.
+	 * Set the session name and notify the Oqto runner via a status event.
 	 * The runner picks up the TITLE_CHANGED_STATUS_KEY and broadcasts
 	 * a canonical session.title_changed event to the frontend.
 	 */

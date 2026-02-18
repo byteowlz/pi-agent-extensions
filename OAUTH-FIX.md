@@ -16,8 +16,8 @@ Custom extensions must follow the same convention for OAuth compatibility.
 
 ## Changes Made
 
-### octo-todos Extension
-**File:** `octo-todos/index.ts`
+### oqto-todos Extension
+**File:** `oqto-todos/index.ts`
 
 | Before | After | Line |
 |--------|-------|------|
@@ -43,14 +43,14 @@ After applying these fixes:
 
 1. **Verify tool names:**
    ```bash
-   grep "name: \"" octo-todos/index.ts delegate/index.ts
+   grep "name: \"" oqto-todos/index.ts delegate/index.ts
    ```
    
    Expected output:
    ```
-   octo-todos/index.ts:		name: "TodoWrite",
-   octo-todos/index.ts:		name: "TodoRead",
-   octo-todos/index.ts:		name: "Todo",
+   oqto-todos/index.ts:		name: "TodoWrite",
+   oqto-todos/index.ts:		name: "TodoRead",
+   oqto-todos/index.ts:		name: "Todo",
    delegate/index.ts:		name: "Delegate",
    delegate/index.ts:		name: "DelegateStatus",
    ```
@@ -96,7 +96,7 @@ No migration needed - pi's tool execution is case-aware and handles the new name
 Other extensions checked (no issues found):
 - ✅ `auto-rename` - No custom tools registered
 - ✅ `custom-context-files` - No custom tools registered  
-- ✅ `octo-bridge` - No custom tools registered
+- ✅ `oqto-bridge` - No custom tools registered
 
 ## Validation
 
