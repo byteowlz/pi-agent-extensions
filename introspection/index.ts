@@ -1,5 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { readdirSync, existsSync, readFileSync } from "node:fs";
+import { join, basename } from "node:path";
 
 // Try to get session title from multiple sources
 function getSessionTitle(pi: ExtensionAPI, sessionManager: any): string | null {
@@ -19,6 +21,64 @@ function getSessionTitle(pi: ExtensionAPI, sessionManager: any): string | null {
   }
   
   return null;
+}
+
+interface ExtensionInfo {
+  name: string;
+  description?: string;
+  hasPackageJson: boolean;
+}
+
+// Discover installed extensions by reading the extensions directory
+function discoverExtensions(cwd: string): ExtensionInfo[] {
+  const extensions: ExtensionInfo[] = [];
+
+  // Check both global and project-local extension directories
+  const home = process.env.HOME ?? "";
+  const dirs = [
+    join(home, ".pi", "agent", "extensions"),
+    join(cwd, ".pi", "extensions"),
+  ];
+
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue;
+
+    try {
+      const entries = readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name.startsWith(".")) continue;
+
+        const extDir = join(dir, entry.name);
+        const indexPath = join(extDir, "index.ts");
+        if (!existsSync(indexPath)) continue;
+
+        // Try to read description from package.json
+        let description: string | undefined;
+        let hasPackageJson = false;
+        const pkgPath = join(extDir, "package.json");
+        if (existsSync(pkgPath)) {
+          hasPackageJson = true;
+          try {
+            const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+            description = pkg.description;
+          } catch {
+            // ignore parse errors
+          }
+        }
+
+        extensions.push({
+          name: entry.name,
+          description,
+          hasPackageJson,
+        });
+      }
+    } catch {
+      // directory not readable
+    }
+  }
+
+  return extensions;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -62,7 +122,7 @@ export default function (pi: ExtensionAPI) {
                 contextWindow: model.contextWindow,
                 maxTokens: model.maxTokens,
                 reasoning: model.reasoning,
-                supportsThinking: model.supportsThinking,
+                supportsThinking: (model as any).supportsThinking,
                 inputTypes: model.input,
                 cost: model.cost,
               }
@@ -112,12 +172,23 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (infoType === "all") {
+        const activeTools = pi.getActiveTools?.() ?? [];
+        const allTools = pi
+          .getAllTools?.()
+          ?.map((t) => ({ name: t.name, description: t.description })) ?? [];
+        const commands = pi.getCommands?.() ?? [];
+
+        // Discover installed extensions from disk
+        const installed = discoverExtensions(ctx.cwd);
+
         result.extensions = {
-          activeTools: pi.getActiveTools?.() ?? [],
-          allTools: pi
-            .getAllTools?.()
-            ?.map((t) => ({ name: t.name, description: t.description })),
-          commands: pi.getCommands?.() ?? [],
+          installed: installed.map((e) => ({
+            name: e.name,
+            ...(e.description ? { description: e.description } : {}),
+          })),
+          activeTools,
+          allTools,
+          commands,
         };
       }
 
@@ -148,6 +219,7 @@ export default function (pi: ExtensionAPI) {
       const lastTimestamp = timestamps.length > 0 ? Math.max(...timestamps) : null;
       
       const title = getSessionTitle(pi, sessionManager);
+      const installed = discoverExtensions(ctx.cwd);
 
       let message = "";
       
@@ -156,7 +228,7 @@ export default function (pi: ExtensionAPI) {
       
       message += `**Model**: ${model?.name ?? "Unknown"} (${model?.provider ?? "?"}/${model?.id ?? "?"})\n`;
       message += `**Thinking Level**: ${pi.getThinkingLevel?.() ?? "off"}\n`;
-      message += `**Context**: ${usage ? `${usage.tokens.toLocaleString()} tokens (${usage.percent.toFixed(1)}%)` : "unknown"}\n`;
+      message += `**Context**: ${usage ? `${usage.tokens?.toLocaleString() ?? "?"} tokens (${usage.percent?.toFixed(1) ?? "?"}%)` : "unknown"}\n`;
       message += `**Working Directory**: ${ctx.cwd}\n`;
       message += `**Session File**: ${sessionManager.getSessionFile() ?? "ephemeral"}\n`;
       message += `**Entries**: ${entries.length} total\n`;
@@ -166,6 +238,13 @@ export default function (pi: ExtensionAPI) {
       }
       if (lastTimestamp) {
         message += `**Last Message**: ${new Date(lastTimestamp).toLocaleString()}\n`;
+      }
+
+      if (installed.length > 0) {
+        message += `\n**Extensions** (${installed.length}):\n`;
+        for (const ext of installed) {
+          message += `  - ${ext.name}${ext.description ? `: ${ext.description}` : ""}\n`;
+        }
       }
 
       ctx.ui.notify(message, "info");
@@ -214,8 +293,9 @@ function formatResult(result: Record<string, unknown>, infoType: string): string
     const contextInfo = result.context as Record<string, unknown> | null;
     if (contextInfo) {
       lines.push("**Context Usage:**");
-      lines.push(`  Tokens: ${contextInfo.tokens?.toLocaleString()}`);
-      lines.push(`  Percentage: ${(contextInfo as { percent: number }).percent.toFixed(1)}%`);
+      lines.push(`  Tokens: ${contextInfo.tokens?.toLocaleString() ?? "unknown"}`);
+      const pct = contextInfo.percent;
+      lines.push(`  Percentage: ${typeof pct === "number" ? pct.toFixed(1) + "%" : "unknown"}`);
       lines.push("");
     } else if (infoType === "context") {
       lines.push("Context usage information not available.");
@@ -225,6 +305,16 @@ function formatResult(result: Record<string, unknown>, infoType: string): string
   if (infoType === "all") {
     const extInfo = result.extensions as Record<string, unknown> | null;
     if (extInfo) {
+      // Show installed extensions
+      const installed = extInfo.installed as { name: string; description?: string }[];
+      if (installed && installed.length > 0) {
+        lines.push(`**Extensions (${installed.length}):**`);
+        for (const ext of installed) {
+          lines.push(`  - ${ext.name}${ext.description ? ` -- ${ext.description}` : ""}`);
+        }
+        lines.push("");
+      }
+
       const activeTools = extInfo.activeTools as string[];
       lines.push("**Active Tools:**");
       lines.push(`  ${activeTools.join(", ")}`);
