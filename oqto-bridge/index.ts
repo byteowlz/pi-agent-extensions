@@ -55,21 +55,23 @@ function clearPhase(ctx: ExtensionContext): void {
  * Export session identity as env vars so child processes (agntz, etc.)
  * can identify which harness, session, and model they're running under.
  *
+ * Uses generic AGENT_ prefix so any harness can follow the same convention.
+ *
  * Called on session_start and turn_end (name may appear after auto-rename).
  */
 function exportSessionEnv(ctx: ExtensionContext): void {
-	process.env.PI_HARNESS = "pi";
-	process.env.PI_SESSION_ID = ctx.sessionManager.getSessionId?.() ?? "";
-	process.env.PI_SESSION_FILE = ctx.sessionManager.getSessionFile?.() ?? "";
-	process.env.PI_CWD = ctx.cwd;
+	process.env.AGENT_HARNESS = "pi";
+	process.env.AGENT_SESSION_ID = ctx.sessionManager.getSessionId?.() ?? "";
+	process.env.AGENT_SESSION_FILE = ctx.sessionManager.getSessionFile?.() ?? "";
+	process.env.AGENT_CWD = ctx.cwd;
 
 	const name = ctx.sessionManager.getSessionName?.();
 	if (name) {
-		process.env.PI_SESSION_NAME = name;
+		process.env.AGENT_SESSION_NAME = name;
 	}
 
 	if (ctx.model) {
-		process.env.PI_MODEL = `${ctx.model.provider}/${ctx.model.id}`;
+		process.env.AGENT_MODEL = `${ctx.model.provider}/${ctx.model.id}`;
 	}
 }
 
@@ -174,7 +176,7 @@ export default function oqtoBridge(pi: ExtensionAPI) {
 	// Keep model env var current when model changes
 	pi.on("model_change", (event, _ctx) => {
 		if (event.model) {
-			process.env.PI_MODEL = `${event.model.provider}/${event.model.id}`;
+			process.env.AGENT_MODEL = `${event.model.provider}/${event.model.id}`;
 		}
 	});
 }
