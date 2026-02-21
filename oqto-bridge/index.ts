@@ -136,5 +136,22 @@ export default function oqtoBridge(pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		agentRunning = false;
 		clearPhase(ctx);
+
+		// Export session identity as env vars so child processes (agntz, etc.)
+		// can identify which harness, session, and model they're running under.
+		process.env.PI_HARNESS = "pi";
+		process.env.PI_SESSION_ID = ctx.sessionManager.getSessionId?.() ?? "";
+		process.env.PI_SESSION_FILE = ctx.sessionManager.getSessionFile?.() ?? "";
+		process.env.PI_CWD = ctx.cwd;
+		if (ctx.model) {
+			process.env.PI_MODEL = `${ctx.model.provider}/${ctx.model.id}`;
+		}
+	});
+
+	// Keep env vars current when model changes
+	pi.on("model_change", (event, _ctx) => {
+		if (event.model) {
+			process.env.PI_MODEL = `${event.model.provider}/${event.model.id}`;
+		}
 	});
 }
