@@ -1,8 +1,0 @@
-{
-  "name": "pi-auto-rename",
-  "version": "1.0.0",
-  "type": "module",
-  "pi": {
-    "extensions": ["./index.ts"]
-  }
-}
