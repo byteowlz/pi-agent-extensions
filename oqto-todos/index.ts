@@ -1,10 +1,10 @@
 /**
- * Oqto Todos Extension for Pi
+ * Octo Todos Extension for Pi
  *
- * Provides a todowrite tool that integrates with Oqto's frontend todo panel.
+ * Provides a todowrite tool that integrates with Octo's frontend todo panel.
  * This is a drop-in replacement for OpenCode's todowrite/todoread tools.
  *
- * The tool outputs todos in a format that Oqto's frontend parses and displays
+ * The tool outputs todos in a format that Octo's frontend parses and displays
  * in the right sidebar panel, matching the expected TodoItem structure.
  *
  * Todo format:
@@ -44,7 +44,7 @@ interface TodoStore {
 	updated_at: string;
 }
 
-interface OqtoTodosConfig {
+interface OctoTodosConfig {
 	enabled: boolean;
 	debug: boolean;
 	storagePath?: string;
@@ -55,10 +55,10 @@ interface OqtoTodosConfig {
 // Constants
 // ============================================================================
 
-const CONFIG_FILENAME = "oqto-todos.json";
+const CONFIG_FILENAME = "octo-todos.json";
 const TODOS_FILENAME = "todos.json";
 
-const DEFAULT_CONFIG: OqtoTodosConfig = {
+const DEFAULT_CONFIG: OctoTodosConfig = {
 	enabled: true,
 	debug: false,
 	sessionScoped: true,
@@ -101,14 +101,14 @@ const TodoReadParams = Type.Object({
 // Config Loading
 // ============================================================================
 
-function loadConfig(cwd: string): OqtoTodosConfig {
+function loadConfig(cwd: string): OctoTodosConfig {
 	const paths = [join(cwd, CONFIG_FILENAME), join(cwd, ".pi", CONFIG_FILENAME), join(homedir(), ".pi", "agent", CONFIG_FILENAME)];
 
 	for (const configPath of paths) {
 		if (existsSync(configPath)) {
 			try {
 				const content = readFileSync(configPath, "utf-8");
-				const userConfig = JSON.parse(content) as Partial<OqtoTodosConfig>;
+				const userConfig = JSON.parse(content) as Partial<OctoTodosConfig>;
 				return { ...DEFAULT_CONFIG, ...userConfig };
 			} catch {
 				// Invalid JSON, continue to next path
@@ -123,7 +123,7 @@ function loadConfig(cwd: string): OqtoTodosConfig {
 // Todo Storage
 // ============================================================================
 
-function getTodosDir(cwd: string, config: OqtoTodosConfig): string {
+function getTodosDir(cwd: string, config: OctoTodosConfig): string {
 	if (config.storagePath) {
 		if (config.storagePath.startsWith("~")) {
 			return join(homedir(), config.storagePath.slice(1));
@@ -133,7 +133,7 @@ function getTodosDir(cwd: string, config: OqtoTodosConfig): string {
 	return join(cwd, ".pi", "todos");
 }
 
-function getTodosPath(cwd: string, config: OqtoTodosConfig, sessionId?: string): string {
+function getTodosPath(cwd: string, config: OctoTodosConfig, sessionId?: string): string {
 	const dir = getTodosDir(cwd, config);
 	if (config.sessionScoped && sessionId) {
 		return join(dir, `${sessionId}.json`);
@@ -141,14 +141,14 @@ function getTodosPath(cwd: string, config: OqtoTodosConfig, sessionId?: string):
 	return join(dir, TODOS_FILENAME);
 }
 
-function ensureTodosDir(cwd: string, config: OqtoTodosConfig): void {
+function ensureTodosDir(cwd: string, config: OctoTodosConfig): void {
 	const dir = getTodosDir(cwd, config);
 	if (!existsSync(dir)) {
 		mkdirSync(dir, { recursive: true });
 	}
 }
 
-function loadTodos(cwd: string, config: OqtoTodosConfig, sessionId?: string): TodoStore {
+function loadTodos(cwd: string, config: OctoTodosConfig, sessionId?: string): TodoStore {
 	const path = getTodosPath(cwd, config, sessionId);
 
 	if (!existsSync(path)) {
@@ -164,7 +164,7 @@ function loadTodos(cwd: string, config: OqtoTodosConfig, sessionId?: string): To
 	}
 }
 
-function saveTodos(cwd: string, config: OqtoTodosConfig, todos: TodoItem[], sessionId?: string): void {
+function saveTodos(cwd: string, config: OctoTodosConfig, todos: TodoItem[], sessionId?: string): void {
 	ensureTodosDir(cwd, config);
 	const path = getTodosPath(cwd, config, sessionId);
 	const store: TodoStore = {
@@ -205,13 +205,13 @@ function getSessionId(ctx: ExtensionContext): string | undefined {
 function getStatusIcon(status: TodoStatus): string {
 	switch (status) {
 		case "completed":
-			return "✓";
+			return "[x]";
 		case "in_progress":
-			return "●";
+			return "[>]";
 		case "cancelled":
-			return "✗";
+			return "[-]";
 		default:
-			return "○";
+			return "[ ]";
 	}
 }
 
@@ -220,7 +220,7 @@ function getPriorityLabel(priority: TodoPriority): string {
 		case "high":
 			return "!";
 		case "low":
-			return "↓";
+			return "v";
 		default:
 			return "";
 	}
@@ -283,7 +283,7 @@ function renderTodoList(todos: TodoItem[], theme: Theme, expanded: boolean): str
 // Extension Entry Point
 // ============================================================================
 
-export default function oqtoTodosExtension(pi: ExtensionAPI) {
+export default function octoTodosExtension(pi: ExtensionAPI) {
 	// Store reference to current todos for rendering and the TUI widget
 	let _currentTodos: TodoItem[] = [];
 
@@ -291,7 +291,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 	// TUI Widget - persistent todo display above the editor
 	// ==========================================================================
 
-	const WIDGET_KEY = "oqto-todos";
+	const WIDGET_KEY = "octo-todos";
 
 	/**
 	 * Build the widget lines for the current todos.
@@ -335,46 +335,85 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 	/**
 	 * Update the persistent TUI widget showing current todos.
 	 * Called after every tool execution and session event.
+	 *
+	 * Wrapped in try/catch to prevent TUI errors (e.g. when Pi runs in
+	 * --mode rpc with no real TUI backend) from crashing the process.
 	 */
 	function updateWidget(ctx: ExtensionContext): void {
 		if (!ctx.hasUI) return;
 
-		if (_currentTodos.length === 0) {
-			ctx.ui.setWidget(WIDGET_KEY, undefined);
-			return;
-		}
+		try {
+			if (_currentTodos.length === 0) {
+				ctx.ui.setWidget(WIDGET_KEY, undefined);
+				return;
+			}
 
-		ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
-			const lines = buildWidgetLines(_currentTodos, theme);
-			return {
-				render: () => lines,
-				// biome-ignore lint/suspicious/noEmptyBlockStatements: widget is rebuilt on each update
-				invalidate: () => {},
-			};
-		});
+			ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
+				try {
+					const lines = buildWidgetLines(_currentTodos, theme);
+					return {
+						render: () => {
+							try {
+								return lines;
+							} catch {
+								return ["[todo render error]"];
+							}
+						},
+						// biome-ignore lint/suspicious/noEmptyBlockStatements: widget is rebuilt on each update
+						invalidate: () => {},
+					};
+				} catch {
+					// Return a safe fallback widget if building lines fails
+					return {
+						render: () => ["[todo widget error]"],
+						// biome-ignore lint/suspicious/noEmptyBlockStatements: fallback widget
+						invalidate: () => {},
+					};
+				}
+			});
+		} catch {
+			// setWidget itself failed -- TUI not available or in bad state.
+			// Silently ignore; the extension continues to work for tool I/O.
+		}
 	}
 
 	/**
 	 * Reconstruct todos from file storage on session events.
+	 * Fully wrapped in try/catch -- a failure here must never crash Pi.
 	 */
 	function reconstructTodos(ctx: ExtensionContext): void {
-		const config = loadConfig(ctx.cwd);
-		if (!config.enabled) return;
+		try {
+			const config = loadConfig(ctx.cwd);
+			if (!config.enabled) return;
 
-		const sessionId = getSessionId(ctx);
-		const store = loadTodos(ctx.cwd, config, sessionId);
-		_currentTodos = store.todos;
-		updateWidget(ctx);
+			const sessionId = getSessionId(ctx);
+			const store = loadTodos(ctx.cwd, config, sessionId);
+			_currentTodos = store.todos;
+			updateWidget(ctx);
+		} catch (e) {
+			// Log but never propagate -- extension errors must not crash the host.
+			console.error("[octo-todos] reconstructTodos failed:", e);
+		}
 	}
 
 	// ==========================================================================
 	// Session event handlers - reconstruct state and update widget
 	// ==========================================================================
 
-	pi.on("session_start", async (_event, ctx) => reconstructTodos(ctx));
-	pi.on("session_switch", async (_event, ctx) => reconstructTodos(ctx));
-	pi.on("session_fork", async (_event, ctx) => reconstructTodos(ctx));
-	pi.on("session_tree", async (_event, ctx) => reconstructTodos(ctx));
+	// Session event handlers are individually wrapped so one failure does not
+	// prevent the others from registering or executing.
+	pi.on("session_start", async (_event, ctx) => {
+		try { reconstructTodos(ctx); } catch (e) { console.error("[octo-todos] session_start handler error:", e); }
+	});
+	pi.on("session_switch", async (_event, ctx) => {
+		try { reconstructTodos(ctx); } catch (e) { console.error("[octo-todos] session_switch handler error:", e); }
+	});
+	pi.on("session_fork", async (_event, ctx) => {
+		try { reconstructTodos(ctx); } catch (e) { console.error("[octo-todos] session_fork handler error:", e); }
+	});
+	pi.on("session_tree", async (_event, ctx) => {
+		try { reconstructTodos(ctx); } catch (e) { console.error("[octo-todos] session_tree handler error:", e); }
+	});
 
 	// ==========================================================================
 	// TodoWrite - Main tool for writing todos (matches OpenCode format)
@@ -383,10 +422,14 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 		name: "TodoWrite",
 		label: "Todo Write",
 		description:
-			"Write a list of todos that will be displayed in the Oqto frontend panel. " +
+			"Write a list of todos that will be displayed in the Octo frontend panel. " +
 			"This replaces the entire todo list. Use for task planning and tracking. " +
 			"Todos have: content (task description), status (pending/in_progress/completed/cancelled), " +
-			"priority (high/medium/low). The frontend displays these in a dedicated panel.",
+			"priority (high/medium/low). The frontend displays these in a dedicated panel.\n\n" +
+			"IMPORTANT: Keep the todo list current throughout the session. When you complete a task, " +
+			"immediately rewrite the full list with that task's status set to 'completed'. " +
+			"When you start working on a task, set it to 'in_progress'. " +
+			"The user watches this panel to track your progress in real time.",
 		parameters: TodoWriteParams,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -408,7 +451,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 			_currentTodos = normalizedTodos;
 			updateWidget(ctx);
 
-			// Return in format that Oqto frontend expects
+			// Return in format that Octo frontend expects
 			return {
 				content: [
 					{
@@ -421,20 +464,28 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 		},
 
 		renderCall(args, theme) {
-			const todos = (args.todos as Array<{ content?: string }>) || [];
-			const count = todos.length;
-			return new Text(theme.fg("toolTitle", theme.bold("TodoWrite ")) + theme.fg("muted", `(${count} items)`), 0, 0);
+			try {
+				const todos = (args.todos as Array<{ content?: string }>) || [];
+				const count = todos.length;
+				return new Text(theme.fg("toolTitle", theme.bold("TodoWrite ")) + theme.fg("muted", `(${count} items)`), 0, 0);
+			} catch {
+				return new Text("TodoWrite", 0, 0);
+			}
 		},
 
 		renderResult(result, { expanded }, theme) {
-			const details = result.details as { todos?: TodoItem[]; error?: string } | undefined;
+			try {
+				const details = result.details as { todos?: TodoItem[]; error?: string } | undefined;
 
-			if (details?.error) {
-				return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
+				if (details?.error) {
+					return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
+				}
+
+				const todos = details?.todos || [];
+				return new Text(renderTodoList(todos, theme, expanded), 0, 0);
+			} catch {
+				return new Text("(render error)", 0, 0);
 			}
-
-			const todos = details?.todos || [];
-			return new Text(renderTodoList(todos, theme, expanded), 0, 0);
 		},
 	});
 
@@ -485,22 +536,30 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 		},
 
 		renderCall(args, theme) {
-			const filter = args.filter as { status?: string; priority?: string } | undefined;
-			let filterStr = "";
-			if (filter?.status) filterStr += ` status=${filter.status}`;
-			if (filter?.priority) filterStr += ` priority=${filter.priority}`;
-			return new Text(theme.fg("toolTitle", theme.bold("TodoRead")) + (filterStr ? theme.fg("muted", filterStr) : ""), 0, 0);
+			try {
+				const filter = args.filter as { status?: string; priority?: string } | undefined;
+				let filterStr = "";
+				if (filter?.status) filterStr += ` status=${filter.status}`;
+				if (filter?.priority) filterStr += ` priority=${filter.priority}`;
+				return new Text(theme.fg("toolTitle", theme.bold("TodoRead")) + (filterStr ? theme.fg("muted", filterStr) : ""), 0, 0);
+			} catch {
+				return new Text("TodoRead", 0, 0);
+			}
 		},
 
 		renderResult(result, { expanded }, theme) {
-			const details = result.details as { todos?: TodoItem[]; error?: string } | undefined;
+			try {
+				const details = result.details as { todos?: TodoItem[]; error?: string } | undefined;
 
-			if (details?.error) {
-				return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
+				if (details?.error) {
+					return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
+				}
+
+				const todos = details?.todos || [];
+				return new Text(renderTodoList(todos, theme, expanded), 0, 0);
+			} catch {
+				return new Text("(render error)", 0, 0);
 			}
-
-			const todos = details?.todos || [];
-			return new Text(renderTodoList(todos, theme, expanded), 0, 0);
 		},
 	});
 
@@ -513,7 +572,9 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 		description:
 			"Unified todo management: add, update, remove, or list todos. " +
 			"Actions: add (new todo), update (modify existing), remove (delete), list (show all). " +
-			"Todos are displayed in the Oqto frontend panel.",
+			"Todos are displayed in the Octo frontend panel.\n\n" +
+			"IMPORTANT: Always update todo status as you work. Set tasks to 'in_progress' when starting " +
+			"and 'completed' when done. The user relies on this panel to see your progress.",
 		parameters: Type.Object({
 			action: StringEnum(["add", "update", "remove", "list"] as const),
 			// For add
@@ -628,45 +689,53 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 		},
 
 		renderCall(args, theme) {
-			const action = (args.action as string) || "list";
-			const id = args.id as string | undefined;
-			const content = args.content as string | undefined;
+			try {
+				const action = (args.action as string) || "list";
+				const id = args.id as string | undefined;
+				const content = args.content as string | undefined;
 
-			let text = theme.fg("toolTitle", theme.bold("Todo ")) + theme.fg("accent", action);
-			if (id) text += ` ${theme.fg("dim", id)}`;
-			if (content) text += ` ${theme.fg("muted", `"${content.slice(0, 30)}${content.length > 30 ? "..." : ""}"`)}`;
+				let text = theme.fg("toolTitle", theme.bold("Todo ")) + theme.fg("accent", action);
+				if (id) text += ` ${theme.fg("dim", id)}`;
+				if (content) text += ` ${theme.fg("muted", `"${content.slice(0, 30)}${content.length > 30 ? "..." : ""}"`)}`;
 
-			return new Text(text, 0, 0);
+				return new Text(text, 0, 0);
+			} catch {
+				return new Text("Todo", 0, 0);
+			}
 		},
 
 		renderResult(result, { expanded }, theme) {
-			const details = result.details as
-				| {
-						action?: string;
-						todos?: TodoItem[];
-						added?: TodoItem;
-						updated?: TodoItem;
-						removed?: TodoItem;
-						error?: string;
-				  }
-				| undefined;
+			try {
+				const details = result.details as
+					| {
+							action?: string;
+							todos?: TodoItem[];
+							added?: TodoItem;
+							updated?: TodoItem;
+							removed?: TodoItem;
+							error?: string;
+					  }
+					| undefined;
 
-			if (details?.error) {
-				return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
+				if (details?.error) {
+					return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
+				}
+
+				const todos = details?.todos || [];
+				let prefix = "";
+
+				if (details?.action === "add" && details.added) {
+					prefix = `${theme.fg("success", "OK Added: ")}${theme.fg("text", details.added.content)}\n\n`;
+				} else if (details?.action === "update" && details.updated) {
+					prefix = `${theme.fg("success", "OK Updated: ")}${theme.fg("text", details.updated.content)}\n\n`;
+				} else if (details?.action === "remove" && details.removed) {
+					prefix = `${theme.fg("success", "OK Removed: ")}${theme.fg("dim", details.removed.content)}\n\n`;
+				}
+
+				return new Text(prefix + renderTodoList(todos, theme, expanded), 0, 0);
+			} catch {
+				return new Text("(render error)", 0, 0);
 			}
-
-			const todos = details?.todos || [];
-			let prefix = "";
-
-			if (details?.action === "add" && details.added) {
-				prefix = `${theme.fg("success", "✓ Added: ")}${theme.fg("text", details.added.content)}\n\n`;
-			} else if (details?.action === "update" && details.updated) {
-				prefix = `${theme.fg("success", "✓ Updated: ")}${theme.fg("text", details.updated.content)}\n\n`;
-			} else if (details?.action === "remove" && details.removed) {
-				prefix = `${theme.fg("success", "✓ Removed: ")}${theme.fg("dim", details.removed.content)}\n\n`;
-			}
-
-			return new Text(prefix + renderTodoList(todos, theme, expanded), 0, 0);
 		},
 	});
 
@@ -676,31 +745,35 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 	pi.registerCommand("todos", {
 		description: "Show current todos",
 		handler: async (_args, ctx) => {
-			const config = loadConfig(ctx.cwd);
-			const sessionId = getSessionId(ctx);
-			const store = loadTodos(ctx.cwd, config, sessionId);
+			try {
+				const config = loadConfig(ctx.cwd);
+				const sessionId = getSessionId(ctx);
+				const store = loadTodos(ctx.cwd, config, sessionId);
 
-			if (!ctx.hasUI) {
-				console.log(JSON.stringify(store.todos, null, 2));
-				return;
+				if (!ctx.hasUI) {
+					console.log(JSON.stringify(store.todos, null, 2));
+					return;
+				}
+
+				if (store.todos.length === 0) {
+					ctx.ui.notify("No todos", "info");
+					return;
+				}
+
+				const summary = {
+					pending: store.todos.filter((t) => t.status === "pending").length,
+					in_progress: store.todos.filter((t) => t.status === "in_progress").length,
+					completed: store.todos.filter((t) => t.status === "completed").length,
+					cancelled: store.todos.filter((t) => t.status === "cancelled").length,
+				};
+
+				ctx.ui.notify(
+					`${store.todos.length} todos: ${summary.in_progress} in progress, ${summary.pending} pending, ${summary.completed} done`,
+					"info"
+				);
+			} catch (e) {
+				console.error("[octo-todos] /todos command error:", e);
 			}
-
-			if (store.todos.length === 0) {
-				ctx.ui.notify("No todos", "info");
-				return;
-			}
-
-			const summary = {
-				pending: store.todos.filter((t) => t.status === "pending").length,
-				in_progress: store.todos.filter((t) => t.status === "in_progress").length,
-				completed: store.todos.filter((t) => t.status === "completed").length,
-				cancelled: store.todos.filter((t) => t.status === "cancelled").length,
-			};
-
-			ctx.ui.notify(
-				`${store.todos.length} todos: ${summary.in_progress} in progress, ${summary.pending} pending, ${summary.completed} done`,
-				"info"
-			);
 		},
 	});
 }
