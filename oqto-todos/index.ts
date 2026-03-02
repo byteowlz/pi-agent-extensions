@@ -22,7 +22,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import { Text, truncateToWidth } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 
 // ============================================================================
@@ -296,7 +296,7 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
   /**
    * Build the widget lines for the current todos.
    */
-  function buildWidgetLines(todos: TodoItem[], theme: Theme): string[] {
+  function buildWidgetLines(todos: TodoItem[], theme: Theme, width?: number): string[] {
     const inProgress = todos.filter((t) => t.status === "in_progress");
     const pending = todos.filter((t) => t.status === "pending");
     const completed = todos.filter((t) => t.status === "completed");
@@ -329,6 +329,10 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
       lines.push(theme.fg("dim", `  ... ${active.length - maxWidgetItems} more`));
     }
 
+    // Truncate all lines to fit terminal width
+    if (width && width > 0) {
+      return lines.map((line) => truncateToWidth(line, width));
+    }
     return lines;
   }
 
@@ -350,11 +354,10 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 
       ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
         try {
-          const lines = buildWidgetLines(_currentTodos, theme);
           return {
-            render: () => {
+            render: (width: number) => {
               try {
-                return lines;
+                return buildWidgetLines(_currentTodos, theme, width);
               } catch {
                 return ["[todo render error]"];
               }
