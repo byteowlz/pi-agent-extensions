@@ -1,0 +1,9 @@
+{
+	"enabled": true,
+	"maxRetries": 3,
+	"baseDelayMs": 0,
+	"retryMode": "continue",
+	"continueMessage": "",
+	"debug": false,
+	"providers": ["Foundry_WG"]
+}
