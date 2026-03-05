@@ -29,7 +29,7 @@
  * Configuration (azure-empty-response-guard.json in cwd or ~/.pi/agent/):
  * {
  *   "enabled": true,
- *   "maxRetries": 3,
+ *   "maxRetries": 5,
  *   "baseDelayMs": 0,
  *   "retryMode": "continue",
  *   "continueMessage": "",
