@@ -1,0 +1,11 @@
+{
+  "todos": [
+    {
+      "id": "fix-todo-truncation",
+      "content": "Fix todo panel line truncation in pi TUI",
+      "status": "completed",
+      "priority": "high"
+    }
+  ],
+  "updated_at": "2026-03-02T19:58:50.940Z"
+}

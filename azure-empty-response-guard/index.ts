@@ -79,7 +79,7 @@ const CONFIG_FILENAME = "azure-empty-response-guard.json";
 
 const DEFAULT_CONFIG: GuardConfig = {
 	enabled: true,
-	maxRetries: 3,
+	maxRetries: 5,
 	baseDelayMs: 0,
 	retryMode: "continue",
 	continueMessage: "",
