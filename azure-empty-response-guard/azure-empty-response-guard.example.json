@@ -3,7 +3,7 @@
 	"maxRetries": 3,
 	"baseDelayMs": 0,
 	"retryMode": "continue",
-	"continueMessage": "",
+	"continueMessage": "continue",
 	"debug": false,
 	"providers": ["Foundry_WG"]
 }
