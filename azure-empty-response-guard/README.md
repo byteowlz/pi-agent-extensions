@@ -62,7 +62,7 @@ Place `azure-empty-response-guard.json` in your working directory, `.pi/`, or `~
 ```json
 {
   "enabled": true,
-  "maxRetries": 3,
+  "maxRetries": 5,
   "baseDelayMs": 0,
   "retryMode": "continue",
   "continueMessage": "continue",
@@ -74,7 +74,7 @@ Place `azure-empty-response-guard.json` in your working directory, `.pi/`, or `~
 | Field | Default | Description |
 |-------|---------|-------------|
 | `enabled` | `true` | Enable/disable the guard |
-| `maxRetries` | `3` | Max consecutive retry attempts before giving up |
+| `maxRetries` | `5` | Max consecutive retry attempts before giving up |
 | `baseDelayMs` | `0` | Delay in ms before first retry (doubles each attempt). 0 = immediate |
 | `retryMode` | `"continue"` | Retry strategy: `"continue"`, `"resend"`, or `"auto"` |
 | `continueMessage` | `"continue"` | Message sent in continue mode. Must be non-empty |

@@ -173,10 +173,8 @@ export default function oqtoBridge(pi: ExtensionAPI) {
 		exportSessionEnv(ctx);
 	});
 
-	// Keep model env var current when model changes
-	pi.on("model_change", (event, _ctx) => {
-		if (event.model) {
-			process.env.AGENT_MODEL = `${event.model.provider}/${event.model.id}`;
-		}
-	});
+	// NOTE: Pi's extension API does not currently expose a dedicated
+	// model_change hook event. AGENT_MODEL is refreshed on session_start and
+	// turn_end (see exportSessionEnv), which is sufficient for child process
+	// context in runner workflows.
 }

@@ -2,6 +2,9 @@
 
 ## Open
 
+### [piext-pe71] oqto-bridge: remove unsupported model_change hook (P1, bug)
+oqto-bridge extension registered pi.on("model_change"), but current Pi extension API doesn't define this hook. This can break typing and risks runtime incompatibility.\n\nFix: remove unsupported hook and rely on session_start + turn_end exportSessionEnv updates for AGENT_MODEL.
+
 ### [piext-3yd5] memory.json configuration file - define LLM models (observer/reflector), token thresholds, observation format, store path. Global (~/.pi/agent/memory.json) and project-local (.pi/memory.json) (P1, feature)
 
 ### [piext-ggnc] Post-session hook to export transcript to hstry/mmry for learning extraction - fires on session_shutdown (P2, feature)
