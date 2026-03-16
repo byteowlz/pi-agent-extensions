@@ -95,7 +95,8 @@ Create `oqto-todos.json` in your project root, `.pi/` directory, or `~/.pi/agent
   "enabled": true,
   "debug": false,
   "sessionScoped": true,
-  "storagePath": ".pi/todos"
+  "storagePath": ".pi/todos",
+  "tuiWidget": false
 }
 ```
 
@@ -107,6 +108,7 @@ Create `oqto-todos.json` in your project root, `.pi/` directory, or `~/.pi/agent
 | `debug` | boolean | `false` | Enable debug logging |
 | `sessionScoped` | boolean | `true` | Store todos per session (vs. shared) |
 | `storagePath` | string | `.pi/todos` | Directory for todo storage |
+| `tuiWidget` | boolean | `true` | Render persistent todo widget in Pi TUI (set to `false` for Oqto-only frontend usage) |
 
 ## Installation
 

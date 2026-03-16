@@ -1,0 +1,8 @@
+{
+  "enabled": true,
+  "maxImageBase64Bytes": 1200000,
+  "maxWidth": 1200,
+  "maxHeight": 1200,
+  "jpegQuality": 70,
+  "notify": true
+}
