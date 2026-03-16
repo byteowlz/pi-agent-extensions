@@ -33,11 +33,11 @@ The extension supports three retry strategies via `retryMode`:
 
 ### Continue Message
 
-The `continueMessage` defaults to `""` (empty string). This sends a minimal empty user message that nudges the model to pick up from context without any explicit instruction. Alternatives:
+The `continueMessage` defaults to `"continue"`. This sends a short user message that nudges the model to pick up from context. Must be non-empty -- some providers (e.g. Kimi K2.5 on Azure) reject empty string content with a 422 error. Alternatives:
 
-- `""` -- minimal, no noise in conversation history (recommended)
-- `"continue"` -- explicit nudge
-- `"Your last response was empty due to a server error. Please continue where you left off."` -- verbose but informative
+- `"continue"` -- minimal nudge (default)
+- `"please continue where you left off"` -- more explicit
+- `"Your last response was empty due to a server error. Please continue."` -- verbose but informative
 
 ## Installation
 
@@ -65,7 +65,7 @@ Place `azure-empty-response-guard.json` in your working directory, `.pi/`, or `~
   "maxRetries": 3,
   "baseDelayMs": 0,
   "retryMode": "continue",
-  "continueMessage": "",
+  "continueMessage": "continue",
   "debug": false,
   "providers": ["Foundry_WG"]
 }
@@ -77,7 +77,7 @@ Place `azure-empty-response-guard.json` in your working directory, `.pi/`, or `~
 | `maxRetries` | `3` | Max consecutive retry attempts before giving up |
 | `baseDelayMs` | `0` | Delay in ms before first retry (doubles each attempt). 0 = immediate |
 | `retryMode` | `"continue"` | Retry strategy: `"continue"`, `"resend"`, or `"auto"` |
-| `continueMessage` | `""` | Message sent in continue mode. Empty string for minimal nudge |
+| `continueMessage` | `"continue"` | Message sent in continue mode. Must be non-empty |
 | `debug` | `false` | Show detailed debug notifications with response metadata |
 | `providers` | `[]` | Provider names to monitor. Empty array means all providers |
 

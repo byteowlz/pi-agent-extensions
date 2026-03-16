@@ -22,9 +22,9 @@
  * - "auto": Uses "resend" for the first turn (no tool calls yet) and
  *   "continue" for subsequent turns.
  *
- * The continuation message is configurable via `continueMessage`. Set it
- * to "" (empty string) for a minimal nudge -- the model picks up from
- * context without any explicit instruction.
+ * The continuation message is configurable via `continueMessage`. Must be
+ * non-empty -- some providers (e.g. Kimi K2.5 on Azure) reject empty
+ * string content with a 422 error.
  *
  * Configuration (azure-empty-response-guard.json in cwd or ~/.pi/agent/):
  * {
@@ -32,7 +32,7 @@
  *   "maxRetries": 3,
  *   "baseDelayMs": 0,
  *   "retryMode": "continue",
- *   "continueMessage": "",
+ *   "continueMessage": "continue",
  *   "debug": false,
  *   "providers": ["Foundry_WG"]
  * }
@@ -82,7 +82,7 @@ const DEFAULT_CONFIG: GuardConfig = {
 	maxRetries: 3,
 	baseDelayMs: 0,
 	retryMode: "continue",
-	continueMessage: "",
+	continueMessage: "continue",
 	debug: false,
 	providers: [],
 };
