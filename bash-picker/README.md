@@ -2,6 +2,12 @@
 
 Pick bash snippets from recent assistant messages and copy to clipboard.
 
+## Install
+
+```bash
+pi install npm:pi-bash-picker
+```
+
 ## Usage
 
 Type `/bash` in any pi session to open the overlay.
@@ -23,15 +29,11 @@ Type `/bash` in any pi session to open the overlay.
 | `Enter` | Copy selected snippet to clipboard |
 | `Esc` | Cancel (or close preview) |
 
-## Requirements
+## Dependencies
 
-One of: `xclip`, `xsel`, `pbcopy`, or `wl-copy` for clipboard support.
-Falls back to pasting into the pi editor if none are available.
+One of these clipboard tools must be available for copy support (falls back to pasting into the pi editor):
 
-## Installation
-
-Copy or symlink into `~/.pi/agent/extensions/`:
-
-```bash
-ln -s /path/to/pi-agent-extensions/bash-picker ~/.pi/agent/extensions/bash-picker
-```
+- [xclip](https://github.com/astrand/xclip)
+- [xsel](https://github.com/kfish/xsel)
+- `pbcopy` (macOS, built-in)
+- [wl-copy](https://github.com/bugaevc/wl-clipboard) (Wayland)
