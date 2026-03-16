@@ -1,16 +1,3 @@
-/**
- * trx-picker -- /trx overlay for browsing, filtering, and dispatching issues
- *
- * Usage: type /trx in any pi session
- *
- * Features:
- * - Lists all open trx issues
- * - Fuzzy search to filter
- * - Multi-select with Space
- * - Enter: ask current session to implement selected issues
- * - Shift+Enter: spawn new tmux session to implement selected issues
- */
-
 import { execSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -269,8 +256,6 @@ class TrxPickerOverlay implements Focusable {
 			const vis = visibleWidth(content);
 			return `${th.fg("border", "\u2502")}${content}${" ".repeat(Math.max(0, innerW - vis))}${th.fg("border", "\u2502")}`;
 		};
-
-		// Header
 		lines.push(th.fg("border", `\u256d${"\u2500".repeat(innerW)}\u256e`));
 		const title = ` ${th.fg("accent", th.bold("trx issues"))}`;
 		const countInfo = th.fg("dim", ` ${this.filtered.length}/${this.issues.length}`);
@@ -278,11 +263,7 @@ class TrxPickerOverlay implements Focusable {
 		const checkedInfo = this.checked.size > 0 ? th.fg("warning", ` (${this.checked.size} selected)`) : "";
 		lines.push(row(`${title}${countInfo}${sortInfo}${checkedInfo}`));
 		lines.push(row(""));
-
-		// Search
 		lines.push(...this.renderSearchInput(innerW, row));
-
-		// Issue list
 		const maxVisible = 20;
 		const total = this.filtered.length;
 
@@ -302,8 +283,6 @@ class TrxPickerOverlay implements Focusable {
 				lines.push(row(th.fg("dim", ` ${visibleStart + 1}-${visibleEnd} of ${total}`)));
 			}
 		}
-
-		// Footer
 		lines.push(row(""));
 		const help = [
 			`${th.fg("dim", "\u2191\u2193")} navigate`,
@@ -321,11 +300,11 @@ class TrxPickerOverlay implements Focusable {
 	}
 
 	invalidate(): void {
-		// No cached state to clear
+		/* noop */
 	}
 
 	dispose(): void {
-		// No resources to release
+		/* noop */
 	}
 }
 
