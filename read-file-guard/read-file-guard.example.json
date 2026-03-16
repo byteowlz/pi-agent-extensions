@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "maxTextChars": 80000,
+  "previewChars": 6000,
+  "notify": true
+}

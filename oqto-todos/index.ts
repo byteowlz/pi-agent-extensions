@@ -49,6 +49,7 @@ interface OctoTodosConfig {
   debug: boolean;
   storagePath?: string;
   sessionScoped: boolean;
+  tuiWidget: boolean;
 }
 
 // ============================================================================
@@ -62,6 +63,7 @@ const DEFAULT_CONFIG: OctoTodosConfig = {
   enabled: true,
   debug: false,
   sessionScoped: true,
+  tuiWidget: true,
 };
 
 const TODO_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
@@ -226,6 +228,10 @@ function getPriorityLabel(priority: TodoPriority): string {
   }
 }
 
+function normalizeTodoText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
 function renderTodoList(todos: TodoItem[], theme: Theme, expanded: boolean): string {
   if (todos.length === 0) {
     return theme.fg("muted", "No todos");
@@ -264,7 +270,8 @@ function renderTodoList(todos: TodoItem[], theme: Theme, expanded: boolean): str
             ? "dim"
             : "text";
 
-    let line = theme.fg(statusColor, `${icon} ${todo.content}`);
+    const contentPreview = truncateToWidth(normalizeTodoText(todo.content), expanded ? 120 : 80);
+    let line = theme.fg(statusColor, `${icon} ${contentPreview}`);
     if (priorityLabel) {
       const priorityColor = todo.priority === "high" ? "error" : "dim";
       line += ` ${theme.fg(priorityColor, priorityLabel)}`;
@@ -308,8 +315,12 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
     if (completed.length > 0) summaryParts.push(`${completed.length} done`);
     if (cancelled.length > 0) summaryParts.push(`${cancelled.length} cancelled`);
 
+    // In rare cases width may be undefined/0 during render transitions.
+    // Use a conservative fallback to avoid ever emitting oversized widget lines.
+    const effectiveWidth = width && width > 0 ? width : 35;
+
     const lines: string[] = [];
-    lines.push(theme.fg("muted", `Todos: ${summaryParts.join(", ")}`));
+    lines.push(truncateToWidth(theme.fg("muted", `Todos: ${summaryParts.join(", ")}`), effectiveWidth));
 
     const active = [...inProgress, ...pending];
     const maxWidgetItems = 8;
@@ -318,21 +329,21 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
       const icon = getStatusIcon(todo.status);
       const priorityLabel = getPriorityLabel(todo.priority);
       const statusColor = todo.status === "in_progress" ? "success" : "text";
-      let line = theme.fg(statusColor, `  ${icon} ${todo.content}`);
+      const reservedSuffix = priorityLabel ? 8 : 6;
+      const contentWidth = Math.max(8, effectiveWidth - reservedSuffix);
+      const contentPreview = truncateToWidth(normalizeTodoText(todo.content), contentWidth);
+
+      let line = theme.fg(statusColor, `  ${icon} ${contentPreview}`);
       if (priorityLabel) {
         const priorityColor = todo.priority === "high" ? "error" : "dim";
         line += ` ${theme.fg(priorityColor, priorityLabel)}`;
       }
-      lines.push(line);
+      lines.push(truncateToWidth(line, effectiveWidth));
     }
     if (active.length > maxWidgetItems) {
-      lines.push(theme.fg("dim", `  ... ${active.length - maxWidgetItems} more`));
+      lines.push(truncateToWidth(theme.fg("dim", `  ... ${active.length - maxWidgetItems} more`), effectiveWidth));
     }
 
-    // Truncate all lines to fit terminal width
-    if (width && width > 0) {
-      return lines.map((line) => truncateToWidth(line, width));
-    }
     return lines;
   }
 
@@ -347,7 +358,8 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
     if (!ctx.hasUI) return;
 
     try {
-      if (_currentTodos.length === 0) {
+      const config = loadConfig(ctx.cwd);
+      if (!config.enabled || !config.tuiWidget || _currentTodos.length === 0) {
         ctx.ui.setWidget(WIDGET_KEY, undefined);
         return;
       }
@@ -387,7 +399,11 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
   function reconstructTodos(ctx: ExtensionContext): void {
     try {
       const config = loadConfig(ctx.cwd);
-      if (!config.enabled) return;
+      if (!config.enabled) {
+        _currentTodos = [];
+        updateWidget(ctx);
+        return;
+      }
 
       const sessionId = getSessionId(ctx);
       const store = loadTodos(ctx.cwd, config, sessionId);
