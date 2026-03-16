@@ -8,13 +8,24 @@ interface BashSnippet {
 	turnIndex: number;
 }
 
+function stripComments(code: string): string {
+	return code
+		.split("\n")
+		.filter((line) => !/^\s*#/.test(line))
+		.join("\n")
+		.trim();
+}
+
 function extractBashBlocks(text: string): string[] {
 	const blocks: string[] = [];
 	const regex = /```(?:bash|sh|shell|zsh)\s*\n([\s\S]*?)```/g;
 	let match = regex.exec(text);
 	while (match) {
-		const code = match[1]?.trim();
-		if (code) blocks.push(code);
+		const raw = match[1]?.trim();
+		if (raw) {
+			const cleaned = stripComments(raw);
+			if (cleaned) blocks.push(cleaned);
+		}
 		match = regex.exec(text);
 	}
 	return blocks;
