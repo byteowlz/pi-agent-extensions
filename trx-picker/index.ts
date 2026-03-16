@@ -24,9 +24,44 @@ interface TrxIssue {
 	status: string;
 	priority: number;
 	issue_type: string;
+	created_at: string;
+	updated_at: string;
 }
 
 type PickerResult = { action: "current" | "tmux"; issues: TrxIssue[] } | undefined;
+
+const SORT_MODES = ["priority", "newest", "oldest", "updated", "type"] as const;
+type SortMode = (typeof SORT_MODES)[number];
+
+const SORT_LABELS: Record<SortMode, string> = {
+	priority: "Priority",
+	newest: "Newest first",
+	oldest: "Oldest first",
+	updated: "Recently updated",
+	type: "Type",
+};
+
+function sortIssues(issues: TrxIssue[], mode: SortMode): TrxIssue[] {
+	const sorted = [...issues];
+	switch (mode) {
+		case "priority":
+			sorted.sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
+			break;
+		case "newest":
+			sorted.sort((a, b) => b.created_at.localeCompare(a.created_at));
+			break;
+		case "oldest":
+			sorted.sort((a, b) => a.created_at.localeCompare(b.created_at));
+			break;
+		case "updated":
+			sorted.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+			break;
+		case "type":
+			sorted.sort((a, b) => a.issue_type.localeCompare(b.issue_type) || a.priority - b.priority);
+			break;
+	}
+	return sorted;
+}
 
 function loadIssues(): TrxIssue[] {
 	try {
@@ -64,7 +99,7 @@ function buildPrompt(issues: TrxIssue[]): string {
 	].join("\n");
 }
 
-function at<T>(arr: T[], index: number): T {
+function at<T>(arr: readonly T[], index: number): T {
 	return arr[index] as T;
 }
 
@@ -80,12 +115,20 @@ class TrxPickerOverlay implements Focusable {
 	private query = "";
 	private cursor = 0;
 	private scrollOffset = 0;
+	private sortMode: SortMode = "priority";
 
 	constructor(theme: Theme, done: (result: PickerResult) => void, issues: TrxIssue[]) {
 		this.theme = theme;
 		this.done = done;
-		this.issues = issues;
-		this.filtered = [...issues];
+		this.issues = sortIssues(issues, this.sortMode);
+		this.filtered = [...this.issues];
+	}
+
+	private cycleSort(): void {
+		const idx = SORT_MODES.indexOf(this.sortMode);
+		this.sortMode = at(SORT_MODES, (idx + 1) % SORT_MODES.length);
+		this.issues = sortIssues(this.issues, this.sortMode);
+		this.refilter();
 	}
 
 	private refilter(): void {
@@ -180,6 +223,10 @@ class TrxPickerOverlay implements Focusable {
 			if (this.selected < this.filtered.length - 1) this.selected++;
 			return;
 		}
+		if (matchesKey(data, "ctrl+s")) {
+			this.cycleSort();
+			return;
+		}
 		if (this.handleNavigation(data)) return;
 		this.handleTextInput(data);
 	}
@@ -227,8 +274,9 @@ class TrxPickerOverlay implements Focusable {
 		lines.push(th.fg("border", `\u256d${"\u2500".repeat(innerW)}\u256e`));
 		const title = ` ${th.fg("accent", th.bold("trx issues"))}`;
 		const countInfo = th.fg("dim", ` ${this.filtered.length}/${this.issues.length}`);
+		const sortInfo = th.fg("muted", ` [${SORT_LABELS[this.sortMode]}]`);
 		const checkedInfo = this.checked.size > 0 ? th.fg("warning", ` (${this.checked.size} selected)`) : "";
-		lines.push(row(`${title}${countInfo}${checkedInfo}`));
+		lines.push(row(`${title}${countInfo}${sortInfo}${checkedInfo}`));
 		lines.push(row(""));
 
 		// Search
@@ -261,6 +309,7 @@ class TrxPickerOverlay implements Focusable {
 			`${th.fg("dim", "\u2191\u2193")} navigate`,
 			`${th.fg("dim", "Space")} toggle`,
 			`${th.fg("dim", "Tab")} toggle+next`,
+			`${th.fg("dim", "Ctrl+S")} sort`,
 			`${th.fg("dim", "Enter")} implement here`,
 			`${th.fg("dim", "Shift+Enter")} new tmux`,
 			`${th.fg("dim", "Esc")} cancel`,
