@@ -1,13 +1,3 @@
-/**
- * bash-picker -- /bash overlay to pick bash snippets from recent messages
- *
- * Usage: type /bash in any pi session
- *
- * Scans the current branch for ```bash code blocks in assistant messages,
- * presents them in a selectable list (most recent first), and copies the
- * chosen snippet to the clipboard.
- */
-
 import { execSync } from "node:child_process";
 import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@mariozechner/pi-coding-agent";
 import { type Focusable, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
@@ -51,7 +41,7 @@ function copyToClipboard(text: string): boolean {
 			execSync(cmd, { input: text, timeout: 3000 });
 			return true;
 		} catch {
-			// try next
+			/* next */
 		}
 	}
 	return false;
@@ -134,15 +124,11 @@ class BashPickerOverlay implements Focusable {
 			const vis = visibleWidth(content);
 			return `${th.fg("border", "\u2502")}${content}${" ".repeat(Math.max(0, innerW - vis))}${th.fg("border", "\u2502")}`;
 		};
-
-		// Header
 		lines.push(th.fg("border", `\u256d${"\u2500".repeat(innerW)}\u256e`));
 		const title = ` ${th.fg("accent", th.bold("bash snippets"))}`;
 		const countInfo = th.fg("dim", ` ${this.snippets.length} found`);
 		lines.push(row(`${title}${countInfo}`));
 		lines.push(row(""));
-
-		// Snippet list
 		const maxVisible = 15;
 		const total = this.snippets.length;
 
@@ -168,11 +154,7 @@ class BashPickerOverlay implements Focusable {
 				lines.push(row(th.fg("dim", ` ${visibleStart + 1}-${visibleEnd} of ${total}`)));
 			}
 		}
-
-		// Code preview
 		lines.push(...this.renderCodePreview(innerW, row));
-
-		// Footer
 		lines.push(row(""));
 		const help = [
 			`${th.fg("dim", "\u2191\u2193")} navigate`,
@@ -187,11 +169,11 @@ class BashPickerOverlay implements Focusable {
 	}
 
 	invalidate(): void {
-		// No cached state to clear
+		/* noop */
 	}
 
 	dispose(): void {
-		// No resources to release
+		/* noop */
 	}
 }
 
@@ -199,7 +181,6 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("bash", {
 		description: "Pick a bash snippet from recent messages and copy to clipboard",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
-			// Extract bash blocks from session branch
 			const entries = ctx.sessionManager.getBranch();
 			const snippets: BashSnippet[] = [];
 			let turnIndex = 0;
@@ -219,8 +200,6 @@ export default function (pi: ExtensionAPI) {
 					});
 				}
 			}
-
-			// Reverse so most recent is first
 			snippets.reverse();
 
 			if (snippets.length === 0) {
@@ -255,7 +234,6 @@ export default function (pi: ExtensionAPI) {
 			if (copied) {
 				ctx.ui.notify("Copied to clipboard", "info");
 			} else {
-				// Fallback: paste into editor
 				ctx.ui.pasteToEditor(result.code);
 				ctx.ui.notify("Pasted into editor (no clipboard tool found)", "warning");
 			}
