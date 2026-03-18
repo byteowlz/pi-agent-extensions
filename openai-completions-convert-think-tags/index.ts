@@ -42,6 +42,8 @@ import {
  */
 const THINK_TAG_PROVIDERS = new Set([
   "fhgenie-preview",
+  "eavs-fhgenie",
+  "eavs-internal-iem",
   // Add more provider names as needed
 ]);
 
