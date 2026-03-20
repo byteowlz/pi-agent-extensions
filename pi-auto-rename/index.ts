@@ -337,7 +337,10 @@ function extractFirstUserQuery(ctx: ExtensionContext): string | null {
 		const msg = (entry as { message?: { role?: string; content?: unknown } }).message;
 		if (!msg || msg.role !== "user") continue;
 
-		return extractTextFromContent(msg.content);
+		if (!Array.isArray(msg.content)) {
+			return typeof msg.content === "string" ? msg.content.trim() || null : null;
+		}
+		return extractTextFromContent(msg.content as Array<{ type: string; text?: string; thinking?: string }>);
 	}
 
 	return null;
@@ -347,23 +350,6 @@ function getSessionId(ctx: ExtensionContext): string | null {
 	const manager = ctx.sessionManager as { getSessionId?: () => string };
 	const id = manager.getSessionId?.();
 	return id || null;
-}
-
-function extractTextFromContent(content: unknown): string | null {
-	if (typeof content === "string") {
-		return content.trim() || null;
-	}
-
-	if (Array.isArray(content)) {
-		for (const block of content) {
-			if (block && typeof block === "object" && "type" in block && block.type === "text" && "text" in block) {
-				const text = (block.text as string).trim();
-				if (text) return text;
-			}
-		}
-	}
-
-	return null;
 }
 
 // ============================================================================
@@ -602,15 +588,41 @@ function stripThinkTags(text: string): string {
 		.trim();
 }
 
-function parseNameFromResponse(
-	response: { content: Array<{ type: string; text?: string; thinking?: string }> },
-	maxNameLength: number
-): string | null {
-	let name = response.content
+function extractTextFromContent(content: Array<{ type: string; text?: string; thinking?: string }>): string {
+	// First try text blocks
+	const textContent = content
 		.filter((c): c is { type: "text"; text: string } => c.type === "text" && typeof c.text === "string")
 		.map((c) => c.text)
 		.join("")
 		.trim();
+
+	if (textContent) return textContent;
+
+	// If no text content, try to extract from thinking blocks
+	// (some models put the answer in the thinking block when the response is short)
+	const thinkingContent = content
+		.filter((c): c is { type: "thinking"; thinking: string } => c.type === "thinking" && typeof c.thinking === "string")
+		.map((c) => c.thinking)
+		.join("")
+		.trim();
+
+	if (!thinkingContent) return "";
+
+	// The thinking block may contain reasoning + the actual title
+	// Take the last non-empty line as the most likely title
+	const lines = thinkingContent
+		.split("\n")
+		.map((l) => l.trim())
+		.filter((l) => l.length > 0 && !l.startsWith("*") && !l.startsWith("-") && !l.startsWith("#"));
+
+	return lines.length > 0 ? lines[lines.length - 1] : "";
+}
+
+function parseNameFromResponse(
+	response: { content: Array<{ type: string; text?: string; thinking?: string }> },
+	maxNameLength: number
+): string | null {
+	let name = extractTextFromContent(response.content);
 
 	// Strip think tags that some models embed in the text stream
 	name = stripThinkTags(name);
