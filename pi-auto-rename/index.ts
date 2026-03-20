@@ -663,6 +663,9 @@ async function tryLlmGeneration(
 	const prompt = config.prompt.replace("{{query}}", trimmedQuery);
 
 	try {
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 15000);
+
 		const response = await complete(
 			resolution.model,
 			{
@@ -674,8 +677,9 @@ async function tryLlmGeneration(
 					},
 				],
 			},
-			{ apiKey: resolution.apiKey ?? undefined }
+			{ apiKey: resolution.apiKey ?? undefined, signal: controller.signal }
 		);
+		clearTimeout(timeout);
 
 		const name = parseNameFromResponse(response, config.maxNameLength);
 
@@ -953,11 +957,17 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.on("before_agent_start", async (event, ctx) => {
+		const config = loadConfig(ctx.cwd);
+		debugNotify(ctx, config, `[auto-rename] before_agent_start: renamed=${sessionRenamed} handled=${firstPromptHandled}`);
 		if (sessionRenamed || firstPromptHandled) return;
 		firstPromptHandled = true;
 
 		const prompt = event.prompt?.trim();
-		if (!prompt) return;
+		if (!prompt) {
+			debugNotify(ctx, config, "[auto-rename] before_agent_start: no prompt", "warning");
+			return;
+		}
+		debugNotify(ctx, config, `[auto-rename] before_agent_start: triggering rename for "${prompt.slice(0, 30)}..."`);
 		void renameFromQuery(prompt, ctx);
 	});
 
