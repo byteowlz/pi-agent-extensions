@@ -198,7 +198,7 @@ uninstall:
 # === Publishing ===
 
 SCOPE := "@byteowlz"
-SKIP_DIRS := "node_modules .git .octo docs scripts .pi .trx"
+SKIP_DIRS := "node_modules .git .octo docs scripts .pi .trx pi-docs"
 
 # Helper: check if a dir is an extension (has index.ts, not in skip list)
 [private]
@@ -221,7 +221,7 @@ publish-status:
         npm_ver="-"
         [[ -f "$d/package.json" ]] && setup="yes"
         if [[ "$setup" == "yes" ]]; then
-            npm_ver=$(npm view "{{ SCOPE }}/pi-$name" version 2>/dev/null || echo "unpublished")
+            npm_ver=$(npm view "{{ SCOPE }}/$name" version 2>/dev/null || echo "unpublished")
         fi
         printf "%-30s %-10s %s\n" "$name" "$setup" "$npm_ver"
     done
@@ -255,7 +255,7 @@ publish-setup name:
     done
     cat > "$ext_dir/package.json" << EOFPKG
     {
-      "name": "{{ SCOPE }}/pi-{{ name }}",
+      "name": "{{ SCOPE }}/{{ name }}",
       "version": "1.0.0",
       "description": "$desc",
       "type": "module",
@@ -275,7 +275,7 @@ publish-setup name:
       "license": "MIT"
     }
     EOFPKG
-    echo "Setup complete: {{ SCOPE }}/pi-{{ name }}"
+    echo "Setup complete: {{ SCOPE }}/{{ name }}"
     echo "  just publish {{ name }}    # publish to npm"
     echo "  just publish-bump {{ name }}  # bump version"
 
