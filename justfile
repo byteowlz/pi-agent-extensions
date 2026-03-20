@@ -276,7 +276,8 @@ publish-setup name:
     }
     EOFPKG
     echo "Setup complete: {{ SCOPE }}/pi-{{ name }}"
-    echo "  just publish {{ name }}   # publish to npm"
+    echo "  just publish {{ name }}    # publish to npm"
+    echo "  just publish-bump {{ name }}  # bump version"
 
 # Setup all extensions for npm publishing
 publish-setup-all:
@@ -287,7 +288,7 @@ publish-setup-all:
         just publish-setup "$(basename "$d")"
     done
 
-# Publish an extension to npm
+# Publish an extension to npm (use directory name, e.g. just publish auto-rename)
 publish name:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -297,7 +298,8 @@ publish name:
         exit 1
     fi
     cd "$ext_dir"
-    echo "Publishing {{ SCOPE }}/pi-{{ name }}..."
+    pkg_name=$(node -p "require('./package.json').name")
+    echo "Publishing $pkg_name..."
     npm publish --access public
 
 # Publish all set-up extensions to npm
@@ -323,8 +325,9 @@ publish-bump name level="patch":
     fi
     cd "$ext_dir"
     npm version {{ level }} --no-git-tag-version
+    pkg_name=$(node -p "require('./package.json').name")
     new_ver=$(node -p "require('./package.json').version")
-    echo "Bumped {{ SCOPE }}/pi-{{ name }} to $new_ver"
+    echo "Bumped $pkg_name to $new_ver"
 
 # === Development ===
 
