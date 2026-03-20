@@ -1,0 +1,35 @@
+{
+  "todos": [
+    {
+      "id": "1",
+      "content": "Understand current azure empty message guard implementation",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "2",
+      "content": "Understand pi's /fork functionality",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "3",
+      "content": "Design solution using fork-like approach without child sessions",
+      "status": "in_progress",
+      "priority": "high"
+    },
+    {
+      "id": "4",
+      "content": "Implement the changes",
+      "status": "pending",
+      "priority": "high"
+    },
+    {
+      "id": "5",
+      "content": "Test and verify",
+      "status": "pending",
+      "priority": "medium"
+    }
+  ],
+  "updated_at": "2026-03-05T07:53:47.123Z"
+}

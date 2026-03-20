@@ -1,0 +1,29 @@
+{
+  "todos": [
+    {
+      "id": "read-file-guard",
+      "content": "Fix read-file-guard/index.ts - overload type error",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "read-image-guard-type",
+      "content": "Fix read-image-guard/index.ts - missing module + overload errors",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "trx-picker-help",
+      "content": "trx-picker: put help text in 2 rows + add key for issue detail preview",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "verify-final",
+      "content": "Verify all checks pass clean",
+      "status": "completed",
+      "priority": "high"
+    }
+  ],
+  "updated_at": "2026-03-20T11:01:26.975Z"
+}

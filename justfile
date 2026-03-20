@@ -245,13 +245,13 @@ publish-setup name:
         first=$(head -n 1 "$ext_dir/README.md" | sed 's/^# *//')
         [[ -n "$first" ]] && desc="$first"
     fi
-    # Collect all .ts files and subdirectories to include
-    files_list='"index.ts", "README.md", "*.schema.json", "*.example.json"'
+    # Collect files: all .ts, metadata, and subdirectories
+    files_list='"*.ts", "README.md", "CHANGELOG.md", "LICENSE", "*.schema.json", "*.example.json"'
     for sub in "$ext_dir"/*/; do
         [[ -d "$sub" ]] || continue
         subname=$(basename "$sub")
         [[ "$subname" == "node_modules" || "$subname" == "dist" ]] && continue
-        files_list="$files_list, \"$subname\""
+        files_list="$files_list, \"$subname/**\""
     done
     cat > "$ext_dir/package.json" << EOFPKG
     {
@@ -264,13 +264,20 @@ publish-setup name:
       "pi": {
         "extensions": ["./index.ts"]
       },
-      "peerDependencies": {
-        "@mariozechner/pi-coding-agent": "*"
+      "homepage": "https://github.com/byteowlz/pi-agent-extensions/tree/main/{{ name }}",
+      "bugs": {
+        "url": "https://github.com/byteowlz/pi-agent-extensions/issues"
       },
       "repository": {
         "type": "git",
         "url": "git+https://github.com/byteowlz/pi-agent-extensions.git",
         "directory": "{{ name }}"
+      },
+      "devDependencies": {
+        "@mariozechner/pi-agent-core": "*",
+        "@mariozechner/pi-ai": "*",
+        "@mariozechner/pi-coding-agent": "*",
+        "@mariozechner/pi-tui": "*"
       },
       "license": "MIT"
     }
