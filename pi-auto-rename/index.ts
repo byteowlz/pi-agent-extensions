@@ -552,7 +552,21 @@ async function resolveModelWithFallback(config: ResolvedConfig, ctx: ExtensionCo
 		if (fallback.error) debugNotify(ctx, config, `[auto-rename] Fallback model failed: ${fallback.error}`, "warning");
 	}
 
-	// 3. Use the currently active session model (always has an API key)
+	// 3. Try well-known cheap non-thinking models (good at short instruction-following)
+	const preferredModels: ModelConfig[] = [
+		{ provider: "anthropic", id: "claude-3-5-haiku-20241022" },
+		{ provider: "openai", id: "gpt-4o-mini" },
+		{ provider: "google", id: "gemini-2.0-flash" },
+	];
+	for (const candidate of preferredModels) {
+		const result = await resolveModel(candidate, ctx);
+		if (result.model && result.apiKey) {
+			debugNotify(ctx, config, `[auto-rename] Auto-selected preferred model: ${candidate.provider}/${candidate.id}`);
+			return { model: result.model, apiKey: result.apiKey, error: null, source: "primary" };
+		}
+	}
+
+	// 4. Use the currently active session model (always has an API key)
 	const currentModel = ctx.model as Model<Api> | undefined;
 	if (currentModel) {
 		const apiKey = await ctx.modelRegistry.getApiKey(currentModel);
@@ -562,7 +576,7 @@ async function resolveModelWithFallback(config: ResolvedConfig, ctx: ExtensionCo
 		}
 	}
 
-	// 4. Last resort: pick the cheapest available model with an API key
+	// 5. Last resort: pick the cheapest available model with an API key
 	const cheapest = await findCheapestAvailableModel(ctx);
 	if (cheapest) {
 		debugNotify(ctx, config, `[auto-rename] Auto-selected cheapest model: ${cheapest.model.provider}/${cheapest.model.id}`);
