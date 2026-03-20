@@ -1,0 +1,27 @@
+{
+  "name": "@byteowlz/pi-bash-picker",
+  "version": "1.0.0",
+  "description": "bash-picker",
+  "type": "module",
+  "keywords": ["pi-package", "pi-extension", "pi-coding-agent"],
+  "files": ["*.ts", "README.md", "CHANGELOG.md", "LICENSE", "*.schema.json", "*.example.json"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "homepage": "https://github.com/byteowlz/pi-agent-extensions/tree/main/pi-bash-picker",
+  "bugs": {
+    "url": "https://github.com/byteowlz/pi-agent-extensions/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/byteowlz/pi-agent-extensions.git",
+    "directory": "pi-bash-picker"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-agent-core": "*",
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*"
+  },
+  "license": "MIT"
+}
