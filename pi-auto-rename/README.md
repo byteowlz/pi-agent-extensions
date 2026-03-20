@@ -6,6 +6,7 @@ Automatically generates descriptive session names based on the first user query,
 
 - **Automatic naming**: Generates a session name as soon as the first prompt is sent
 - **Configurable model**: Use any model accessible via pi (Anthropic, OpenAI, Google, etc.)
+- **Model selection strategy**: Choose whether auto mode prefers current model or cheapest model
 - **Fallback model**: Specify an alternative model if the primary fails
 - **Deterministic fallback**: Generate names without LLM if all models fail
 - **Custom prompts**: Customize the prompt used for name generation
@@ -43,15 +44,10 @@ Create `auto-rename.json` in one of these locations (searched in order):
 ```json
 {
   "$schema": "./auto-rename.schema.json",
-  "model": {
-    "provider": "anthropic",
-    "id": "claude-3-5-haiku-20241022"
-  },
-  "fallbackModel": {
-    "provider": "openai",
-    "id": "gpt-4o-mini"
-  },
+  "model": null,
+  "fallbackModel": null,
   "fallbackDeterministic": "readable-id",
+  "modelSelection": "current",
   "prompt": "Generate a short, descriptive title...",
   "prefix": "",
   "prefixCommand": null,
@@ -67,10 +63,10 @@ Create `auto-rename.json` in one of these locations (searched in order):
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `model.provider` | string | `"anthropic"` | Primary LLM provider |
-| `model.id` | string | `"claude-3-5-haiku-20241022"` | Primary model ID |
-| `fallbackModel` | object/null | `{"provider":"openai","id":"gpt-4o-mini"}` | Fallback model if primary fails. Set to `null` to disable. |
+| `model` | object/null | `null` | Primary model to use (`{ provider, id }`). If null, auto selection is used. |
+| `fallbackModel` | object/null | `null` | Fallback model if primary fails. If null, skip explicit fallback. |
 | `fallbackDeterministic` | string | `"readable-id"` | Fallback if all LLMs fail: `"readable-id"` (adjective-noun-noun from session ID), `"truncate"` (first 50 chars), `"words"` (first 6 words), `"none"` |
+| `modelSelection` | string | `"current"` | Auto strategy when `model`/`fallbackModel` are null: `"current"` (current model then cheapest) or `"cheapest"` (cheapest then current). |
 | `prompt` | string | (see above) | Prompt template. Use `{{query}}` as placeholder |
 | `prefix` | string | `""` | Static prefix before generated names |
 | `prefixCommand` | string/null | `null` | Shell command to generate dynamic prefix (5s timeout) |
@@ -221,12 +217,16 @@ Enable `debug: true` to see all error details.
 ### Fallback Chain
 
 ```
-Primary Model → Fallback Model → Deterministic Function → (no name)
-     ↓               ↓                    ↓
-  Success?       Success?            "truncate" / "words"
-     ↓               ↓                    ↓
-   Done!          Done!               Done! (or skip if "none")
+Configured model → Configured fallback → Auto strategy → Deterministic function → (no name)
+      ↓                  ↓                 ↓                    ↓
+   Success?           Success?     current/cheapest         "truncate" / "words"
+      ↓                  ↓                 ↓                    ↓
+    Done!              Done!             Done!             Done! (or skip if "none")
 ```
+
+Auto strategy is controlled by `modelSelection`:
+- `"current"`: current model, then cheapest
+- `"cheapest"`: cheapest, then current
 
 ## Session File Format
 

@@ -11,6 +11,7 @@
  *   "model": { "provider": "anthropic", "id": "claude-3-5-haiku-20241022" },
  *   "fallbackModel": { "provider": "openai", "id": "gpt-4o-mini" },
  *   "fallbackDeterministic": "readable-id",
+ *   "modelSelection": "current",
  *   "prompt": "Generate a short, descriptive title...",
  *   "prefix": "[auto] ",
  *   "prefixCommand": "basename $(git rev-parse --show-toplevel 2>/dev/null || pwd)",
@@ -77,6 +78,7 @@ interface AutoRenameConfig {
 	model?: ModelConfig;
 	fallbackModel?: ModelConfig | null;
 	fallbackDeterministic?: "truncate" | "words" | "none" | "readable-id";
+	modelSelection?: "current" | "cheapest";
 	prompt?: string;
 	prefix?: string;
 	prefixCommand?: string;
@@ -95,6 +97,7 @@ type ResolvedConfig = {
 	model: ModelConfig | null;
 	fallbackModel: ModelConfig | null | undefined;
 	fallbackDeterministic: "truncate" | "words" | "none" | "readable-id";
+	modelSelection: "current" | "cheapest";
 	prompt: string;
 	prefix: string;
 	prefixCommand: string | undefined;
@@ -145,6 +148,7 @@ const DEFAULT_CONFIG: ResolvedConfig = {
 	model: null,
 	fallbackModel: null,
 	fallbackDeterministic: "readable-id",
+	modelSelection: "current",
 	prompt: DEFAULT_PROMPT,
 	prefix: "",
 	prefixCommand: undefined,
@@ -534,6 +538,14 @@ function debugNotify(
 	}
 }
 
+async function resolveCurrentModel(ctx: ExtensionContext): Promise<{ model: Model<Api>; apiKey: string } | null> {
+	const currentModel = ctx.model as Model<Api> | undefined;
+	if (!currentModel) return null;
+	const apiKey = await ctx.modelRegistry.getApiKey(currentModel);
+	if (!apiKey) return null;
+	return { model: currentModel, apiKey };
+}
+
 async function resolveModelWithFallback(config: ResolvedConfig, ctx: ExtensionContext): Promise<ModelResolutionResult> {
 	// 1. Try explicitly configured primary model
 	if (config.model) {
@@ -552,35 +564,31 @@ async function resolveModelWithFallback(config: ResolvedConfig, ctx: ExtensionCo
 		if (fallback.error) debugNotify(ctx, config, `[auto-rename] Fallback model failed: ${fallback.error}`, "warning");
 	}
 
-	// 3. Try well-known cheap non-thinking models (good at short instruction-following)
-	const preferredModels: ModelConfig[] = [
-		{ provider: "anthropic", id: "claude-3-5-haiku-20241022" },
-		{ provider: "openai", id: "gpt-4o-mini" },
-		{ provider: "google", id: "gemini-2.0-flash" },
-	];
-	for (const candidate of preferredModels) {
-		const result = await resolveModel(candidate, ctx);
-		if (result.model && result.apiKey) {
-			debugNotify(ctx, config, `[auto-rename] Auto-selected preferred model: ${candidate.provider}/${candidate.id}`);
-			return { model: result.model, apiKey: result.apiKey, error: null, source: "primary" };
+	// 3. Strategy-based auto selection
+	if (config.modelSelection === "cheapest") {
+		const cheapest = await findCheapestAvailableModel(ctx);
+		if (cheapest) {
+			debugNotify(ctx, config, `[auto-rename] Auto-selected cheapest model: ${cheapest.model.provider}/${cheapest.model.id}`);
+			return { model: cheapest.model, apiKey: cheapest.apiKey, error: null, source: "primary" };
 		}
-	}
 
-	// 4. Use the currently active session model (always has an API key)
-	const currentModel = ctx.model as Model<Api> | undefined;
-	if (currentModel) {
-		const apiKey = await ctx.modelRegistry.getApiKey(currentModel);
-		if (apiKey) {
-			debugNotify(ctx, config, `[auto-rename] Using current model: ${currentModel.provider}/${currentModel.id}`);
-			return { model: currentModel, apiKey, error: null, source: "primary" };
+		const current = await resolveCurrentModel(ctx);
+		if (current) {
+			debugNotify(ctx, config, `[auto-rename] Using current model: ${current.model.provider}/${current.model.id}`);
+			return { model: current.model, apiKey: current.apiKey, error: null, source: "primary" };
 		}
-	}
+	} else {
+		const current = await resolveCurrentModel(ctx);
+		if (current) {
+			debugNotify(ctx, config, `[auto-rename] Using current model: ${current.model.provider}/${current.model.id}`);
+			return { model: current.model, apiKey: current.apiKey, error: null, source: "primary" };
+		}
 
-	// 5. Last resort: pick the cheapest available model with an API key
-	const cheapest = await findCheapestAvailableModel(ctx);
-	if (cheapest) {
-		debugNotify(ctx, config, `[auto-rename] Auto-selected cheapest model: ${cheapest.model.provider}/${cheapest.model.id}`);
-		return { model: cheapest.model, apiKey: cheapest.apiKey, error: null, source: "primary" };
+		const cheapest = await findCheapestAvailableModel(ctx);
+		if (cheapest) {
+			debugNotify(ctx, config, `[auto-rename] Auto-selected cheapest model: ${cheapest.model.provider}/${cheapest.model.id}`);
+			return { model: cheapest.model, apiKey: cheapest.apiKey, error: null, source: "primary" };
+		}
 	}
 
 	return {
@@ -862,6 +870,7 @@ function handleConfig(ctx: ExtensionCommandContext, config: ResolvedConfig): voi
 		config.model ? `model=${config.model.provider}/${config.model.id}` : "model=auto (current session model, then cheapest)",
 		config.fallbackModel ? `fallback=${config.fallbackModel.provider}/${config.fallbackModel.id}` : null,
 		`deterministic=${config.fallbackDeterministic}`,
+		`modelSelection=${config.modelSelection}`,
 		config.wordlistPath ? `wordlistPath=${config.wordlistPath}` : null,
 		config.wordlist ? "wordlist=inline" : null,
 		config.readableIdEnv ? `readableIdEnv=${config.readableIdEnv}` : null,
