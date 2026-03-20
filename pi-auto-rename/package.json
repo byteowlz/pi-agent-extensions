@@ -1,12 +1,26 @@
 {
   "name": "@byteowlz/pi-auto-rename",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Auto-Rename Extension for pi",
   "type": "module",
-  "keywords": ["pi-package", "pi-extension", "pi-coding-agent"],
-  "files": ["*.ts", "README.md", "CHANGELOG.md", "LICENSE", "*.schema.json", "*.example.json", "wordlist/**"],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent"
+  ],
+  "files": [
+    "*.ts",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "*.schema.json",
+    "*.example.json",
+    "wordlist/**"
+  ],
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   },
   "homepage": "https://github.com/byteowlz/pi-agent-extensions/tree/main/pi-auto-rename",
   "bugs": {

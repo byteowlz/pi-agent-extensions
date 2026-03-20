@@ -161,7 +161,42 @@ const DEFAULT_CONFIG: ResolvedConfig = {
 
 const CONFIG_FILENAME = "auto-rename.json";
 const SUBAGENT_PREFIX_ENV = "PI_SUBAGENT_PREFIX";
-const DEFAULT_WORDLIST_PATH = join(dirname(fileURLToPath(import.meta.url)), "wordlist", "word_lists.toml");
+const DEFAULT_WORDLIST_PATH = resolveDefaultWordlistPath();
+
+function resolveDefaultWordlistPath(): string {
+	// Try import.meta.url (works in native ESM)
+	try {
+		const dir = dirname(fileURLToPath(import.meta.url));
+		const candidate = join(dir, "wordlist", "word_lists.toml");
+		if (existsSync(candidate)) return candidate;
+	} catch {
+		// import.meta.url may not work under jiti
+	}
+
+	// Try __dirname (available in CJS and some jiti contexts)
+	try {
+		// @ts-ignore - __dirname may be defined by jiti at runtime
+		if (typeof __dirname === "string") {
+			// @ts-ignore
+			const candidate = join(__dirname, "wordlist", "word_lists.toml");
+			if (existsSync(candidate)) return candidate;
+		}
+	} catch {
+		// not available
+	}
+
+	// Fallback: look in the npm global install location
+	try {
+		const npmRoot = execSync("npm root -g", { encoding: "utf-8", timeout: 3000 }).trim();
+		const candidate = join(npmRoot, "@byteowlz", "pi-auto-rename", "wordlist", "word_lists.toml");
+		if (existsSync(candidate)) return candidate;
+	} catch {
+		// npm not available or timed out
+	}
+
+	// Last resort: return a path that won't exist but won't crash
+	return join("wordlist", "word_lists.toml");
+}
 
 /**
  * Status key used to notify the Oqto runner of title changes.
