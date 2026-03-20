@@ -113,7 +113,19 @@ export default function (pi: ExtensionAPI) {
 
 ## Installation
 
-To use these extensions with pi:
+### Via npm (recommended)
+
+Published extensions can be installed directly via pi:
+
+```bash
+pi install npm:@byteowlz/pi-auto-rename
+pi install npm:@byteowlz/pi-bash-picker
+pi install npm:@byteowlz/pi-trx-picker
+```
+
+### Manual installation
+
+To use extensions locally from this repo:
 
 ```bash
 # Global installation (all projects)
@@ -124,6 +136,19 @@ cp -r <extension-name> .pi/extensions/
 
 # Or symlink for development
 ln -s $(pwd)/<extension-name> ~/.pi/agent/extensions/<extension-name>
+```
+
+## Publishing Extensions
+
+Individual extensions can be published as npm packages under the `@byteowlz/` scope. Pi loads TypeScript directly via jiti, so no build step is needed.
+
+```bash
+just publish-setup auto-rename   # Prepare extension for npm
+just publish-setup-all           # Prepare all extensions
+just publish auto-rename         # Publish to npm
+just publish-all                 # Publish all
+just publish-bump auto-rename    # Bump version (patch/minor/major)
+just publish-status              # Show setup and npm status
 ```
 
 ## License

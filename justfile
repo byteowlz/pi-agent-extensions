@@ -195,6 +195,137 @@ uninstall:
     echo "Done: $count extensions removed."
     echo "Run /reload in pi to pick up changes."
 
+# === Publishing ===
+
+SCOPE := "@byteowlz"
+SKIP_DIRS := "node_modules .git .octo docs scripts .pi .trx"
+
+# Helper: check if a dir is an extension (has index.ts, not in skip list)
+[private]
+is-extension dir:
+    #!/usr/bin/env bash
+    name=$(basename "{{ dir }}")
+    for skip in {{ SKIP_DIRS }}; do [[ "$name" == "$skip" ]] && exit 1; done
+    [[ -f "{{ dir }}/index.ts" ]] && exit 0 || exit 1
+
+# List all extensions and their publish status
+publish-status:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf "%-30s %-10s %s\n" "EXTENSION" "SETUP" "NPM VERSION"
+    printf "%-30s %-10s %s\n" "---------" "-----" "-----------"
+    for d in "{{ SRC_DIR }}"/*/; do
+        name=$(basename "$d")
+        just is-extension "$d" 2>/dev/null || continue
+        setup="no"
+        npm_ver="-"
+        [[ -f "$d/package.json" ]] && setup="yes"
+        if [[ "$setup" == "yes" ]]; then
+            npm_ver=$(npm view "{{ SCOPE }}/pi-$name" version 2>/dev/null || echo "unpublished")
+        fi
+        printf "%-30s %-10s %s\n" "$name" "$setup" "$npm_ver"
+    done
+
+# Setup an extension for npm publishing
+publish-setup name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ext_dir="{{ SRC_DIR }}/{{ name }}"
+    if [[ ! -d "$ext_dir" || ! -f "$ext_dir/index.ts" ]]; then
+        echo "Extension not found: {{ name }}"
+        exit 1
+    fi
+    if [[ -f "$ext_dir/package.json" ]]; then
+        echo "{{ name }} already has a package.json"
+        gum confirm "Overwrite?" || exit 0
+    fi
+    # Extract description from README
+    desc="Pi extension: {{ name }}"
+    if [[ -f "$ext_dir/README.md" ]]; then
+        first=$(head -n 1 "$ext_dir/README.md" | sed 's/^# *//')
+        [[ -n "$first" ]] && desc="$first"
+    fi
+    # Collect all .ts files and subdirectories to include
+    files_list='"index.ts", "README.md", "*.schema.json", "*.example.json"'
+    for sub in "$ext_dir"/*/; do
+        [[ -d "$sub" ]] || continue
+        subname=$(basename "$sub")
+        [[ "$subname" == "node_modules" || "$subname" == "dist" ]] && continue
+        files_list="$files_list, \"$subname\""
+    done
+    cat > "$ext_dir/package.json" << EOFPKG
+    {
+      "name": "{{ SCOPE }}/pi-{{ name }}",
+      "version": "1.0.0",
+      "description": "$desc",
+      "type": "module",
+      "keywords": ["pi-package", "pi-extension", "pi-coding-agent"],
+      "files": [$files_list],
+      "pi": {
+        "extensions": ["./index.ts"]
+      },
+      "peerDependencies": {
+        "@mariozechner/pi-coding-agent": "*"
+      },
+      "repository": {
+        "type": "git",
+        "url": "git+https://github.com/byteowlz/pi-agent-extensions.git",
+        "directory": "{{ name }}"
+      },
+      "license": "MIT"
+    }
+    EOFPKG
+    echo "Setup complete: {{ SCOPE }}/pi-{{ name }}"
+    echo "  just publish {{ name }}   # publish to npm"
+
+# Setup all extensions for npm publishing
+publish-setup-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for d in "{{ SRC_DIR }}"/*/; do
+        just is-extension "$d" 2>/dev/null || continue
+        just publish-setup "$(basename "$d")"
+    done
+
+# Publish an extension to npm
+publish name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ext_dir="{{ SRC_DIR }}/{{ name }}"
+    if [[ ! -f "$ext_dir/package.json" ]]; then
+        echo "{{ name }} not set up yet. Run: just publish-setup {{ name }}"
+        exit 1
+    fi
+    cd "$ext_dir"
+    echo "Publishing {{ SCOPE }}/pi-{{ name }}..."
+    npm publish --access public
+
+# Publish all set-up extensions to npm
+publish-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for d in "{{ SRC_DIR }}"/*/; do
+        name=$(basename "$d")
+        [[ -f "$d/package.json" && -f "$d/index.ts" ]] || continue
+        [[ "$name" == "node_modules" ]] && continue
+        echo "=== $name ==="
+        just publish "$name"
+    done
+
+# Bump version of an extension (patch/minor/major)
+publish-bump name level="patch":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ext_dir="{{ SRC_DIR }}/{{ name }}"
+    if [[ ! -f "$ext_dir/package.json" ]]; then
+        echo "{{ name }} not set up yet. Run: just publish-setup {{ name }}"
+        exit 1
+    fi
+    cd "$ext_dir"
+    npm version {{ level }} --no-git-tag-version
+    new_ver=$(node -p "require('./package.json').version")
+    echo "Bumped {{ SCOPE }}/pi-{{ name }} to $new_ver"
+
 # === Development ===
 
 # Lint all extensions

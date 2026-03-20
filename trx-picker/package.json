@@ -1,5 +1,5 @@
 {
-	"name": "pi-trx-picker",
+	"name": "@byteowlz/pi-trx-picker",
 	"version": "1.0.0",
 	"type": "module",
 	"description": "Browse, filter, and dispatch trx issues from a pi session overlay",

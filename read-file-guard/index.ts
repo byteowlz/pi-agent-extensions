@@ -10,7 +10,7 @@ type GuardConfig = {
 	notify: boolean;
 };
 
-type AnyBlock = { type: string; [key: string]: unknown };
+type TextBlock = { type: "text"; text: string };
 
 type ReadToolInput = {
 	path?: string;
@@ -81,8 +81,8 @@ function buildGuardText(inputPath: string | undefined, originalChars: number, pr
 	return `[read-file-guard] Truncated oversized read output${pathNote} (${formatChars(originalChars)}). This prevents provider request/body overflows and runaway context growth. Use chunked reads (offset/limit) or convert large documents (for example with ingestr) before continuing.${previewSection}`;
 }
 
-function toGuardedContent(text: string): AnyBlock[] {
-	return [{ type: "text", text }] as AnyBlock[];
+function toGuardedContent(text: string): TextBlock[] {
+	return [{ type: "text", text }];
 }
 
 function getInputPath(input: unknown): string | undefined {

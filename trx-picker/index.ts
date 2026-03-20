@@ -15,6 +15,20 @@ interface TrxIssue {
 	updated_at: string;
 }
 
+interface TrxIssueDetail {
+	id: string;
+	title: string;
+	status: string;
+	priority: number;
+	issue_type: string;
+	description?: string;
+	created_at: string;
+	updated_at: string;
+	labels?: string[];
+	assignees?: string[];
+	comments?: { author: string; body: string; created_at: string }[];
+}
+
 type PickerResult = { action: "current" | "tmux"; issues: TrxIssue[] } | undefined;
 
 const SORT_MODES = ["priority", "newest", "oldest", "updated", "type"] as const;
@@ -56,6 +70,15 @@ function loadIssues(): TrxIssue[] {
 		return JSON.parse(output) as TrxIssue[];
 	} catch {
 		return [];
+	}
+}
+
+function loadIssueDetail(id: string): TrxIssueDetail | null {
+	try {
+		const output = execSync(`trx show ${id} --json`, { encoding: "utf-8", timeout: 10000 });
+		return JSON.parse(output) as TrxIssueDetail;
+	} catch {
+		return null;
 	}
 }
 
@@ -103,12 +126,27 @@ class TrxPickerOverlay implements Focusable {
 	private cursor = 0;
 	private scrollOffset = 0;
 	private sortMode: SortMode = "priority";
+	private detailCache = new Map<string, TrxIssueDetail | null>();
+	private showDetail = false;
 
 	constructor(theme: Theme, done: (result: PickerResult) => void, issues: TrxIssue[]) {
 		this.theme = theme;
 		this.done = done;
 		this.issues = sortIssues(issues, this.sortMode);
 		this.filtered = [...this.issues];
+	}
+
+	private getCurrentDetail(): TrxIssueDetail | null {
+		if (this.filtered.length === 0) return null;
+		const issue = at(this.filtered, this.selected);
+		if (!this.detailCache.has(issue.id)) {
+			this.detailCache.set(issue.id, loadIssueDetail(issue.id));
+		}
+		return this.detailCache.get(issue.id) ?? null;
+	}
+
+	private toggleDetail(): void {
+		this.showDetail = !this.showDetail;
 	}
 
 	private cycleSort(): void {
@@ -214,8 +252,55 @@ class TrxPickerOverlay implements Focusable {
 			this.cycleSort();
 			return;
 		}
+		if (matchesKey(data, "ctrl+d")) {
+			this.toggleDetail();
+			return;
+		}
 		if (this.handleNavigation(data)) return;
 		this.handleTextInput(data);
+	}
+
+	private renderDetailPanel(innerW: number, row: (s: string) => string): string[] {
+		const th = this.theme;
+		const detail = this.getCurrentDetail();
+		const detailLines: string[] = [];
+		detailLines.push(row(th.fg("border", ` ${"\u2500".repeat(innerW - 2)} `)));
+
+		if (!detail) {
+			detailLines.push(row(` ${th.fg("warning", "No details available")}`));
+			return detailLines;
+		}
+
+		detailLines.push(row(` ${th.fg("accent", th.bold(detail.title))}`));
+		const meta = [
+			`${th.fg("dim", "ID:")} ${detail.id}`,
+			`${th.fg("dim", "Status:")} ${detail.status}`,
+			`${th.fg("dim", "Priority:")} ${priorityLabel(detail.priority)}`,
+			`${th.fg("dim", "Type:")} ${typeLabel(detail.issue_type)}`,
+		].join("  ");
+		detailLines.push(row(` ${meta}`));
+
+		if (detail.labels && detail.labels.length > 0) {
+			detailLines.push(row(` ${th.fg("dim", "Labels:")} ${detail.labels.join(", ")}`));
+		}
+		if (detail.assignees && detail.assignees.length > 0) {
+			detailLines.push(row(` ${th.fg("dim", "Assignees:")} ${detail.assignees.join(", ")}`));
+		}
+
+		if (detail.description) {
+			detailLines.push(row(""));
+			const descLines = detail.description.split("\n");
+			const maxDescLines = 8;
+			const displayLines = descLines.slice(0, maxDescLines);
+			for (const line of displayLines) {
+				detailLines.push(row(` ${truncateToWidth(th.fg("text", line), innerW - 2)}`));
+			}
+			if (descLines.length > maxDescLines) {
+				detailLines.push(row(` ${th.fg("dim", `... ${descLines.length - maxDescLines} more lines`)}`));
+			}
+		}
+
+		return detailLines;
 	}
 
 	private renderSearchInput(innerW: number, row: (s: string) => string): string[] {
@@ -283,17 +368,25 @@ class TrxPickerOverlay implements Focusable {
 				lines.push(row(th.fg("dim", ` ${visibleStart + 1}-${visibleEnd} of ${total}`)));
 			}
 		}
+		if (this.showDetail) {
+			lines.push(...this.renderDetailPanel(innerW, row));
+		}
 		lines.push(row(""));
-		const help = [
+		const sep = th.fg("border", " \u2502 ");
+		const helpRow1 = [
 			`${th.fg("dim", "\u2191\u2193")} navigate`,
 			`${th.fg("dim", "Space")} toggle`,
 			`${th.fg("dim", "Tab")} toggle+next`,
 			`${th.fg("dim", "Ctrl+S")} sort`,
+			`${th.fg("dim", "Ctrl+D")} details`,
+		].join(sep);
+		const helpRow2 = [
 			`${th.fg("dim", "Enter")} implement here`,
 			`${th.fg("dim", "Shift+Enter")} new tmux`,
 			`${th.fg("dim", "Esc")} cancel`,
-		].join(th.fg("border", " \u2502 "));
-		lines.push(row(` ${help}`));
+		].join(sep);
+		lines.push(row(` ${helpRow1}`));
+		lines.push(row(` ${helpRow2}`));
 		lines.push(th.fg("border", `\u2570${"\u2500".repeat(innerW)}\u256f`));
 
 		return lines;

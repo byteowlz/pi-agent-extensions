@@ -4,7 +4,9 @@
  * Automatically generates a session name based on the first user query
  * using a configurable LLM model and prompt.
  *
- * Configuration (auto-rename.json in cwd or ~/.pi/agent/):
+ * By default, uses the current session model. Falls back to the cheapest
+ * available model with an API key. Override via config
+ * (auto-rename.json in cwd, .pi/, or ~/.pi/agent/):
  * {
  *   "model": { "provider": "anthropic", "id": "claude-3-5-haiku-20241022" },
  *   "fallbackModel": { "provider": "openai", "id": "gpt-4o-mini" },
@@ -90,7 +92,7 @@ interface AutoRenameConfig {
 }
 
 type ResolvedConfig = {
-	model: ModelConfig;
+	model: ModelConfig | null;
 	fallbackModel: ModelConfig | null | undefined;
 	fallbackDeterministic: "truncate" | "words" | "none" | "readable-id";
 	prompt: string;
@@ -140,8 +142,8 @@ Rules:
 Reply with ONLY the title, nothing else.`;
 
 const DEFAULT_CONFIG: ResolvedConfig = {
-	model: { provider: "anthropic", id: "claude-3-5-haiku-20241022" },
-	fallbackModel: { provider: "openai", id: "gpt-4o-mini" },
+	model: null,
+	fallbackModel: null,
 	fallbackDeterministic: "readable-id",
 	prompt: DEFAULT_PROMPT,
 	prefix: "",
@@ -459,6 +461,26 @@ function generateTruncatedName(cleaned: string): string {
 // Model Resolution
 // ============================================================================
 
+/**
+ * Find the cheapest available model that has an API key configured.
+ * Prefers small/fast models suitable for short title generation.
+ */
+async function findCheapestAvailableModel(ctx: ExtensionContext): Promise<{ model: Model<Api>; apiKey: string } | null> {
+	const allModels = ctx.modelRegistry.getAll() as Model<Api>[];
+	// Sort by total cost (input + output), cheapest first
+	const sorted = [...allModels].sort((a, b) => {
+		const costA = (a.cost?.input ?? 0) + (a.cost?.output ?? 0);
+		const costB = (b.cost?.input ?? 0) + (b.cost?.output ?? 0);
+		return costA - costB;
+	});
+
+	for (const model of sorted) {
+		const apiKey = await ctx.modelRegistry.getApiKey(model);
+		if (apiKey) return { model, apiKey };
+	}
+	return null;
+}
+
 async function resolveModel(
 	modelConfig: ModelConfig,
 	ctx: ExtensionContext
@@ -480,36 +502,56 @@ async function resolveModel(
 	return { model, apiKey: apiKey ?? null, error: null };
 }
 
+function debugNotify(
+	ctx: ExtensionContext,
+	config: ResolvedConfig,
+	message: string,
+	level: "info" | "warning" | "error" = "info"
+): void {
+	if (config.debug && ctx.hasUI) {
+		ctx.ui.notify(message, level);
+	}
+}
+
 async function resolveModelWithFallback(config: ResolvedConfig, ctx: ExtensionContext): Promise<ModelResolutionResult> {
-	const primary = await resolveModel(config.model, ctx);
-
-	if (primary.model) {
-		return { ...primary, source: "primary" };
+	// 1. Try explicitly configured primary model
+	if (config.model) {
+		const primary = await resolveModel(config.model, ctx);
+		if (primary.model) return { ...primary, source: "primary" };
+		if (primary.error) debugNotify(ctx, config, `[auto-rename] Primary model failed: ${primary.error}`, "warning");
 	}
 
-	if (config.debug && ctx.hasUI && primary.error) {
-		ctx.ui.notify(`[auto-rename] Primary model failed: ${primary.error}`, "warning");
-	}
-
+	// 2. Try explicitly configured fallback model
 	if (config.fallbackModel) {
 		const fallback = await resolveModel(config.fallbackModel, ctx);
-
 		if (fallback.model) {
-			if (config.debug && ctx.hasUI) {
-				ctx.ui.notify(`[auto-rename] Using fallback model: ${config.fallbackModel.provider}/${config.fallbackModel.id}`, "info");
-			}
+			debugNotify(ctx, config, `[auto-rename] Using fallback model: ${config.fallbackModel.provider}/${config.fallbackModel.id}`);
 			return { ...fallback, source: "fallback" };
 		}
+		if (fallback.error) debugNotify(ctx, config, `[auto-rename] Fallback model failed: ${fallback.error}`, "warning");
+	}
 
-		if (config.debug && ctx.hasUI && fallback.error) {
-			ctx.ui.notify(`[auto-rename] Fallback model failed: ${fallback.error}`, "warning");
+	// 3. Use the currently active session model (always has an API key)
+	const currentModel = ctx.model as Model<Api> | undefined;
+	if (currentModel) {
+		const apiKey = await ctx.modelRegistry.getApiKey(currentModel);
+		if (apiKey) {
+			debugNotify(ctx, config, `[auto-rename] Using current model: ${currentModel.provider}/${currentModel.id}`);
+			return { model: currentModel, apiKey, error: null, source: "primary" };
 		}
+	}
+
+	// 4. Last resort: pick the cheapest available model with an API key
+	const cheapest = await findCheapestAvailableModel(ctx);
+	if (cheapest) {
+		debugNotify(ctx, config, `[auto-rename] Auto-selected cheapest model: ${cheapest.model.provider}/${cheapest.model.id}`);
+		return { model: cheapest.model, apiKey: cheapest.apiKey, error: null, source: "primary" };
 	}
 
 	return {
 		model: null,
 		apiKey: null,
-		error: primary.error || "No model available",
+		error: "No model available. Configure an API key or set model in auto-rename.json",
 		source: null,
 	};
 }
@@ -548,10 +590,11 @@ function handleLlmError(errorMsg: string, config: ResolvedConfig, ctx: Extension
 
 	if (!ctx.hasUI) return;
 
+	const providerName = config.model?.provider ?? "unknown";
 	if (errorMsg.includes("401") || errorMsg.includes("403") || errorMsg.includes("authentication")) {
-		ctx.ui.notify(`[auto-rename] Authentication failed for ${config.model.provider}. Check your API key.`, "error");
+		ctx.ui.notify(`[auto-rename] Authentication failed for ${providerName}. Check your API key.`, "error");
 	} else if (errorMsg.includes("429") || errorMsg.includes("rate limit")) {
-		ctx.ui.notify(`[auto-rename] Rate limited by ${config.model.provider}. Using fallback.`, "warning");
+		ctx.ui.notify(`[auto-rename] Rate limited by ${providerName}. Using fallback.`, "warning");
 	} else if (errorMsg.includes("timeout") || errorMsg.includes("ETIMEDOUT")) {
 		ctx.ui.notify("[auto-rename] Request timed out. Using fallback.", "warning");
 	}
@@ -664,12 +707,6 @@ function formatFullName(prefix: string, name: string, suffix: string | null): st
 	return suffix ? `${baseName} [${suffix}]` : baseName;
 }
 
-function debugNotify(ctx: ExtensionContext, debug: boolean, message: string, level: "info" | "warning" | "error"): void {
-	if (debug && ctx.hasUI) {
-		ctx.ui.notify(message, level);
-	}
-}
-
 function resolveReadableIdOverride(config: ResolvedConfig): string | null {
 	const envKey = config.readableIdEnv?.trim();
 	if (!envKey) return null;
@@ -692,7 +729,7 @@ function resolveReadableIdSuffix(
 		return override === name ? null : override;
 	}
 	if (!sessionId || !wordlist) {
-		debugNotify(ctx, config.debug, "[auto-rename] readableIdSuffix enabled but wordlist or sessionId missing", "warning");
+		debugNotify(ctx, config, "[auto-rename] readableIdSuffix enabled but wordlist or sessionId missing", "warning");
 		return null;
 	}
 	const readableId = readableIdFromSessionId(sessionId, wordlist);
@@ -746,7 +783,7 @@ async function handleRegen(
 
 function handleConfig(ctx: ExtensionCommandContext, config: ResolvedConfig): void {
 	const parts = [
-		`model=${config.model.provider}/${config.model.id}`,
+		config.model ? `model=${config.model.provider}/${config.model.id}` : "model=auto (current session model, then cheapest)",
 		config.fallbackModel ? `fallback=${config.fallbackModel.provider}/${config.fallbackModel.id}` : null,
 		`deterministic=${config.fallbackDeterministic}`,
 		config.wordlistPath ? `wordlistPath=${config.wordlistPath}` : null,
@@ -784,9 +821,7 @@ async function handleTest(ctx: ExtensionCommandContext, config: ResolvedConfig):
 	const resolution = await resolveModelWithFallback(config, ctx);
 
 	if (resolution.model) {
-		const provider = resolution.source === "primary" ? config.model.provider : config.fallbackModel?.provider;
-		const modelId = resolution.source === "primary" ? config.model.id : config.fallbackModel?.id;
-		ctx.ui.notify(`Model OK: ${provider}/${modelId}`, "info");
+		ctx.ui.notify(`Model OK: ${resolution.model.provider}/${resolution.model.id}`, "info");
 	} else {
 		ctx.ui.notify(`Model error: ${resolution.error}`, "error");
 	}
@@ -846,12 +881,12 @@ export default function (pi: ExtensionAPI) {
 		const prefix = resolvePrefix(config, ctx.cwd, ctx);
 		if (config.prefixOnly) {
 			if (!prefix) {
-				debugNotify(ctx, config.debug, "[auto-rename] prefixOnly set but no prefix available", "warning");
+				debugNotify(ctx, config, "[auto-rename] prefixOnly set but no prefix available", "warning");
 				return;
 			}
 			setNameAndNotify(prefix, ctx);
 			sessionRenamed = true;
-			debugNotify(ctx, config.debug, `[auto-rename] Named (prefix only): ${prefix}`, "info");
+			debugNotify(ctx, config, `[auto-rename] Named (prefix only): ${prefix}`, "info");
 			return;
 		}
 
@@ -860,7 +895,7 @@ export default function (pi: ExtensionAPI) {
 		const result = await generateSessionName(query, config, ctx, sessionId, wordlist);
 
 		if (!result.name) {
-			debugNotify(ctx, config.debug, `[auto-rename] Failed to generate name: ${result.error || "unknown error"}`, "warning");
+			debugNotify(ctx, config, `[auto-rename] Failed to generate name: ${result.error || "unknown error"}`, "warning");
 			return;
 		}
 
@@ -868,7 +903,7 @@ export default function (pi: ExtensionAPI) {
 		const fullName = formatFullName(prefix, result.name, suffix);
 		setNameAndNotify(fullName, ctx);
 		sessionRenamed = true;
-		debugNotify(ctx, config.debug, `[auto-rename] Named (${result.source}): ${fullName}`, "info");
+		debugNotify(ctx, config, `[auto-rename] Named (${result.source}): ${fullName}`, "info");
 	};
 
 	pi.on("before_agent_start", async (event, ctx) => {
@@ -893,7 +928,7 @@ export default function (pi: ExtensionAPI) {
 
 		const query = extractFirstUserQuery(ctx);
 		if (!query) {
-			debugNotify(ctx, config.debug, "[auto-rename] No user query found", "warning");
+			debugNotify(ctx, config, "[auto-rename] No user query found", "warning");
 			return;
 		}
 		void renameFromQuery(query, ctx);
