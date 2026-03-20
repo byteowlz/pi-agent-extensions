@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 type GuardConfig = {
@@ -12,10 +13,7 @@ type GuardConfig = {
 	notify: boolean;
 };
 
-type ToolContentBlock =
-	| { type: "text"; text: string }
-	| { type: "image"; data: string; mimeType?: string }
-	| { type: string; [key: string]: unknown };
+type ToolContentBlock = TextContent | ImageContent;
 
 type ResizeImageInput = {
 	type: "image";
@@ -35,10 +33,7 @@ type ResizeImageResult = {
 	mimeType: string;
 };
 
-type ResizeImageFn = (
-	img: ResizeImageInput,
-	options?: ResizeImageOptions,
-) => Promise<ResizeImageResult>;
+type ResizeImageFn = (img: ResizeImageInput, options?: ResizeImageOptions) => Promise<ResizeImageResult>;
 
 const CONFIG_FILENAME = "read-image-guard.json";
 const DEFAULT_CONFIG: GuardConfig = {
@@ -73,9 +68,7 @@ function loadConfig(ctx: ExtensionContext): GuardConfig {
 	return DEFAULT_CONFIG;
 }
 
-function isImageBlock(
-	block: ToolContentBlock,
-): block is { type: "image"; data: string; mimeType?: string } {
+function isImageBlock(block: ToolContentBlock): block is ImageContent {
 	return block.type === "image" && typeof (block as { data?: unknown }).data === "string";
 }
 
@@ -94,9 +87,8 @@ async function getResizeImage(): Promise<ResizeImageFn | null> {
 
 	resizeLoader = (async () => {
 		try {
-			const mod = (await import(
-				"@mariozechner/pi-coding-agent/dist/utils/image-resize.js"
-			)) as { resizeImage?: ResizeImageFn };
+			// @ts-ignore - deep import path not in package exports, but exists at runtime
+			const mod = (await import("@mariozechner/pi-coding-agent/dist/utils/image-resize.js")) as { resizeImage?: ResizeImageFn };
 			return typeof mod.resizeImage === "function" ? mod.resizeImage : null;
 		} catch {
 			return null;
@@ -107,8 +99,8 @@ async function getResizeImage(): Promise<ResizeImageFn | null> {
 }
 
 async function downscaleImageBlock(
-	block: { type: "image"; data: string; mimeType?: string },
-	config: GuardConfig,
+	block: ImageContent,
+	config: GuardConfig
 ): Promise<{ updated: ToolContentBlock; changed: boolean }> {
 	const resizeImage = await getResizeImage();
 	if (!resizeImage) {
@@ -123,10 +115,7 @@ async function downscaleImageBlock(
 		};
 	}
 
-	const mimeType =
-		typeof block.mimeType === "string" && block.mimeType.trim().length > 0
-			? block.mimeType
-			: "image/png";
+	const mimeType = block.mimeType.trim().length > 0 ? block.mimeType : "image/png";
 
 	try {
 		const resized = await resizeImage(
@@ -140,7 +129,7 @@ async function downscaleImageBlock(
 				maxHeight: config.maxHeight,
 				maxBytes: base64ToBinaryMaxBytes(config.maxImageBase64Bytes),
 				jpegQuality: config.jpegQuality,
-			},
+			}
 		);
 
 		if (resized.data.length <= config.maxImageBase64Bytes) {
@@ -160,12 +149,54 @@ async function downscaleImageBlock(
 	return {
 		updated: {
 			type: "text",
-			text:
-				`[read-image-guard] Omitted oversized inline image (${formatBytes(block.data.length)} base64). ` +
-				"Please crop/downscale the image and read it again.",
+			text: `[read-image-guard] Omitted oversized inline image (${formatBytes(block.data.length)} base64). Please crop/downscale the image and read it again.`,
 		},
 		changed: true,
 	};
+}
+
+interface RewriteResult {
+	rewritten: ToolContentBlock[];
+	changed: boolean;
+	resizedCount: number;
+	omittedCount: number;
+}
+
+async function rewriteImageBlocks(content: ToolContentBlock[], config: GuardConfig): Promise<RewriteResult> {
+	const rewritten: ToolContentBlock[] = [];
+	let changed = false;
+	let resizedCount = 0;
+	let omittedCount = 0;
+
+	for (const block of content) {
+		if (!isImageBlock(block) || block.data.length <= config.maxImageBase64Bytes) {
+			rewritten.push(block);
+			continue;
+		}
+
+		const result = await downscaleImageBlock(block, config);
+		if (result.changed) {
+			changed = true;
+			if (isImageBlock(result.updated)) {
+				resizedCount += 1;
+			} else {
+				omittedCount += 1;
+			}
+		}
+		rewritten.push(result.updated);
+	}
+
+	return { rewritten, changed, resizedCount, omittedCount };
+}
+
+function notifyImageChanges(ctx: ExtensionContext, resizedCount: number, omittedCount: number): void {
+	const parts: string[] = [];
+	if (resizedCount > 0) parts.push(`resized ${resizedCount}`);
+	if (omittedCount > 0) parts.push(`omitted ${omittedCount}`);
+	ctx.ui.notify(
+		`read-image-guard: ${parts.join(", ")} oversized image payload(s) from read tool to avoid request overflow.`,
+		"warning"
+	);
 }
 
 export default function (pi: ExtensionAPI): void {
@@ -176,45 +207,15 @@ export default function (pi: ExtensionAPI): void {
 		if (!config.enabled) return;
 		if (!Array.isArray(event.content)) return;
 
-		let changed = false;
-		let resizedCount = 0;
-		let omittedCount = 0;
-		const rewritten: ToolContentBlock[] = [];
-
-		for (const block of event.content as ToolContentBlock[]) {
-			if (!isImageBlock(block)) {
-				rewritten.push(block);
-				continue;
-			}
-
-			const size = block.data.length;
-			if (size <= config.maxImageBase64Bytes) {
-				rewritten.push(block);
-				continue;
-			}
-
-			const result = await downscaleImageBlock(block, config);
-			if (result.changed) {
-				changed = true;
-				if (isImageBlock(result.updated)) {
-					resizedCount += 1;
-				} else {
-					omittedCount += 1;
-				}
-			}
-			rewritten.push(result.updated);
-		}
+		const { rewritten, changed, resizedCount, omittedCount } = await rewriteImageBlocks(
+			event.content as ToolContentBlock[],
+			config
+		);
 
 		if (!changed) return;
 
 		if (config.notify && ctx.hasUI) {
-			const parts: string[] = [];
-			if (resizedCount > 0) parts.push(`resized ${resizedCount}`);
-			if (omittedCount > 0) parts.push(`omitted ${omittedCount}`);
-			ctx.ui.notify(
-				`read-image-guard: ${parts.join(", ")} oversized image payload(s) from read tool to avoid request overflow.`,
-				"warning",
-			);
+			notifyImageChanges(ctx, resizedCount, omittedCount);
 		}
 
 		return { content: rewritten };

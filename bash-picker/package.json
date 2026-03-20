@@ -1,5 +1,5 @@
 {
-	"name": "pi-bash-picker",
+	"name": "@byteowlz/pi-bash-picker",
 	"version": "1.0.0",
 	"type": "module",
 	"description": "Pick bash snippets from recent assistant messages and copy to clipboard",
