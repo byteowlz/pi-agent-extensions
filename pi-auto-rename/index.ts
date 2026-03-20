@@ -595,17 +595,28 @@ async function resolveModelWithFallback(config: ResolvedConfig, ctx: ExtensionCo
 // LLM Name Generation
 // ============================================================================
 
+function stripThinkTags(text: string): string {
+	return text
+		.replace(/<think>[\s\S]*?<\/think>/gi, "")
+		.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+		.trim();
+}
+
 function parseNameFromResponse(
-	response: { content: Array<{ type: string; text?: string }> },
+	response: { content: Array<{ type: string; text?: string; thinking?: string }> },
 	maxNameLength: number
 ): string | null {
 	let name = response.content
-		.filter((c): c is { type: "text"; text: string } => c.type === "text")
+		.filter((c): c is { type: "text"; text: string } => c.type === "text" && typeof c.text === "string")
 		.map((c) => c.text)
 		.join("")
-		.trim()
-		.replace(/^["']|["']$/g, "")
-		.replace(/\.+$/, "");
+		.trim();
+
+	// Strip think tags that some models embed in the text stream
+	name = stripThinkTags(name);
+
+	// Clean up quotes and trailing punctuation
+	name = name.replace(/^["']|["']$/g, "").replace(/\.+$/, "");
 
 	if (!name) return null;
 
