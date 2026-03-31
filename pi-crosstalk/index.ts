@@ -165,19 +165,19 @@ async function selectSummarizationModel(
 	currentModel: Model<Api> | undefined,
 	modelRegistry: {
 		find: (provider: string, modelId: string) => Model<Api> | undefined;
-		getApiKey: (model: Model<Api>) => Promise<string | undefined>;
+		getApiKeyAndHeaders: (model: Model<Api>) => Promise<{ ok: true; apiKey?: string; headers?: Record<string, string> } | { ok: false; error: string }>;
 	}
 ): Promise<Model<Api> | undefined> {
 	const codexModel = modelRegistry.find("openai-codex", CODEX_MODEL_ID);
 	if (codexModel) {
-		const apiKey = await modelRegistry.getApiKey(codexModel);
-		if (apiKey) return codexModel;
+		const auth = await modelRegistry.getApiKeyAndHeaders(codexModel);
+		if (auth.ok && auth.apiKey) return codexModel;
 	}
 
 	const haikuModel = modelRegistry.find("anthropic", HAIKU_MODEL_ID);
 	if (haikuModel) {
-		const apiKey = await modelRegistry.getApiKey(haikuModel);
-		if (apiKey) return haikuModel;
+		const auth = await modelRegistry.getApiKeyAndHeaders(haikuModel);
+		if (auth.ok && auth.apiKey) return haikuModel;
 	}
 
 	return currentModel;
@@ -894,9 +894,9 @@ async function handleCommand(pi: ExtensionAPI, state: SocketState, command: RpcC
 			return;
 		}
 
-		const apiKey = await ctx.modelRegistry.getApiKey(model);
-		if (!apiKey) {
-			respond(false, "get_summary", undefined, "No API key available for summarization model");
+		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+		if (!auth.ok || !auth.apiKey) {
+			respond(false, "get_summary", undefined, auth.ok ? "No API key available for summarization model" : auth.error);
 			return;
 		}
 
@@ -909,7 +909,7 @@ async function handleCommand(pi: ExtensionAPI, state: SocketState, command: RpcC
 				timestamp: Date.now(),
 			};
 
-			const response = await complete(model, { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: [userMessage] }, { apiKey });
+			const response = await complete(model, { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: [userMessage] }, { apiKey: auth.apiKey });
 
 			if (response.stopReason === "aborted" || response.stopReason === "error") {
 				respond(false, "get_summary", undefined, "Summarization failed");

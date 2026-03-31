@@ -500,8 +500,8 @@ async function findCheapestAvailableModel(ctx: ExtensionContext): Promise<{ mode
 	});
 
 	for (const model of sorted) {
-		const apiKey = await ctx.modelRegistry.getApiKey(model);
-		if (apiKey) return { model, apiKey };
+		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+		if (auth.ok && auth.apiKey) return { model, apiKey: auth.apiKey };
 	}
 	return null;
 }
@@ -523,8 +523,15 @@ async function resolveModel(
 		};
 	}
 
-	const apiKey = await ctx.modelRegistry.getApiKey(model);
-	return { model, apiKey: apiKey ?? null, error: null };
+	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+	if (!auth.ok) {
+		return {
+			model: null,
+			apiKey: null,
+			error: `Failed to get API key: ${auth.error}`,
+		};
+	}
+	return { model, apiKey: auth.apiKey ?? null, error: null };
 }
 
 function debugNotify(
@@ -541,9 +548,9 @@ function debugNotify(
 async function resolveCurrentModel(ctx: ExtensionContext): Promise<{ model: Model<Api>; apiKey: string } | null> {
 	const currentModel = ctx.model as Model<Api> | undefined;
 	if (!currentModel) return null;
-	const apiKey = await ctx.modelRegistry.getApiKey(currentModel);
-	if (!apiKey) return null;
-	return { model: currentModel, apiKey };
+	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(currentModel);
+	if (!auth.ok || !auth.apiKey) return null;
+	return { model: currentModel, apiKey: auth.apiKey };
 }
 
 async function resolveModelWithFallback(config: ResolvedConfig, ctx: ExtensionContext): Promise<ModelResolutionResult> {
