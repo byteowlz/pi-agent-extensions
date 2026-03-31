@@ -57,13 +57,13 @@ async function resolveModelWithKey(
 		return null;
 	}
 
-	const apiKey = await ctx.modelRegistry.getApiKey(model);
-	if (!apiKey) {
+	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+	if (!auth.ok || !auth.apiKey) {
 		ui.notify(`OM: no API key for ${label} model (${model.provider}), falling back to default compaction`, "warning");
 		return null;
 	}
 
-	return { model, apiKey };
+	return { model, apiKey: auth.apiKey };
 }
 
 /** Build a notifier that respects ctx.hasUI. */
