@@ -612,8 +612,12 @@ async function resolveModelWithFallback(config: ResolvedConfig, ctx: ExtensionCo
 
 function stripThinkTags(text: string): string {
 	return text
+		// Strip closed think/thinking blocks
 		.replace(/<think>[\s\S]*?<\/think>/gi, "")
 		.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+		// Strip unclosed think/thinking tags (model didn't close them)
+		.replace(/<think>[\s\S]*/gi, "")
+		.replace(/<thinking>[\s\S]*/gi, "")
 		.trim();
 }
 
