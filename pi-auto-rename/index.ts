@@ -665,6 +665,31 @@ function parseNameFromResponse(
 
 	if (!name) return null;
 
+	// Reasoning models often dump chain-of-thought as plain text before the
+	// actual title. Heuristic: if the response has multiple lines, take the
+	// last non-empty line that looks like a title (no bullets, numbers, or
+	// markdown headers). This handles models that reason in plain text
+	// without <think> tags.
+	const lines = name.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+	if (lines.length > 1) {
+		// Walk backwards to find a clean title line
+		for (let i = lines.length - 1; i >= 0; i--) {
+			const line = lines[i]
+				.replace(/^["'`]+|["'`]+$/g, "")  // strip quotes
+				.replace(/^\*\*|\*\*$/g, "")      // strip bold markers
+				.replace(/\.+$/, "")              // strip trailing dots
+				.trim();
+			// Skip lines that look like reasoning (numbered steps, bullets, markdown)
+			if (/^(\d+[.):]|[-*#>]|\*\*\d)/.test(line)) continue;
+			// Skip very long lines (likely reasoning paragraphs)
+			if (line.length > maxNameLength * 2) continue;
+			// Skip empty after cleanup
+			if (!line) continue;
+			name = line;
+			break;
+		}
+	}
+
 	// Strip any leading/trailing whitespace that quote removal may have exposed
 	name = name.trim();
 
