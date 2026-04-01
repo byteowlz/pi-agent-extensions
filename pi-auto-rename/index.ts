@@ -651,51 +651,59 @@ function extractTextFromContent(content: Array<{ type: string; text?: string; th
 	return lines.length > 0 ? lines[lines.length - 1] : "";
 }
 
+function normalizeCandidateLine(line: string): string {
+	return line
+		.replace(/<[^>]+>/g, " ")
+		.replace(/^[\s\-*>#]+/, "")
+		.replace(/^\d+[.)]\s*/, "")
+		.replace(/\*\*/g, "")
+		.replace(/`/g, "")
+		.replace(/^["']+|["']+$/g, "")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+function looksLikeReasoning(line: string): boolean {
+	if (!line) return true;
+	if (line.includes("|")) return true;
+	if (/^(step|analysis|reasoning|thinking|selecting|here'?s|let'?s)\b/i.test(line)) return true;
+	if (/\b(best title|final title|option \d|candidate \d)\b/i.test(line)) return true;
+	if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(line)) return true;
+	if (/[{}<>]/.test(line)) return true;
+	const words = line.split(/\s+/).filter(Boolean);
+	if (words.length < 2 || words.length > 10) return true;
+	return false;
+}
+
 function parseNameFromResponse(
 	response: { content: Array<{ type: string; text?: string; thinking?: string }> },
 	maxNameLength: number
 ): string | null {
-	let name = extractTextFromContent(response.content);
+	const raw = stripThinkTags(extractTextFromContent(response.content));
+	if (!raw) return null;
 
-	// Strip think tags that some models embed in the text stream
-	name = stripThinkTags(name);
+	const lines = raw
+		.split("\n")
+		.map(normalizeCandidateLine)
+		.filter((l) => l.length > 0);
 
-	// Clean up quotes and trailing punctuation
-	name = name.replace(/^["']|["']$/g, "").replace(/\.+$/, "");
-
-	if (!name) return null;
-
-	// Reasoning models often dump chain-of-thought as plain text before the
-	// actual title. Heuristic: if the response has multiple lines, take the
-	// last non-empty line that looks like a title (no bullets, numbers, or
-	// markdown headers). This handles models that reason in plain text
-	// without <think> tags.
-	const lines = name.split("\n").map(l => l.trim()).filter(l => l.length > 0);
-	if (lines.length > 1) {
-		// Walk backwards to find a clean title line
-		for (let i = lines.length - 1; i >= 0; i--) {
-			const line = lines[i]
-				.replace(/^["'`]+|["'`]+$/g, "")  // strip quotes
-				.replace(/^\*\*|\*\*$/g, "")      // strip bold markers
-				.replace(/\.+$/, "")              // strip trailing dots
-				.trim();
-			// Skip lines that look like reasoning (numbered steps, bullets, markdown)
-			if (/^(\d+[.):]|[-*#>]|\*\*\d)/.test(line)) continue;
-			// Skip very long lines (likely reasoning paragraphs)
-			if (line.length > maxNameLength * 2) continue;
-			// Skip empty after cleanup
-			if (!line) continue;
-			name = line;
+	// Prefer last clean short line (models often reason first, answer last)
+	let name = "";
+	for (let i = lines.length - 1; i >= 0; i--) {
+		if (!looksLikeReasoning(lines[i])) {
+			name = lines[i];
 			break;
 		}
 	}
+	if (!name && lines.length > 0) {
+		// As a last resort, use the shortest line
+		name = [...lines].sort((a, b) => a.length - b.length)[0];
+	}
 
-	// Strip any leading/trailing whitespace that quote removal may have exposed
-	name = name.trim();
+	name = name.replace(/\.+$/, "").trim();
+	if (!name || looksLikeReasoning(name)) return null;
 
-	// Enforce maximum name length
 	name = enforceNameLength(name, maxNameLength);
-
 	return name || null;
 }
 
