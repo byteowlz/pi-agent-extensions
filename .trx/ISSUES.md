@@ -2,10 +2,28 @@
 
 ## Open
 
+### [piext-e8tf] privileged command extension: preserve caller PATH and improve TTY/auth diagnostics (P1, bug)
+Observed behavior
+- Running privileged workflows via the extension can fail with misleading downstream errors because PATH differs from the normal shell.
+- Example from oqto_refactor deploy flow: privileged execution failed with `remote-build: command not found` until PATH was manually injected.
+- Related friction: when command requires interactive auth/TTY semantics, failure messages are not explicit enough for quick remediation.
+
+...
+
+
 ### [piext-pe71] oqto-bridge: remove unsupported model_change hook (P1, bug)
 oqto-bridge extension registered pi.on("model_change"), but current Pi extension API doesn't define this hook. This can break typing and risks runtime incompatibility.\n\nFix: remove unsupported hook and rely on session_start + turn_end exportSessionEnv updates for AGENT_MODEL.
 
 ### [piext-3yd5] memory.json configuration file - define LLM models (observer/reflector), token thresholds, observation format, store path. Global (~/.pi/agent/memory.json) and project-local (.pi/memory.json) (P1, feature)
+
+### [piext-fcdt] Define Pi-TUI parity contract for retry/error events and provide reusable test fixtures (P2, feature)
+Problem
+- Downstream UIs (e.g. Oqto) are seeing regressions where retry/terminal errors are duplicated, rendered as normal assistant text, or disappear/reappear after reload.
+- Root cause is ambiguity between transient retry errors vs terminal durable errors across streamed events.
+
+Goal
+...
+
 
 ### [piext-ggnc] Post-session hook to export transcript to hstry/mmry for learning extraction - fires on session_shutdown (P2, feature)
 

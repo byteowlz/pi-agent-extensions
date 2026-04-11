@@ -79,72 +79,169 @@ function exportSessionEnv(ctx: ExtensionContext): void {
 // Extension entry point
 // ============================================================================
 
-export default function oqtoBridge(pi: ExtensionAPI) {
-	// Track whether we are inside an agent run so we only emit phase
-	// updates when the agent is actually working. This avoids confusing
-	// the runner with stale status events between runs.
-	let agentRunning = false;
+type QueueIntent = "default" | "steer" | "followUp";
 
-	// --- Agent lifecycle ---
+type QueueEntry = {
+	bridgeSeq: number;
+	clientId: string;
+	intent: QueueIntent;
+	enqueuedAt: number;
+	promptPreview: string;
+};
+
+type InputMeta = {
+	clientId: string;
+	intent: QueueIntent;
+};
+
+const QUEUE_EVENT_KEY = "oqto_queue_event";
+const META_TAG_REGEX = /\s*\[\[oqto_meta:(\{[\s\S]*\})\]\]\s*$/;
+
+function detectRpcMode(): boolean {
+	const argv = process.argv.join(" ");
+	return argv.includes("--mode rpc") || argv.includes("--mode=rpc");
+}
+
+function parseInputMeta(text: string): {
+	cleanText: string;
+	meta?: InputMeta;
+} {
+	const match = text.match(META_TAG_REGEX);
+	if (!match) {
+		return { cleanText: text };
+	}
+
+	try {
+		const raw = JSON.parse(match[1] ?? "{}") as Partial<InputMeta>;
+		const clientId = typeof raw.clientId === "string" ? raw.clientId.trim() : "";
+		const intent = raw.intent === "steer" || raw.intent === "followUp" ? raw.intent : "default";
+		if (!clientId) {
+			return { cleanText: text.replace(META_TAG_REGEX, "") };
+		}
+		return {
+			cleanText: text.replace(META_TAG_REGEX, ""),
+			meta: { clientId, intent },
+		};
+	} catch {
+		return { cleanText: text.replace(META_TAG_REGEX, "") };
+	}
+}
+
+function emitQueueEvent(ctx: ExtensionContext, eventType: string, payload: Record<string, unknown>): void {
+	ctx.ui.setStatus(
+		QUEUE_EVENT_KEY,
+		JSON.stringify({
+			type: eventType,
+			ts: Date.now(),
+			sessionId: ctx.sessionManager.getSessionId?.() ?? "",
+			...payload,
+		})
+	);
+}
+
+export default function oqtoBridge(pi: ExtensionAPI) {
+	const rpcMode = detectRpcMode();
+	let agentRunning = false;
+	let queueSeq = 0;
+	const pendingQueue: QueueEntry[] = [];
+
+	pi.on("input", (event, ctx) => {
+		if (!rpcMode || event.source !== "rpc") {
+			return { action: "continue" as const };
+		}
+
+		const { cleanText, meta } = parseInputMeta(event.text);
+		if (!meta) {
+			emitQueueEvent(ctx, "rpc_input_untracked", {
+				reason: "missing_or_invalid_meta",
+				queueDepth: pendingQueue.length,
+			});
+			if (cleanText !== event.text) {
+				return { action: "transform" as const, text: cleanText };
+			}
+			return { action: "continue" as const };
+		}
+
+		const entry: QueueEntry = {
+			bridgeSeq: ++queueSeq,
+			clientId: meta.clientId,
+			intent: meta.intent,
+			enqueuedAt: Date.now(),
+			promptPreview: cleanText.slice(0, 120),
+		};
+		pendingQueue.push(entry);
+
+		emitQueueEvent(ctx, "enqueued", {
+			bridgeSeq: entry.bridgeSeq,
+			clientId: entry.clientId,
+			intent: entry.intent,
+			queueDepth: pendingQueue.length,
+		});
+
+		return { action: "transform" as const, text: cleanText };
+	});
 
 	pi.on("agent_start", (_event, ctx) => {
 		agentRunning = true;
 		setPhase(ctx, "generating");
 	});
 
-	pi.on("agent_end", (_event, ctx) => {
+	pi.on("agent_end", (event, ctx) => {
 		agentRunning = false;
 		clearPhase(ctx);
-	});
 
-	// --- Tool execution ---
-	//
-	// tool_call fires when the LLM decides to call a tool (before execution).
-	// tool_result fires after execution completes.
-	//
-	// We emit "tool_running:<name>" on tool_call and go back to "generating"
-	// on tool_result (the agent loop will either call another tool or start
-	// a new LLM turn).
+		if (!rpcMode) return;
+
+		const userMessageCount = event.messages.filter((msg) => msg.role.toLowerCase() === "user").length;
+
+		for (let i = 0; i < userMessageCount; i++) {
+			const next = pendingQueue.shift();
+			if (!next) {
+				emitQueueEvent(ctx, "invariant_violation", {
+					reason: "more_user_messages_than_pending_entries",
+					dequeuedIndex: i,
+					queueDepth: pendingQueue.length,
+				});
+				break;
+			}
+
+			emitQueueEvent(ctx, "dequeued", {
+				bridgeSeq: next.bridgeSeq,
+				clientId: next.clientId,
+				intent: next.intent,
+				queueDepth: pendingQueue.length,
+			});
+
+			emitQueueEvent(ctx, "turn_bound", {
+				bridgeSeq: next.bridgeSeq,
+				clientId: next.clientId,
+				intent: next.intent,
+				boundUserOrdinal: i,
+				queueDepth: pendingQueue.length,
+			});
+		}
+	});
 
 	pi.on("tool_call", (event, ctx) => {
 		if (!agentRunning) return;
 		setPhase(ctx, "tool_running", event.toolName);
-		// Return undefined: don't block the tool
 	});
 
 	pi.on("tool_result", (_event, ctx) => {
 		if (!agentRunning) return;
-		// Tool done. The agent loop will continue with the next turn.
-		// Set back to generating so the runner knows we're waiting for LLM.
 		setPhase(ctx, "generating");
 	});
-
-	// --- Turn tracking ---
-	//
-	// turn_start fires at the beginning of each LLM turn (there can be
-	// multiple turns per agent run when tools are involved).
-	// We reset to "generating" at the start of each turn.
 
 	pi.on("turn_start", (_event, ctx) => {
 		if (!agentRunning) return;
 		setPhase(ctx, "generating");
 	});
 
-	// --- Compaction ---
-	//
-	// session_before_compact fires before compaction starts.
-	// session_compact fires after compaction completes.
-	// The runner also sees auto_compaction_start/end from pi's native events,
-	// but the extension provides earlier notification via before_compact.
-
 	pi.on("session_before_compact", (_event, ctx) => {
 		setPhase(ctx, "compacting");
-		// Return undefined: don't cancel compaction
 	});
 
 	pi.on("session_compact", (_event, ctx) => {
-		// Compaction done. If agent is still running, go back to generating.
-		// If not, clear phase entirely.
 		if (agentRunning) {
 			setPhase(ctx, "generating");
 		} else {
@@ -152,29 +249,22 @@ export default function oqtoBridge(pi: ExtensionAPI) {
 		}
 	});
 
-	// --- Session lifecycle ---
-	//
-	// Reset state when switching sessions to avoid stale phase data.
-
 	pi.on("session_switch", (_event, ctx) => {
 		agentRunning = false;
 		clearPhase(ctx);
+		pendingQueue.length = 0;
+		emitQueueEvent(ctx, "queue_reset", { reason: "session_switch", queueDepth: 0 });
 	});
 
 	pi.on("session_start", (_event, ctx) => {
 		agentRunning = false;
 		clearPhase(ctx);
+		pendingQueue.length = 0;
 		exportSessionEnv(ctx);
+		emitQueueEvent(ctx, "queue_reset", { reason: "session_start", queueDepth: 0 });
 	});
 
-	// Update env after each turn -- session name may have been set by
-	// auto-rename or /rename during the turn.
 	pi.on("turn_end", (_event, ctx) => {
 		exportSessionEnv(ctx);
 	});
-
-	// NOTE: Pi's extension API does not currently expose a dedicated
-	// model_change hook event. AGENT_MODEL is refreshed on session_start and
-	// turn_end (see exportSessionEnv), which is sufficient for child process
-	// context in runner workflows.
 }
