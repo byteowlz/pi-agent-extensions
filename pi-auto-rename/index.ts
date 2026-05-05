@@ -611,14 +611,16 @@ async function resolveModelWithFallback(config: ResolvedConfig, ctx: ExtensionCo
 // ============================================================================
 
 function stripThinkTags(text: string): string {
-	return text
-		// Strip closed think/thinking blocks
-		.replace(/<think>[\s\S]*?<\/think>/gi, "")
-		.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
-		// Strip unclosed think/thinking tags (model didn't close them)
-		.replace(/<think>[\s\S]*/gi, "")
-		.replace(/<thinking>[\s\S]*/gi, "")
-		.trim();
+	return (
+		text
+			// Strip closed think/thinking blocks
+			.replace(/<think>[\s\S]*?<\/think>/gi, "")
+			.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+			// Strip unclosed think/thinking tags (model didn't close them)
+			.replace(/<think>[\s\S]*/gi, "")
+			.replace(/<thinking>[\s\S]*/gi, "")
+			.trim()
+	);
 }
 
 function extractTextFromContent(content: Array<{ type: string; text?: string; thinking?: string }>): string {
@@ -992,7 +994,7 @@ export default function (pi: ExtensionAPI) {
 		checkExistingName();
 	});
 
-	pi.on("session_switch", async () => {
+	pi.on("session_tree", async () => {
 		sessionRenamed = false;
 		firstPromptHandled = false;
 		checkExistingName();

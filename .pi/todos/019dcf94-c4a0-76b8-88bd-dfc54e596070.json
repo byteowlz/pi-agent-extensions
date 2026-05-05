@@ -1,0 +1,17 @@
+{
+  "todos": [
+    {
+      "id": "bdf856a4",
+      "content": "Upgrade @rslint/tsgo to latest",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "f99f7f36",
+      "content": "Run typecheck to verify crash is resolved",
+      "status": "completed",
+      "priority": "high"
+    }
+  ],
+  "updated_at": "2026-04-27T15:51:12.761Z"
+}

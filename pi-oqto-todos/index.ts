@@ -23,7 +23,7 @@ import { join } from "node:path";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme, ThemeColor } from "@mariozechner/pi-coding-agent";
 import { Text, truncateToWidth } from "@mariozechner/pi-tui";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 // ============================================================================
 // Types
@@ -430,20 +430,6 @@ export default function octoTodosExtension(pi: ExtensionAPI) {
 			reconstructTodos(ctx);
 		} catch (e) {
 			console.error("[octo-todos] session_start handler error:", e);
-		}
-	});
-	pi.on("session_switch", async (_event, ctx) => {
-		try {
-			reconstructTodos(ctx);
-		} catch (e) {
-			console.error("[octo-todos] session_switch handler error:", e);
-		}
-	});
-	pi.on("session_fork", async (_event, ctx) => {
-		try {
-			reconstructTodos(ctx);
-		} catch (e) {
-			console.error("[octo-todos] session_fork handler error:", e);
 		}
 	});
 	pi.on("session_tree", async (_event, ctx) => {

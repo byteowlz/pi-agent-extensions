@@ -52,7 +52,7 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { getMarkdownTheme } from "@mariozechner/pi-coding-agent";
 import { Box, Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 const CONTROL_FLAG = "crosstalk";
 const CONTROL_DIR = path.join(os.homedir(), ".pi", "crosstalk");
@@ -165,7 +165,9 @@ async function selectSummarizationModel(
 	currentModel: Model<Api> | undefined,
 	modelRegistry: {
 		find: (provider: string, modelId: string) => Model<Api> | undefined;
-		getApiKeyAndHeaders: (model: Model<Api>) => Promise<{ ok: true; apiKey?: string; headers?: Record<string, string> } | { ok: false; error: string }>;
+		getApiKeyAndHeaders: (
+			model: Model<Api>
+		) => Promise<{ ok: true; apiKey?: string; headers?: Record<string, string> } | { ok: false; error: string }>;
 	}
 ): Promise<Model<Api> | undefined> {
 	const codexModel = modelRegistry.find("openai-codex", CODEX_MODEL_ID);
@@ -909,7 +911,11 @@ async function handleCommand(pi: ExtensionAPI, state: SocketState, command: RpcC
 				timestamp: Date.now(),
 			};
 
-			const response = await complete(model, { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: [userMessage] }, { apiKey: auth.apiKey });
+			const response = await complete(
+				model,
+				{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: [userMessage] },
+				{ apiKey: auth.apiKey }
+			);
 
 			if (response.stopReason === "aborted" || response.stopReason === "error") {
 				respond(false, "get_summary", undefined, "Summarization failed");
@@ -1305,7 +1311,7 @@ export default function (pi: ExtensionAPI) {
 		await refreshServer(ctx);
 	});
 
-	pi.on("session_switch", async (_event, ctx) => {
+	pi.on("session_tree", async (_event, ctx) => {
 		await refreshServer(ctx);
 	});
 

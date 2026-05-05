@@ -2,6 +2,8 @@
 
 ## Open
 
+### [piext-mf04] Migrate extensions from @sinclair/typebox to typebox (P1, task)
+
 ### [piext-e8tf] privileged command extension: preserve caller PATH and improve TTY/auth diagnostics (P1, bug)
 Observed behavior
 - Running privileged workflows via the extension can fail with misleading downstream errors because PATH differs from the normal shell.
@@ -35,5 +37,9 @@ Goal
 
 ## Closed
 
+- [piext-njfg] Add pi-env-ctx extension to export AGENT_CTX_* environment variables (closed 2026-04-27)
+- [piext-njfg.3] Document AGENT_CTX ownership and pi-env-ctx contract (closed 2026-04-27)
+- [piext-njfg.2] Add tests for pi-env-ctx env propagation and mutation behavior (closed 2026-04-27)
+- [piext-njfg.1] Implement pi-env-ctx extension core env injection and update hooks (closed 2026-04-27)
 - [piext-v5t2] TmuxDelegate: ctx.sessionManager.getSessionFile() returns null in normal pi session (closed 2026-02-10)
 - [piext-6fpa] Load MEMORY.md at session start via custom-context-files integration - ensure memory.json can specify additional memory files to load (closed 2026-02-10)

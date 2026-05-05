@@ -8,16 +8,17 @@
 		"check": "npm run lint && npm run typecheck",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
-		"typecheck": "tsgo --config tsconfig.json"
+		"typecheck": "tsgo --config tsconfig.json",
+		"test": "bun test"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.4",
-		"@mariozechner/pi-ai": "^0.64.0",
-		"@mariozechner/pi-coding-agent": "^0.64.0",
-		"@mariozechner/pi-tui": "^0.64.0",
-		"@rslint/tsgo": "^0.2.0",
-		"@sinclair/typebox": "^0.34.40",
+		"@mariozechner/pi-ai": "^0.69.0",
+		"@mariozechner/pi-coding-agent": "^0.69.0",
+		"@mariozechner/pi-tui": "^0.69.0",
+		"@rslint/tsgo": "^0.4.2",
 		"@types/node": "^22.0.0",
+		"typebox": "^1.1.24",
 		"typescript": "^5.7.0"
 	}
 }

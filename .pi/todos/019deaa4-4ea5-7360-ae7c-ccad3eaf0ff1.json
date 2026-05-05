@@ -1,0 +1,29 @@
+{
+  "todos": [
+    {
+      "id": "1",
+      "content": "Research pi/agent common errors and extension patterns",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "2",
+      "content": "Design error recovery plugin architecture",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "3",
+      "content": "Implement pi-error-recovery extension",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "4",
+      "content": "Add tests and validate",
+      "status": "completed",
+      "priority": "medium"
+    }
+  ],
+  "updated_at": "2026-05-02T21:52:35.287Z"
+}
