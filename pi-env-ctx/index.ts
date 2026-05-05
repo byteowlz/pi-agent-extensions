@@ -25,7 +25,7 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { exportAll, updateModel, updateSessionScope } from "./src/core.js";
+import { clearOwned, exportAll, updateModel, updateSessionScope } from "./src/core.js";
 
 export default function piEnvCtx(pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
@@ -42,5 +42,9 @@ export default function piEnvCtx(pi: ExtensionAPI) {
 
 	pi.on("turn_end", (_event, ctx) => {
 		updateSessionScope(ctx);
+	});
+
+	pi.on("session_shutdown", () => {
+		clearOwned();
 	});
 }
