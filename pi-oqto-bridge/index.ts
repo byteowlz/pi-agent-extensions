@@ -249,11 +249,11 @@ export default function oqtoBridge(pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("session_switch", (_event, ctx) => {
+	pi.on("session_tree", (_event, ctx) => {
 		agentRunning = false;
 		clearPhase(ctx);
 		pendingQueue.length = 0;
-		emitQueueEvent(ctx, "queue_reset", { reason: "session_switch", queueDepth: 0 });
+		emitQueueEvent(ctx, "queue_reset", { reason: "session_tree", queueDepth: 0 });
 	});
 
 	pi.on("session_start", (_event, ctx) => {

@@ -9,6 +9,7 @@ Custom extensions for the [pi coding agent](https://github.com/badlogic/pi-mono)
 | [auto-rename](./auto-rename/) | Automatically generate session names based on first user query |
 | [bash-picker](./bash-picker/) | Pick bash snippets from recent messages and copy to clipboard |
 | [crosstalk](./crosstalk/) | Inter-session control socket and messaging (adapted from Armin Ronacher) |
+| [pi-env-ctx](./pi-env-ctx/) | Exports Pi-native `AGENT_CTX_*` metadata (harness/session/model) to child processes |
 | [oqto-todos](./oqto-todos/) | Todo management tools for Oqto frontend integration (drop-in replacement for OpenCode todowrite/todoread) |
 | [read-image-guard](./read-image-guard/) | Replaces oversized `read` image payloads to prevent provider request-body overflows |
 | [sudo](./pi-sudo/) | First-class `sudo_exec` tool with masked password prompt and `pam_faillock` lockout guard |

@@ -271,7 +271,7 @@ export default function (pi: ExtensionAPI) {
 		resetState();
 	});
 
-	pi.on("session_switch", async () => {
+	pi.on("session_tree", async () => {
 		resetState();
 	});
 
