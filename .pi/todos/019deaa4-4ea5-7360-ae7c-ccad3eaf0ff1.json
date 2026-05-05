@@ -1,29 +1,23 @@
 {
   "todos": [
     {
-      "id": "1",
-      "content": "Research pi/agent common errors and extension patterns",
+      "id": "ea5d8342",
+      "content": "Add shutdown cleanup support to pi-env-ctx",
       "status": "completed",
       "priority": "high"
     },
     {
-      "id": "2",
-      "content": "Design error recovery plugin architecture",
+      "id": "177fd493",
+      "content": "Add tests for cleanup + event wiring",
       "status": "completed",
       "priority": "high"
     },
     {
-      "id": "3",
-      "content": "Implement pi-error-recovery extension",
-      "status": "completed",
-      "priority": "high"
-    },
-    {
-      "id": "4",
-      "content": "Add tests and validate",
+      "id": "90a57ff0",
+      "content": "Run test/check and report readiness",
       "status": "completed",
       "priority": "medium"
     }
   ],
-  "updated_at": "2026-05-02T21:52:35.287Z"
+  "updated_at": "2026-05-05T16:13:37.864Z"
 }

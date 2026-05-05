@@ -60,3 +60,15 @@ export function updateSessionScope(ctx: ExtensionContext, env: NodeJS.ProcessEnv
 	setOrUnset(VAR_SESSION_ID, readSessionId(ctx), env);
 	setOrUnset(VAR_SESSION_NAME, readSessionName(ctx), env);
 }
+
+/**
+ * Clear all vars owned by this extension.
+ * Useful on session/runtime shutdown to avoid leaking stale metadata.
+ */
+export function clearOwned(env: NodeJS.ProcessEnv = process.env): void {
+	delete env[VAR_VERSION];
+	delete env[VAR_HARNESS];
+	delete env[VAR_SESSION_ID];
+	delete env[VAR_MODEL];
+	delete env[VAR_SESSION_NAME];
+}

@@ -6,6 +6,7 @@ import {
 	VAR_SESSION_ID,
 	VAR_SESSION_NAME,
 	VAR_VERSION,
+	clearOwned,
 	exportAll,
 	formatModel,
 	updateModel,
@@ -99,6 +100,25 @@ describe("mutation behavior", () => {
 		updateSessionScope(makeCtx({ sessionId: "sess_b", sessionName: "b" }), env);
 		expect(env[VAR_SESSION_ID]).toBe("sess_b");
 		expect(env[VAR_SESSION_NAME]).toBe("b");
+	});
+
+	test("clearOwned removes all extension-owned vars", () => {
+		const env = {};
+		exportAll(
+			makeCtx({
+				sessionId: "sess_clear",
+				sessionName: "clear-me",
+				model: { provider: "openai", id: "gpt-4.1" },
+			}),
+			env
+		);
+
+		clearOwned(env);
+		expect(env[VAR_VERSION]).toBeUndefined();
+		expect(env[VAR_HARNESS]).toBeUndefined();
+		expect(env[VAR_SESSION_ID]).toBeUndefined();
+		expect(env[VAR_MODEL]).toBeUndefined();
+		expect(env[VAR_SESSION_NAME]).toBeUndefined();
 	});
 });
 
