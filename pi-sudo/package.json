@@ -1,27 +1,40 @@
 {
-	"name": "@byteowlz/pi-sudo",
-	"version": "1.0.0",
-	"description": "First-class sudo support for pi: masked password prompt, in-process credential cache, and a guard against pam_faillock lockouts.",
-	"type": "module",
-	"keywords": ["pi-package", "pi-extension", "pi-coding-agent", "sudo", "pam"],
-	"files": ["*.ts", "README.md", "CHANGELOG.md", "LICENSE"],
-	"pi": {
-		"extensions": ["./index.ts"]
-	},
-	"homepage": "https://github.com/byteowlz/pi-agent-extensions/tree/main/pi-sudo",
-	"bugs": {
-		"url": "https://github.com/byteowlz/pi-agent-extensions/issues"
-	},
-	"repository": {
-		"type": "git",
-		"url": "git+https://github.com/byteowlz/pi-agent-extensions.git",
-		"directory": "pi-sudo"
-	},
-	"devDependencies": {
-		"@earendil-works/pi-agent-core": "*",
-		"@earendil-works/pi-ai": "*",
-		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-tui": "*"
-	},
-	"license": "MIT"
+  "name": "@byteowlz/pi-sudo",
+  "version": "1.0.1",
+  "description": "First-class sudo support for pi: masked password prompt, in-process credential cache, and a guard against pam_faillock lockouts.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "sudo",
+    "pam"
+  ],
+  "files": [
+    "*.ts",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "homepage": "https://github.com/byteowlz/pi-agent-extensions/tree/main/pi-sudo",
+  "bugs": {
+    "url": "https://github.com/byteowlz/pi-agent-extensions/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/byteowlz/pi-agent-extensions.git",
+    "directory": "pi-sudo"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "license": "MIT"
 }
