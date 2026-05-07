@@ -24,7 +24,7 @@
  *   - Metadata only: do not use these vars as a security boundary.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { clearOwned, exportAll, updateModel, updateSessionScope } from "./src/core.js";
 
 export default function piEnvCtx(pi: ExtensionAPI) {

@@ -30,9 +30,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ThinkingLevel } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { ThinkingLevel } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 // ============================================================================
 // Local type helpers
@@ -160,20 +160,31 @@ function detectThinkingLevelError(errorMessage: string): { current: string; supp
 	const supportedMatch = errorMessage.match(/supported values are:([^\n]+)/i);
 	if (!supportedMatch) return null;
 
-	// Check that this is actually a reasoning/thinking related error
-	const isReasoningError = /reasoning|thinking|reasoning_effort|effort/i.test(errorMessage);
-	if (!isReasoningError) return null;
-
-	const current = unsupportedMatch[1] ?? "";
+	const current = (unsupportedMatch[1] ?? "").toLowerCase();
 	const supportedRaw = supportedMatch[1] ?? "";
 	const supported = supportedRaw
 		.split(/[,\s]+/)
-		.map((s) => s.trim().replace(/^['"`]+|['"`]+$/g, ""))
+		.map((s) =>
+			s
+				.trim()
+				.replace(/^['"`]+|['"`]+$/g, "")
+				.toLowerCase()
+		)
 		.filter((s) => s.length > 0 && s !== "and");
 
 	if (supported.length === 0) return null;
 
-	return { current, supported };
+	// Accept explicit reasoning/thinking errors
+	const isReasoningError = /reasoning|thinking|reasoning_effort|effort/i.test(errorMessage);
+	if (isReasoningError) return { current, supported };
+
+	// Also accept generic "unsupported value" errors when the value space clearly
+	// matches reasoning/thinking levels (e.g. none/low/medium/high/xhigh).
+	const known = new Set<string>(["none", "off", ...THINKING_LEVELS]);
+	const looksLikeThinkingLevels = known.has(current) || supported.some((s) => known.has(s));
+	if (looksLikeThinkingLevels) return { current, supported };
+
+	return null;
 }
 
 /**

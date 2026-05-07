@@ -28,7 +28,7 @@
  *   - oqto_phase=  -> clear phase, fall back to native event inference
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 // ============================================================================
 // Status helpers

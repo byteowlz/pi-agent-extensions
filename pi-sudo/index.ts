@@ -27,9 +27,9 @@
  */
 
 import { spawn } from "node:child_process";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
-import { Key, Text, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
+import { Key, Text, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 // ---------------------------------------------------------------------------
