@@ -17,10 +17,10 @@
  * Without activation, the extension is a complete no-op.
  */
 
-import type { Api, Model } from "@mariozechner/pi-ai";
-import { complete } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { convertToLlm, serializeConversation } from "@mariozechner/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { complete } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
 import { estimateTokens, getDefaultConfig, loadMemoryConfig } from "./config.js";
 import { buildObserverPrompt, extractTextFromResponse, getObserverCompletionOptions } from "./observer.js";
 import { runReflector } from "./reflector.js";

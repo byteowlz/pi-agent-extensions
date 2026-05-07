@@ -248,7 +248,7 @@ Research page with benchmarks: https://mastra.ai/research/observational-memory
 | `ctx.ui.notify()` / `ctx.ui.setStatus()` | User feedback |
 | `convertToLlm()` | Convert AgentMessage[] to LLM Message[] |
 | `serializeConversation()` | Serialize messages to readable text |
-| `complete()` from `@mariozechner/pi-ai` | Call observer/reflector LLMs |
+| `complete()` from `@earendil-works/pi-ai` | Call observer/reflector LLMs |
 
 See `examples/extensions/custom-compaction.ts` in pi for a complete working example of custom compaction that this builds on.
 

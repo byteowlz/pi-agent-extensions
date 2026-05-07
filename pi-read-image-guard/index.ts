@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 type GuardConfig = {
 	enabled: boolean;
@@ -88,7 +88,7 @@ async function getResizeImage(): Promise<ResizeImageFn | null> {
 	resizeLoader = (async () => {
 		try {
 			// @ts-ignore - deep import path not in package exports, but exists at runtime
-			const mod = (await import("@mariozechner/pi-coding-agent/dist/utils/image-resize.js")) as { resizeImage?: ResizeImageFn };
+			const mod = (await import("@earendil-works/pi-coding-agent/dist/utils/image-resize.js")) as { resizeImage?: ResizeImageFn };
 			return typeof mod.resizeImage === "function" ? mod.resizeImage : null;
 		} catch {
 			return null;

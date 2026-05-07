@@ -88,7 +88,7 @@ No migration needed - pi's tool execution is case-aware and handles the new name
 ## References
 
 - **Anthropic OAuth validation PR:** https://github.com/anomalyco/opencode-anthropic-auth/pull/15
-- **Pi extensions documentation:** `/usr/lib/node_modules/@mariozechner/pi-coding-agent/docs/extensions.md`
+- **Pi extensions documentation:** `/usr/lib/node_modules/@earendil-works/pi-coding-agent/docs/extensions.md`
 - **Built-in tool names:** Read, Write, Bash, Edit, Grep, Find, Ls (all PascalCase)
 
 ## Related Extensions

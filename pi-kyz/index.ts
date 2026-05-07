@@ -19,8 +19,8 @@
  */
 
 import { execSync } from "node:child_process";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { createBashTool, createLocalBashOperations } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createBashTool, createLocalBashOperations } from "@earendil-works/pi-coding-agent";
 
 // ---------------------------------------------------------------------------
 // Types

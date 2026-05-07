@@ -34,7 +34,7 @@ bun run typecheck  # tsgo type checking
 Every extension must export a default function that receives `ExtensionAPI`:
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
   // Subscribe to events
@@ -77,10 +77,10 @@ See `OAUTH-FIX.md` for technical details and the GitHub PR that identified this 
 
 ### Using LLM APIs
 
-Use `@mariozechner/pi-ai` for LLM calls and `ctx.modelRegistry` for API keys:
+Use `@earendil-works/pi-ai` for LLM calls and `ctx.modelRegistry` for API keys:
 
 ```typescript
-import { complete, getModel } from "@mariozechner/pi-ai";
+import { complete, getModel } from "@earendil-works/pi-ai";
 
 const model = getModel("anthropic", "claude-3-5-haiku-20241022");
 const apiKey = await ctx.modelRegistry.getApiKey(model);
@@ -134,8 +134,8 @@ Keep functions under complexity 25 by:
 
 ## Dependencies
 
-- `@mariozechner/pi-coding-agent` - Extension API types and utilities
-- `@mariozechner/pi-ai` - LLM API (complete, stream, getModel, etc.)
+- `@earendil-works/pi-coding-agent` - Extension API types and utilities
+- `@earendil-works/pi-ai` - LLM API (complete, stream, getModel, etc.)
 - `@biomejs/biome` - Linting and formatting
 - `@rslint/tsgo` - Fast TypeScript type checking
 

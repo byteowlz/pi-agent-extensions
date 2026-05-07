@@ -8,8 +8,8 @@
  * Adapted from Mastra's reflector agent.
  */
 
-import type { Api, Model } from "@mariozechner/pi-ai";
-import { complete } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { complete } from "@earendil-works/pi-ai";
 import { estimateTokens } from "./config.js";
 import type { ReflectorConfig } from "./types.js";
 
