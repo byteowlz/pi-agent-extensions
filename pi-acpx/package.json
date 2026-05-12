@@ -1,0 +1,35 @@
+{
+  "name": "@byteowlz/pi-acpx",
+  "version": "0.1.0",
+  "description": "Pi extension that delegates tasks to ACP agents via acpx.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "acpx",
+    "acp"
+  ],
+  "files": [
+    "*.ts",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "homepage": "https://github.com/byteowlz/pi-agent-extensions/tree/main/pi-acpx",
+  "bugs": {
+    "url": "https://github.com/byteowlz/pi-agent-extensions/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/byteowlz/pi-agent-extensions.git",
+    "directory": "pi-acpx"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "license": "MIT"
+}
