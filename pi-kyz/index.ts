@@ -18,7 +18,7 @@
  *   Add to pi config extensions: ["path/to/pi-agent-extensions/pi-kyz"]
  */
 
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashTool, createLocalBashOperations } from "@earendil-works/pi-coding-agent";
 
@@ -106,7 +106,7 @@ function kyzListAllSecrets(): SecretSummary[] {
 
 function kyzGetSecret(service: string, key: string): SecretEntry | null {
 	try {
-		const out = execSync(`kyz get --json --service ${service} ${key}`, {
+		const out = execFileSync("kyz", ["get", "--json", "--service", service, key], {
 			timeout: 5000,
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "pipe"],
@@ -119,7 +119,7 @@ function kyzGetSecret(service: string, key: string): SecretEntry | null {
 
 function kyzSetSecret(service: string, key: string, value: string): boolean {
 	try {
-		execSync(`kyz set --service ${service} ${key}`, {
+		execFileSync("kyz", ["set", "--service", service, key], {
 			timeout: 5000,
 			input: value,
 			stdio: ["pipe", "pipe", "pipe"],
@@ -368,23 +368,15 @@ export default function (pi: ExtensionAPI) {
 	// /kyz-set command — set a secret from within the session
 	// -----------------------------------------------------------------------
 	pi.registerCommand("kyz-set", {
-		description: "Set a secret: /kyz-set service/key value",
+		description: "Set a secret securely: /kyz-set service/key (value is prompted, never passed as command arg)",
 		handler: async (args, ctx) => {
 			if (!args) {
-				ctx.ui.notify("Usage: /kyz-set service/key value", "error");
+				ctx.ui.notify("Usage: /kyz-set service/key", "error");
 				return;
 			}
 
-			const spaceIdx = args.indexOf(" ");
-			let ref_: string;
+			const ref_ = args.trim();
 			let value: string | undefined;
-
-			if (spaceIdx === -1) {
-				ref_ = args.trim();
-			} else {
-				ref_ = args.slice(0, spaceIdx).trim();
-				value = args.slice(spaceIdx + 1).trim();
-			}
 
 			const slashIdx = ref_.indexOf("/");
 			if (slashIdx === -1) {
@@ -395,8 +387,8 @@ export default function (pi: ExtensionAPI) {
 			const service = ref_.slice(0, slashIdx);
 			const key = ref_.slice(slashIdx + 1);
 
+			value = (await ctx.ui.input(`Value for ${ref_} (sensitive):`)) ?? undefined;
 			if (!value) {
-				value = (await ctx.ui.input(`Value for ${ref_}:`)) ?? undefined;
 				if (!value) {
 					ctx.ui.notify("Cancelled", "info");
 					return;
