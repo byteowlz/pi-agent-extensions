@@ -9,6 +9,7 @@ import {
 	clearOwned,
 	exportAll,
 	formatModel,
+	refreshFromContext,
 	updateModel,
 	updateSessionScope,
 } from "./core.js";
@@ -100,6 +101,19 @@ describe("mutation behavior", () => {
 		updateSessionScope(makeCtx({ sessionId: "sess_b", sessionName: "b" }), env);
 		expect(env[VAR_SESSION_ID]).toBe("sess_b");
 		expect(env[VAR_SESSION_NAME]).toBe("b");
+	});
+
+	test("refreshFromContext updates session scope and model together", () => {
+		const env = {};
+		exportAll(makeCtx({ sessionId: "sess_a", sessionName: "a", model: { provider: "openai", id: "gpt-4.1" } }), env);
+
+		refreshFromContext(
+			makeCtx({ sessionId: "sess_z", sessionName: "z", model: { provider: "anthropic", id: "claude-3-7-sonnet" } }),
+			env
+		);
+		expect(env[VAR_SESSION_ID]).toBe("sess_z");
+		expect(env[VAR_SESSION_NAME]).toBe("z");
+		expect(env[VAR_MODEL]).toBe("anthropic/claude-3-7-sonnet");
 	});
 
 	test("clearOwned removes all extension-owned vars", () => {

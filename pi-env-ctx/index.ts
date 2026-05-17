@@ -25,11 +25,20 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { clearOwned, exportAll, updateModel, updateSessionScope } from "./src/core.js";
+import { clearOwned, exportAll, refreshFromContext, updateModel, updateSessionScope } from "./src/core.js";
 
 export default function piEnvCtx(pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		exportAll(ctx);
+	});
+
+	// Run before the first turn starts so first tool calls can see latest scope/model.
+	pi.on("before_agent_start", (_event, ctx) => {
+		refreshFromContext(ctx);
+	});
+
+	pi.on("turn_start", (_event, ctx) => {
+		refreshFromContext(ctx);
 	});
 
 	pi.on("model_select", (event, _ctx) => {

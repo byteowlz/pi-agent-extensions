@@ -17,6 +17,7 @@ Unknown values are left **unset** (not empty strings).
 ## Mutability and lifecycle
 
 - On `session_start`: initializes all owned vars.
+- On `before_agent_start` and `turn_start`: refreshes mutable fields (`AGENT_CTX_HARNESS_SESSION_ID`, `AGENT_CTX_SESSION_NAME`, `AGENT_CTX_MODEL`) before active turn/tool work.
 - On `model_select`: updates `AGENT_CTX_MODEL`.
 - On `session_tree` and `turn_end`: refreshes `AGENT_CTX_HARNESS_SESSION_ID` and `AGENT_CTX_SESSION_NAME`.
   - This ensures session id/name stay correct when switching to a different session in the same Pi process.

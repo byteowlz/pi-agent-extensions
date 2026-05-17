@@ -27,6 +27,8 @@ describe("pi-env-ctx event wiring", () => {
 		piEnvCtx(pi);
 
 		expect(pi.handlers.has("session_start")).toBe(true);
+		expect(pi.handlers.has("before_agent_start")).toBe(true);
+		expect(pi.handlers.has("turn_start")).toBe(true);
 		expect(pi.handlers.has("model_select")).toBe(true);
 		expect(pi.handlers.has("session_tree")).toBe(true);
 		expect(pi.handlers.has("turn_end")).toBe(true);
@@ -65,6 +67,18 @@ describe("pi-env-ctx event wiring", () => {
 
 			pi.handlers.get("model_select")({ type: "model_select", model: { provider: "openai", id: "gpt-4.1" } }, makeCtx());
 			expect(process.env.AGENT_CTX_MODEL).toBe("openai/gpt-4.1");
+
+			pi.handlers.get("before_agent_start")(
+				{ type: "before_agent_start", prompt: "hi" },
+				makeCtx({
+					sessionId: "sess_early",
+					sessionName: "early-name",
+					model: { provider: "anthropic", id: "claude-3-5-haiku" },
+				})
+			);
+			expect(process.env.AGENT_CTX_HARNESS_SESSION_ID).toBe("sess_early");
+			expect(process.env.AGENT_CTX_SESSION_NAME).toBe("early-name");
+			expect(process.env.AGENT_CTX_MODEL).toBe("anthropic/claude-3-5-haiku");
 
 			pi.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, makeCtx());
 			expect(process.env.AGENT_CTX_VERSION).toBeUndefined();

@@ -62,6 +62,15 @@ export function updateSessionScope(ctx: ExtensionContext, env: NodeJS.ProcessEnv
 }
 
 /**
+ * Refresh all mutable context fields from the latest Pi runtime view.
+ * Useful right before a turn or tool activity so first writes carry fresh ctx.
+ */
+export function refreshFromContext(ctx: ExtensionContext, env: NodeJS.ProcessEnv = process.env): void {
+	updateSessionScope(ctx, env);
+	updateModel(ctx.model, env);
+}
+
+/**
  * Clear all vars owned by this extension.
  * Useful on session/runtime shutdown to avoid leaking stale metadata.
  */
