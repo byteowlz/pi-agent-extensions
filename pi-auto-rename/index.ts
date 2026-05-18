@@ -977,7 +977,10 @@ export default function (pi: ExtensionAPI) {
 	 */
 	const setNameAndNotify = (name: string, ctx: ExtensionContext) => {
 		pi.setSessionName(name);
-		ctx.ui.setStatus(TITLE_CHANGED_STATUS_KEY, name);
+		// Keep interactive TUI status line clean; emit status only for non-TUI/rpc consumers.
+		if (!ctx.hasUI) {
+			ctx.ui.setStatus(TITLE_CHANGED_STATUS_KEY, name);
+		}
 	};
 
 	const checkExistingName = () => {
