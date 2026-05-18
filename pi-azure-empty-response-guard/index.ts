@@ -311,11 +311,11 @@ export default function (pi: ExtensionAPI) {
 		lastRetryTimestamp = await attemptRetry(pi, ctx, config, retryCount);
 	});
 
-	// Status on session start
+	// Keep TUI status line clean; no persistent status badge.
 	pi.on("session_start", async (_event, ctx) => {
 		const config = loadConfig(ctx.cwd);
-		if (config.enabled && ctx.hasUI) {
-			ctx.ui.setStatus("azure-guard", "azure-guard: active");
+		if (ctx.hasUI && config.enabled) {
+			ctx.ui.setStatus("azure-guard", undefined);
 		}
 	});
 

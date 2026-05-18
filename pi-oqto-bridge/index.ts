@@ -128,6 +128,9 @@ function parseInputMeta(text: string): {
 }
 
 function emitQueueEvent(ctx: ExtensionContext, eventType: string, payload: Record<string, unknown>): void {
+	// Keep queue telemetry out of interactive TUI status line.
+	// It is only needed for machine-consumed RPC streams.
+	if (ctx.hasUI) return;
 	ctx.ui.setStatus(
 		QUEUE_EVENT_KEY,
 		JSON.stringify({
