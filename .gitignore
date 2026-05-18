@@ -114,3 +114,6 @@ public
 .vercel
 # Bun
 bun.lockb
+
+# Local pi runtime artifacts
+.pi/todos/
