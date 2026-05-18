@@ -8,3 +8,16 @@
 {"id":"evt_x5t9w62x","issue_id":"piext-ycm9","action":"created","timestamp":"2026-05-16T06:47:55.164621105Z","harness":"pi","harness_session_id":"019e256f-06af-72b8-807b-cf6cbcc19c51","session_name":"oqto_refactor: Oqto-Log Migration Delay During Deploy [bent-melt-then]","model":"openai-codex/gpt-5.3-codex"}
 {"id":"evt_f18v0340","issue_id":"piext-ycm9","action":"updated","timestamp":"2026-05-16T06:47:55.179163156Z","harness":"pi","harness_session_id":"019e256f-06af-72b8-807b-cf6cbcc19c51","session_name":"oqto_refactor: Oqto-Log Migration Delay During Deploy [bent-melt-then]","model":"openai-codex/gpt-5.3-codex","changes":[{"field":"status","from":"open","to":"in_progress"}]}
 {"id":"evt_q203j1kt","issue_id":"piext-ycm9","action":"updated","timestamp":"2026-05-16T06:50:10.983911719Z","harness":"pi","harness_session_id":"019e256f-06af-72b8-807b-cf6cbcc19c51","session_name":"oqto_refactor: Oqto-Log Migration Delay During Deploy [bent-melt-then]","model":"openai-codex/gpt-5.3-codex","changes":[{"field":"description","from":null,"to":"Implemented initial hardening in pi-kyz:\n- Removed plaintext-value command pattern from /kyz-set. New usage is /kyz-set service/key only; value is prompted interactively.\n- Updated command description/usage text to make secure flow explicit.\n- Switched kyz get/set shell calls from string-interpolated execSync to execFileSync argv form to avoid command injection risk via service/key values.\n\nValidation:\n- bun run lint\n- bun run typecheck\n\nNext suggested increment:\n- Add true masked secure input primitive in Pi extension UI (sudo-style) so /kyz-set prompt does not echo in any UI/plaintext path.\n- Add /kyz-run wrapper using kyz exec/pipe with policy gating for least-exposure execution."}]}
+{"id":"evt_90mydhvr","issue_id":"piext-8mq2","action":"created","timestamp":"2026-05-17T08:59:57.588752Z"}
+{"id":"evt_7enz5wf3","issue_id":"piext-8mq2.1","action":"created","timestamp":"2026-05-17T08:59:57.600294Z"}
+{"id":"evt_8asmrqmq","issue_id":"piext-8mq2.2","action":"created","timestamp":"2026-05-17T08:59:57.611743Z"}
+{"id":"evt_96fh4tr2","issue_id":"piext-8mq2.3","action":"created","timestamp":"2026-05-17T08:59:57.621340Z"}
+{"id":"evt_r2xgj1fy","issue_id":"piext-8mq2.4","action":"created","timestamp":"2026-05-17T08:59:57.631991Z"}
+{"id":"evt_tb71wg7w","issue_id":"piext-8mq2.5","action":"created","timestamp":"2026-05-17T08:59:57.642216Z"}
+{"id":"evt_6k3rfm8n","issue_id":"piext-8mq2.6","action":"created","timestamp":"2026-05-17T08:59:57.652939Z"}
+{"id":"evt_87r51x18","issue_id":"piext-8mq2.7","action":"created","timestamp":"2026-05-17T08:59:57.662529Z"}
+{"id":"evt_fw62g9ty","issue_id":"piext-8mq2.8","action":"created","timestamp":"2026-05-17T08:59:57.673036Z"}
+{"id":"evt_r2vanmcr","issue_id":"piext-8mq2.9","action":"created","timestamp":"2026-05-17T08:59:57.682566Z"}
+{"id":"evt_0253cv2g","issue_id":"piext-8mq2.10","action":"created","timestamp":"2026-05-18T07:06:25.659087Z"}
+{"id":"evt_3bs4tq70","issue_id":"piext-8mq2.11","action":"created","timestamp":"2026-05-18T07:07:24.542396Z"}
+{"id":"evt_kq9ewbja","issue_id":"piext-8mq2.10","action":"closed","timestamp":"2026-05-18T07:07:27.909741Z"}
