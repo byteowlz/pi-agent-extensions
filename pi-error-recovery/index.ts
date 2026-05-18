@@ -603,11 +603,11 @@ export default function (pi: ExtensionAPI) {
 		pi.sendUserMessage(config.retryMessage, { deliverAs: "followUp" });
 	});
 
-	// Status on session start
+	// Keep TUI status line clean; no persistent status badge.
 	pi.on("session_start", async (_event, ctx) => {
 		const config = loadConfig(ctx.cwd);
-		if (config.enabled && ctx.hasUI) {
-			ctx.ui.setStatus("error-recovery", "error-recovery: active");
+		if (ctx.hasUI && config.enabled) {
+			ctx.ui.setStatus("error-recovery", undefined);
 		}
 	});
 
