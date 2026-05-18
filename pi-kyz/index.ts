@@ -130,6 +130,36 @@ function kyzSetSecret(service: string, key: string, value: string): boolean {
 	}
 }
 
+function kyzSetSecretFields(service: string, key: string, fields: Record<string, string>): boolean {
+	try {
+		const args = ["set", "--service", service, key];
+		for (const [field, value] of Object.entries(fields)) {
+			args.push("--field", `${field}=${value}`);
+		}
+		execFileSync("kyz", args, {
+			timeout: 5000,
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function kyzExecWithSecrets(command: string): { ok: boolean; output: string } {
+	try {
+		const out = execFileSync("kyz", ["exec", "--", "bash", "-lc", command], {
+			timeout: 120000,
+			encoding: "utf-8",
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+		return { ok: true, output: out };
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : "kyz exec failed";
+		return { ok: false, output: msg };
+	}
+}
+
 function kyzAudit(op: string, detail: string): void {
 	try {
 		// Use stderr-based audit logging via kyz exec dry-run (logs audit event)
@@ -401,6 +431,72 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify(`Secret ${ref_} saved`, "info");
 			} else {
 				ctx.ui.notify(`Failed to set secret ${ref_}`, "error");
+			}
+		},
+	});
+
+	// -----------------------------------------------------------------------
+	// /kyz-set-fields command — set multi-field secret entries
+	// -----------------------------------------------------------------------
+	pi.registerCommand("kyz-set-fields", {
+		description: "Set multi-field secret entry: /kyz-set-fields service/key",
+		handler: async (args, ctx) => {
+			if (!args) {
+				ctx.ui.notify("Usage: /kyz-set-fields service/key", "error");
+				return;
+			}
+			const ref_ = args.trim();
+			const slashIdx = ref_.indexOf("/");
+			if (slashIdx === -1) {
+				ctx.ui.notify("Invalid reference. Use service/key format.", "error");
+				return;
+			}
+			const service = ref_.slice(0, slashIdx);
+			const key = ref_.slice(slashIdx + 1);
+			const fieldsRaw = (await ctx.ui.input("Field names (comma separated, e.g. username,password,api_key):")) ?? "";
+			const fieldNames = fieldsRaw
+				.split(",")
+				.map((s) => s.trim())
+				.filter(Boolean);
+			if (fieldNames.length === 0) {
+				ctx.ui.notify("No fields provided", "error");
+				return;
+			}
+			const fields: Record<string, string> = {};
+			for (const name of fieldNames) {
+				const val = (await ctx.ui.input(`Value for ${name} (sensitive):`)) ?? "";
+				if (!val) {
+					ctx.ui.notify(`Cancelled while capturing field ${name}`, "info");
+					return;
+				}
+				fields[name] = val;
+			}
+			if (kyzSetSecretFields(service, key, fields)) {
+				invalidateCache();
+				kyzAudit("agent_set_secret_fields", `secret=${ref_} fields=${fieldNames.join(",")}`);
+				ctx.ui.notify(`Secret ${ref_} saved with ${fieldNames.length} field(s)`, "info");
+			} else {
+				ctx.ui.notify(`Failed to set secret ${ref_}`, "error");
+			}
+		},
+	});
+
+	// -----------------------------------------------------------------------
+	// /kyz-run command — execute command via kyz exec wrapper
+	// -----------------------------------------------------------------------
+	pi.registerCommand("kyz-run", {
+		description: "Run a command with kyz-managed secret injection: /kyz-run <bash command>",
+		handler: async (args, ctx) => {
+			const cmd = args?.trim();
+			if (!cmd) {
+				ctx.ui.notify("Usage: /kyz-run <bash command>", "error");
+				return;
+			}
+			const result = kyzExecWithSecrets(cmd);
+			if (result.ok) {
+				ctx.ui.notify(result.output || "Command completed", "info");
+			} else {
+				ctx.ui.notify(result.output || "kyz-run failed", "error");
 			}
 		},
 	});
