@@ -176,6 +176,7 @@ function kyzAudit(op: string, detail: string): void {
 // ---------------------------------------------------------------------------
 
 let secretCache: CachedSecrets | null = null;
+let refreshInFlight: Promise<CachedSecrets> | null = null;
 
 function loadSecrets(): CachedSecrets {
 	// Return cached if fresh
@@ -220,6 +221,22 @@ function loadSecrets(): CachedSecrets {
 
 function invalidateCache(): void {
 	secretCache = null;
+	refreshInFlight = null;
+}
+
+function refreshSecretsAsync(): Promise<CachedSecrets> {
+	if (secretCache && Date.now() - secretCache.refreshedAt < CACHE_TTL_MS) {
+		return Promise.resolve(secretCache);
+	}
+	if (refreshInFlight) return refreshInFlight;
+
+	refreshInFlight = Promise.resolve().then(() => {
+		const loaded = loadSecrets();
+		refreshInFlight = null;
+		return loaded;
+	});
+
+	return refreshInFlight;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,19 +273,14 @@ function scrubText(text: string, secrets: Array<{ name: string; value: string }>
 
 export default function (pi: ExtensionAPI) {
 	const cwd = process.cwd();
-
-	// Early exit if kyz is not available
-	if (!kyzAvailable()) {
-		return;
-	}
-
 	const bashTool = createBashTool(cwd);
 
 	// -----------------------------------------------------------------------
 	// Scrub secrets from all tool results
 	// -----------------------------------------------------------------------
 	pi.on("tool_result", async (event, _ctx) => {
-		const { entries } = loadSecrets();
+		const entries =
+			secretCache && Date.now() - secretCache.refreshedAt < CACHE_TTL_MS ? secretCache.entries : [];
 		if (entries.length === 0) return;
 
 		const scrubbed = event.content.map((c) => (c.type === "text" ? { ...c, text: scrubText(c.text, entries) } : c));
@@ -339,10 +351,15 @@ export default function (pi: ExtensionAPI) {
 	// Inject secret names into system prompt
 	// -----------------------------------------------------------------------
 	pi.on("before_agent_start", async (event) => {
-		const { entries } = loadSecrets();
-		if (entries.length === 0) return;
+		const cachedEntries =
+			secretCache && Date.now() - secretCache.refreshedAt < CACHE_TTL_MS ? secretCache.entries : [];
 
-		const names = entries.map((s) => `$${s.name}`).join(", ");
+		// Never trigger vault IO on prompt send path.
+		if (cachedEntries.length === 0) {
+			return;
+		}
+
+		const names = cachedEntries.map((s) => `$${s.name}`).join(", ");
 		const tagInfo = activeTagScope.length > 0 ? `\nActive tag scope: ${activeTagScope.join(", ")}` : "";
 
 		const instruction = [
