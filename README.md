@@ -16,6 +16,7 @@ Custom extensions for the [pi coding agent](https://github.com/badlogic/pi-mono)
 | [trx-picker](./trx-picker/) | Browse, filter, and multi-select trx issues from an overlay, dispatch to current or new tmux session |
 | [inline-macros](./pi-inline-macros/) | Expand inline `::name` prompt macros using loaded prompt templates |
 | [markdown-export](./pi-markdown-export/) | Export current session transcripts to Markdown via `/export-md` |
+| [message-timestamps](./pi-message-timestamps/) | Show local time/date prefixes for user+assistant transcript messages in TUI |
 
 > **Note:** The `delegate` and `tmux-delegate` extensions have been removed in favor of [pi-subagents](https://github.com/nicobailon/pi-subagents) (`pi install npm:pi-subagents`), which provides structured JSON streaming, usage tracking, chain/parallel modes, and a TUI clarification overlay.
 
