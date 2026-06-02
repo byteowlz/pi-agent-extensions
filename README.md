@@ -17,6 +17,7 @@ Custom extensions for the [pi coding agent](https://github.com/badlogic/pi-mono)
 | [inline-macros](./pi-inline-macros/) | Expand inline `::name` prompt macros using loaded prompt templates |
 | [markdown-export](./pi-markdown-export/) | Export current session transcripts to Markdown via `/export-md` |
 | [message-timestamps](./pi-message-timestamps/) | Show local time/date prefixes for user+assistant transcript messages in TUI |
+| [history-search](./pi-history-search/) | `HistorySearch`/`HistoryRead` tools letting the agent search its own past sessions via a colocated SQLite FTS5 index (no external LLM; works with and without oqto) |
 
 > **Note:** The `delegate` and `tmux-delegate` extensions have been removed in favor of [pi-subagents](https://github.com/nicobailon/pi-subagents) (`pi install npm:pi-subagents`), which provides structured JSON streaming, usage tracking, chain/parallel modes, and a TUI clarification overlay.
 
