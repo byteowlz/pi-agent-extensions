@@ -67,15 +67,19 @@ function parseRunIdInput(input: unknown): string {
 }
 
 function buildAcpxArgs(params: DelegateInput): string[] {
+	// Top-level acpx options must come before the agent subcommand.
 	const args: string[] = ["--format", "json"];
 	if (params.timeoutSeconds && params.timeoutSeconds > 0) args.push("--timeout", String(params.timeoutSeconds));
+
+	// The agent subcommand and its own options (-s/--session, --no-wait) come after the agent name.
+	args.push(params.agent);
 	if (params.session) args.push("-s", params.session);
 
 	if (params.mode === "oneshot") {
-		args.push(params.agent, "exec", params.prompt);
+		args.push("exec", params.prompt);
 	} else {
-		if (params.noWait) args.push(params.agent, "--no-wait", params.prompt);
-		else args.push(params.agent, params.prompt);
+		if (params.noWait) args.push("--no-wait");
+		args.push(params.prompt);
 	}
 	return args;
 }
