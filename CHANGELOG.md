@@ -4,6 +4,59 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Changed - 2026-06-07
+
+#### pi-markdown-export: readable "outline" rendering by default
+
+Exports were dominated by tool output — on a sampled session, `toolResult`
+messages were ~97% of the body (file dumps, command output), rendered as generic
+`## System` blocks. Rendering is now an **outline** by default: user + assistant
+text, with each assistant tool call shown as a compact one-liner
+(a `- \`read(path)\`` list item) and tool result bodies omitted. The same sampled
+session dropped from 412 KB to 15 KB (~96%). The renderer introduces no emoji or
+decoration of its own — only session text is kept.
+
+New config knobs (all back-compatible; outline is the default):
+
+- `includeToolCalls` (default `true`) — compact `- \`tool(arg)\`` lines; set
+  `false` for pure conversation.
+- `includeToolResults` (default `false`) — include tool output bodies.
+- `maxCharsPerMessage` (default `0` = unlimited) — per-message cap with a
+  `… (truncated, N chars)` marker; pair with `includeToolResults` for a tamed
+  transcript.
+
+Tool result blocks, when included, are now labeled `## Tool` instead of
+`## System`.
+
+### Added - 2026-06-07
+
+#### pi-markdown-export: bulk export, multi-select picker, and config-driven redaction (piext-3kk3)
+
+Extended the markdown export extension well beyond single-session export.
+
+- **`/export-md-all [--subdirs]`**: export every session whose working directory
+  is the cwd (and, with `--subdirs`, any subdirectory) to `exportDir`
+  (default `./pi-session-exports`), one `.md` per session. Directory matching
+  reads each session's recorded `cwd` from its first JSONL record, so it is
+  robust against pi's lossy `--{cwd}--` directory encoding.
+- **`/export-md-pick [--subdirs]`**: a TUI multi-select picker (fuzzy filter,
+  `Space`/`Tab` to toggle, `Ctrl+A` toggle-all, `Enter` to export) that also
+  defaults to `exportDir`.
+- **`markdown-export.json` config** (cwd / `.pi` / `~/.pi/agent` search order,
+  with schema + example):
+  - `replacements[]` — literal or regex find/replace rules.
+  - `redactionCommands[]` — external CLIs run before writing. `scan` mode parses
+    gitleaks/trufflehog JSON findings and masks the detected secrets; `filter`
+    mode replaces the content with the command's stdout (or the in-place file).
+    Missing tools degrade gracefully unless `required`.
+  - `exportDir`, `includeSubdirs`, `includeThinking`, `sessionsDir`.
+- **Redaction applies to all paths**, including the existing `/export-md`
+  current-session command, before anything is written to disk.
+
+Internals split into `config.ts`, `session.ts` (discovery + a shared JSONL→
+Markdown renderer reused by the live-branch export), `redact.ts`, and
+`picker.ts`.
+
 ### Removed - 2026-02-13
 
 #### delegate and tmux-delegate extensions

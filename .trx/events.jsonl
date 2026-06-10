@@ -43,3 +43,31 @@
 {"id":"evt_vrcp5w92","issue_id":"piext-8mq2.8","action":"closed","timestamp":"2026-05-18T07:16:19.988028528Z","harness":"pi","harness_session_id":"019e39ec-e9ab-73e8-998f-fdf65bb314d5","session_name":"pi-agent-extensions: Implementing TRX Issue Workflow [mild-pins-lots]","model":"openai-codex/gpt-5.3-codex","note":"Validated parity path through shared input transform behavior (TUI/RPC), command/completion/widget checks, and repository lint/typecheck passing for integrated behavior."}
 {"id":"evt_9c2555d0","issue_id":"piext-8mq2.9","action":"closed","timestamp":"2026-05-18T07:16:19.999886987Z","harness":"pi","harness_session_id":"019e39ec-e9ab-73e8-998f-fdf65bb314d5","session_name":"pi-agent-extensions: Implementing TRX Issue Workflow [mild-pins-lots]","model":"openai-codex/gpt-5.3-codex","note":"Packaged extension directory with index.ts, package.json, README.md; updated root README listing; added example composition templates (review/test/doc/refactor)."}
 {"id":"evt_w04j9wcv","issue_id":"piext-8mq2.11","action":"closed","timestamp":"2026-05-18T07:16:20.011745813Z","harness":"pi","harness_session_id":"019e39ec-e9ab-73e8-998f-fdf65bb314d5","session_name":"pi-agent-extensions: Implementing TRX Issue Workflow [mild-pins-lots]","model":"openai-codex/gpt-5.3-codex","note":"Implemented lean TUI feedback: :: autocomplete provider and below-editor confirmation widget showing detected macros with accent styling and descriptions."}
+{"id":"evt_8h26ndy3","issue_id":"piext-3kk3","action":"created","timestamp":"2026-06-07T19:35:22.355284841Z"}
+{"id":"evt_djebje4k","issue_id":"piext-3kk3.1","action":"created","timestamp":"2026-06-07T19:35:45.696126390Z"}
+{"id":"evt_1ksfek1d","issue_id":"piext-3kk3.2","action":"created","timestamp":"2026-06-07T19:35:45.714930525Z"}
+{"id":"evt_qqspkyfz","issue_id":"piext-3kk3.3","action":"created","timestamp":"2026-06-07T19:35:45.737061581Z"}
+{"id":"evt_c13aw3fj","issue_id":"piext-3kk3.4","action":"created","timestamp":"2026-06-07T19:35:45.762255581Z"}
+{"id":"evt_ba6nt0r1","issue_id":"piext-3kk3.5","action":"created","timestamp":"2026-06-07T19:35:45.783560331Z"}
+{"id":"evt_879a1g0e","issue_id":"piext-3kk3.6","action":"created","timestamp":"2026-06-07T19:35:45.802054740Z"}
+{"id":"evt_4bvey3hr","issue_id":"piext-3kk3.2","action":"dep_added","timestamp":"2026-06-07T19:35:52.965387624Z","note":"piext-3kk3.1"}
+{"id":"evt_102s7gz8","issue_id":"piext-3kk3.3","action":"dep_added","timestamp":"2026-06-07T19:35:52.984679169Z","note":"piext-3kk3.1"}
+{"id":"evt_zynr9y1m","issue_id":"piext-3kk3.4","action":"dep_added","timestamp":"2026-06-07T19:35:52.995771096Z","note":"piext-3kk3.2"}
+{"id":"evt_ek9zy3a1","issue_id":"piext-3kk3.5","action":"dep_added","timestamp":"2026-06-07T19:35:53.012206374Z","note":"piext-3kk3.2"}
+{"id":"evt_mqp3na70","issue_id":"piext-3kk3.5","action":"dep_added","timestamp":"2026-06-07T19:35:53.027162514Z","note":"piext-3kk3.3"}
+{"id":"evt_7gqv6jrx","issue_id":"piext-3kk3.5","action":"dep_added","timestamp":"2026-06-07T19:35:53.040209807Z","note":"piext-3kk3.4"}
+{"id":"evt_ntkjf1fk","issue_id":"piext-3kk3.6","action":"dep_added","timestamp":"2026-06-07T19:35:53.053099843Z","note":"piext-3kk3.5"}
+{"id":"evt_f9cjvw4g","issue_id":"piext-3kk3.1","action":"updated","timestamp":"2026-06-07T19:36:01.343164091Z","changes":[{"field":"status","from":"open","to":"in_progress"}]}
+{"id":"evt_kfs4kd01","issue_id":"piext-3kk3","action":"updated","timestamp":"2026-06-07T19:36:01.354482051Z","changes":[{"field":"status","from":"open","to":"in_progress"}]}
+{"id":"evt_rh0mg0am","issue_id":"piext-3kk3.1","action":"closed","timestamp":"2026-06-07T19:36:50.102263897Z","note":"config.ts, schema, example added"}
+{"id":"evt_mxg1v3d6","issue_id":"piext-3kk3.2","action":"updated","timestamp":"2026-06-07T19:36:50.117457172Z","changes":[{"field":"status","from":"open","to":"in_progress"}]}
+{"id":"evt_tv6f9g5z","issue_id":"piext-3kk3.2","action":"closed","timestamp":"2026-06-07T19:37:37.042333040Z","note":"session.ts discovery + renderer added"}
+{"id":"evt_5g0ate06","issue_id":"piext-3kk3.3","action":"updated","timestamp":"2026-06-07T19:37:37.057417953Z","changes":[{"field":"status","from":"open","to":"in_progress"}]}
+{"id":"evt_wxhzvv84","issue_id":"piext-3kk3.3","action":"closed","timestamp":"2026-06-07T19:38:38.800074508Z","note":"redact.ts replacements + scan/filter CLIs added"}
+{"id":"evt_45k0w21j","issue_id":"piext-3kk3.4","action":"updated","timestamp":"2026-06-07T19:38:38.828625875Z","changes":[{"field":"status","from":"open","to":"in_progress"}]}
+{"id":"evt_xrnb7bfs","issue_id":"piext-3kk3.4","action":"closed","timestamp":"2026-06-07T19:39:14.463197595Z","note":"picker.ts multi-select overlay added"}
+{"id":"evt_nzddw0j7","issue_id":"piext-3kk3.5","action":"updated","timestamp":"2026-06-07T19:39:14.478233995Z","changes":[{"field":"status","from":"open","to":"in_progress"}]}
+{"id":"evt_sjcx5m04","issue_id":"piext-3kk3.5","action":"closed","timestamp":"2026-06-07T19:39:45.450825358Z","note":"index.ts commands wired"}
+{"id":"evt_be4ppqj1","issue_id":"piext-3kk3.6","action":"updated","timestamp":"2026-06-07T19:39:45.462948058Z","changes":[{"field":"status","from":"open","to":"in_progress"}]}
+{"id":"evt_tcd4nt5d","issue_id":"piext-3kk3.6","action":"closed","timestamp":"2026-06-07T19:42:49.181020982Z","note":"README + CHANGELOG updated; pi-markdown-export passes biome + typecheck (pre-existing errors in pi-kyz/pi-message-timestamps are unrelated)"}
+{"id":"evt_fnxh6t14","issue_id":"piext-3kk3","action":"closed","timestamp":"2026-06-07T19:42:49.196020889Z","note":"All child tasks complete: bulk export, multi-select picker, config-driven redaction implemented and verified"}

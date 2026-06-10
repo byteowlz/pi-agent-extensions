@@ -49,32 +49,6 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
-### Tool Naming Convention (CRITICAL for OAuth)
-
-**All custom tools MUST use PascalCase naming** to comply with Anthropic's Claude Code OAuth validation:
-
-```typescript
-// ✅ CORRECT - PascalCase (OAuth compatible)
-pi.registerTool({
-  name: "MyTool",           // ✅ PascalCase
-  name: "TodoWrite",        // ✅ PascalCase
-  name: "DelegateStatus",   // ✅ PascalCase
-});
-
-// ❌ WRONG - Will cause OAuth authentication failures
-pi.registerTool({
-  name: "my_tool",          // ❌ snake_case - OAuth FAILS
-  name: "mytool",           // ❌ lowercase - OAuth FAILS
-  name: "myTool",           // ❌ camelCase - OAuth FAILS
-});
-```
-
-**Why:** Anthropic's OAuth validation enforces strict tool naming that matches Claude Code's built-in tools (`Read`, `Write`, `Bash`, `Edit`, etc.). Non-PascalCase tool names will cause "not allowed by anthropic" errors during OAuth authentication.
-
-**Built-in tool reference:** `Read`, `Write`, `Bash`, `Edit`, `Grep`, `Find`, `Ls`
-
-See `OAUTH-FIX.md` for technical details and the GitHub PR that identified this requirement.
-
 ### Using LLM APIs
 
 Use `@earendil-works/pi-ai` for LLM calls and `ctx.modelRegistry` for API keys:
@@ -140,6 +114,10 @@ Keep functions under complexity 25 by:
 - `@rslint/tsgo` - Fast TypeScript type checking
 
 ## Documentation
+
+Always update CHANGELOG.md after changing the code of an extension.
+
+pi documentation:
 
 - [pi extension docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md)
 - [pi-ai README](https://github.com/badlogic/pi-mono/blob/main/packages/ai/README.md)
