@@ -69,8 +69,12 @@ const HistoryReadParams = Type.Object({
 	around: Type.Optional(
 		Type.Number({ description: "Return a window of messages centered on this msgIndex (from a HistorySearch match)." })
 	),
-	before: Type.Optional(Type.Number({ description: "Messages before `around` (default 3)." })),
-	after: Type.Optional(Type.Number({ description: "Messages after `around` (default 3)." })),
+	before: Type.Optional(
+		Type.Number({ description: "Messages before `around`, or context before each query match (default 3 around, 2 query)." })
+	),
+	after: Type.Optional(
+		Type.Number({ description: "Messages after `around`, or context after each query match (default 3 around, 2 query)." })
+	),
 	view: Type.Optional(
 		StringEnum(["outline", "transcript"] as const, {
 			description:
@@ -83,8 +87,12 @@ const HistoryReadParams = Type.Object({
 				"Restrict returned roles (query mode, or override the outline/transcript default). E.g. 'tool' to inspect only tool output.",
 		})
 	),
-	maxChars: Type.Optional(
-		Type.Number({ description: "Per-message character cap (whole-session: total budget split across messages). Default 2000." })
+	maxChars: Type.Optional(Type.Number({ description: "Per-message character cap. Default 2000." })),
+	maxMessages: Type.Optional(
+		Type.Number({ description: "Maximum messages returned. Default 40 for query, 80 for whole-session reads." })
+	),
+	maxTotalChars: Type.Optional(
+		Type.Number({ description: "Total character budget across all returned messages. Default 16000 for query reads." })
 	),
 });
 
@@ -130,7 +138,13 @@ function formatRead(r: ReadResult): string {
 		return `${head}\n(no matching messages)`;
 	}
 	const body = r.messages.map((m) => `[msg ${m.msgIndex}] ${m.role}:\n${m.text}`).join("\n\n");
-	const tail = r.truncated ? "\n\n(some messages truncated — raise maxChars or narrow with query/around to see more)" : "";
+	const notes: string[] = [];
+	if (r.truncated) notes.push("some messages truncated — raise maxChars/maxTotalChars or narrow with roleFilter");
+	if (r.omittedMessages)
+		notes.push(
+			`${r.omittedMessages} additional matching/eligible message(s) omitted — use around:<msgIndex> or raise maxMessages`
+		);
+	const tail = notes.length ? `\n\n(${notes.join("; ")})` : "";
 	return `${head}\n\n${body}${tail}`;
 }
 
@@ -318,6 +332,8 @@ export default function historySearch(pi: ExtensionAPI): void {
 					roleFilter: params.roleFilter,
 					view: params.view ?? "outline",
 					maxChars: params.maxChars ?? 2000,
+					maxMessages: params.maxMessages,
+					maxTotalChars: params.maxTotalChars,
 				});
 				return {
 					content: [{ type: "text", text: formatRead(r) }],
@@ -334,7 +350,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 
 		renderCall(args, theme: Theme) {
 			const id = shortId((args.sessionId as string) ?? "");
-			const mode = args.around !== undefined ? `around ${args.around}` : args.query ? `query "${args.query}"` : "transcript";
+			const mode = args.around !== undefined ? `around ${args.around}` : args.query ? `query "${args.query}"` : "outline";
 			return new Text(theme.fg("toolTitle", theme.bold("HistoryRead ")) + theme.fg("muted", `${id} · ${mode}`), 0, 0);
 		},
 

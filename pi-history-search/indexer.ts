@@ -698,6 +698,7 @@ export interface ReadResult {
 	mode: "around" | "query" | "transcript" | "outline";
 	messages: { role: string; msgIndex: number; text: string }[];
 	truncated: boolean;
+	omittedMessages?: number;
 }
 
 export interface ReadOptions {
@@ -706,6 +707,10 @@ export interface ReadOptions {
 	before?: number;
 	after?: number;
 	maxChars: number;
+	/** Maximum messages returned in query / whole-session modes. */
+	maxMessages?: number;
+	/** Total character budget across returned messages in query / whole-session modes. */
+	maxTotalChars?: number;
 	/** Restrict which message roles are returned (query / whole-session modes). */
 	roleFilter?: RoleFilter;
 	/**
@@ -719,6 +724,42 @@ export interface ReadOptions {
 function clip(text: string, max: number): { text: string; truncated: boolean } {
 	if (text.length <= max) return { text, truncated: false };
 	return { text: `${text.slice(0, max)} …`, truncated: true };
+}
+
+function readQueryMessages(
+	messages: ExtractedMessage[],
+	opts: ReadOptions
+): Pick<ReadResult, "messages" | "truncated" | "omittedMessages"> {
+	const roleFilter = opts.roleFilter ?? "conversation";
+	const tokens = sanitizeTokens(opts.query ?? "");
+	const maxMessages = opts.maxMessages ?? 40;
+	const maxTotalChars = opts.maxTotalChars ?? 16_000;
+	const before = opts.before ?? 2;
+	const after = opts.after ?? 2;
+	const matching = messages
+		.map((m, i) => ({ ...m, i }))
+		.filter((m) => roleAllowed(m.role, roleFilter) && tokens.some((t) => m.text.toLowerCase().includes(t.toLowerCase())));
+	const wanted = new Set<number>();
+	for (const match of matching) {
+		const from = Math.max(0, match.i - before);
+		const to = Math.min(messages.length - 1, match.i + after);
+		for (let i = from; i <= to; i++) {
+			if (messages[i].text && roleAllowed(messages[i].role, roleFilter)) wanted.add(i);
+		}
+	}
+	const indices = [...wanted].sort((a, b) => a - b);
+	const out: ReadResult["messages"] = [];
+	let truncated = false;
+	let usedChars = 0;
+	for (const i of indices) {
+		if (out.length >= maxMessages || usedChars >= maxTotalChars) break;
+		const remaining = Math.max(0, maxTotalChars - usedChars);
+		const c = clip(messages[i].text, Math.min(opts.maxChars, remaining));
+		truncated = truncated || c.truncated;
+		usedChars += c.text.length;
+		out.push({ role: messages[i].role, msgIndex: i, text: c.text });
+	}
+	return { messages: out, truncated, omittedMessages: Math.max(0, indices.length - out.length) };
 }
 
 export function readSession(filePath: string, opts: ReadOptions): ReadResult {
@@ -753,19 +794,7 @@ export function readSession(filePath: string, opts: ReadOptions): ReadResult {
 	}
 
 	if (opts.query) {
-		const roleFilter = opts.roleFilter ?? "all";
-		const tokens = sanitizeTokens(opts.query);
-		const out: ReadResult["messages"] = [];
-		let truncated = false;
-		for (let i = 0; i < messages.length; i++) {
-			if (!roleAllowed(messages[i].role, roleFilter)) continue;
-			const lower = messages[i].text.toLowerCase();
-			if (!lower || !tokens.some((t) => lower.includes(t.toLowerCase()))) continue;
-			const c = clip(messages[i].text, opts.maxChars);
-			truncated = truncated || c.truncated;
-			out.push({ role: messages[i].role, msgIndex: i, text: c.text });
-		}
-		return { ...base, mode: "query", messages: out, truncated };
+		return { ...base, mode: "query", ...readQueryMessages(messages, opts) };
 	}
 
 	// Whole-session. "outline" drops tool noise to a readable conversation thread;
@@ -773,14 +802,17 @@ export function readSession(filePath: string, opts: ReadOptions): ReadResult {
 	const view = opts.view ?? "transcript";
 	const roleFilter = opts.roleFilter ?? (view === "outline" ? "conversation" : "all");
 	const kept = messages.map((m, i) => ({ ...m, i })).filter((m) => m.text && roleAllowed(m.role, roleFilter));
-	const per = Math.max(200, Math.floor(opts.maxChars / Math.max(1, kept.length)));
-	let truncated = false;
-	const out = kept.map((m) => {
+	const maxMessages = opts.maxMessages ?? 80;
+	const shown = kept.slice(0, maxMessages);
+	const budget = opts.maxTotalChars ?? opts.maxChars;
+	const per = Math.max(120, Math.floor(budget / Math.max(1, shown.length)));
+	let truncated = kept.length > shown.length;
+	const out = shown.map((m) => {
 		const c = clip(m.text, per);
 		truncated = truncated || c.truncated;
 		return { role: m.role, msgIndex: m.i, text: c.text };
 	});
-	return { ...base, mode: view, messages: out, truncated };
+	return { ...base, mode: view, messages: out, truncated, omittedMessages: Math.max(0, kept.length - shown.length) };
 }
 
 // ── Stats ────────────────────────────────────────────────────────────
