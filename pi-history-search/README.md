@@ -33,11 +33,13 @@ Pull fuller context from one session returned by `HistorySearch`.
 |---|---|---|
 | `sessionId` | string (required) | From a `HistorySearch` hit. |
 | `around` | number | Window of messages centered on this `msgIndex`. |
-| `before` / `after` | number | Window size (default 3 each). |
-| `query` | string | Return every message in the session matching these terms. |
+| `before` / `after` | number | Window size. For `around`: default 3 each. For `query`: context before/after each matching message, default 2 each. |
+| `query` | string | Return merged, budgeted context windows around messages matching these terms. |
 | `view` | `outline` \| `transcript` | Whole-session rendering (ignored with `around`/`query`). **Default `outline`** = user+assistant only, tool noise dropped (compact recall, ~60% fewer chars). `transcript` = every non-empty message. |
-| `roleFilter` | `all` \| `conversation` \| `user` \| `assistant` \| `tool` | Restrict returned roles (query mode, or override the outline/transcript default). |
-| `maxChars` | number | Per-message cap (whole-session: total budget split across messages). Default 2000. |
+| `roleFilter` | `all` \| `conversation` \| `user` \| `assistant` \| `tool` | Restrict returned roles. Query mode defaults to `conversation`; whole-session defaults follow `view`. |
+| `maxChars` | number | Per-message cap. Default 2000. |
+| `maxMessages` | number | Maximum messages returned. Default 40 for query reads, 80 for whole-session reads. |
+| `maxTotalChars` | number | Total character budget across returned messages. Default 16000 for query reads; whole-session defaults to `maxChars` as a compact outline budget. |
 
 With neither `around` nor `query`, returns the whole session — a compact
 `outline` by default, or the full `transcript`.

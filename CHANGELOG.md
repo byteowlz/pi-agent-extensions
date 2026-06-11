@@ -4,6 +4,12 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed - 2026-06-11
+
+#### pi-history-search: bounded HistoryRead output
+
+`HistoryRead{query}` is now token-safe and more surgical by default: query reads return merged context windows around matching conversation messages unless a `roleFilter` is explicitly provided, cap results to 40 messages / 16k total characters by default, and report omitted context. Added `maxMessages` and `maxTotalChars` tool parameters for controlled expansion; `before`/`after` also tune query-match context windows.
+
 ### Changed - 2026-06-07
 
 #### pi-markdown-export: readable "outline" rendering by default
