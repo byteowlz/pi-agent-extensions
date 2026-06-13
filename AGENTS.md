@@ -117,6 +117,10 @@ Keep functions under complexity 25 by:
 
 Always update CHANGELOG.md after changing the code of an extension.
 
+## Versioning
+
+Whenever adding a feature or fixing something, bump the package version in `package.json` and keep lockfiles in sync. Use semver: patch for fixes, minor for new backward-compatible features, major for breaking changes.
+
 pi documentation:
 
 - [pi extension docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md)
