@@ -1,6 +1,6 @@
 {
   "name": "@byteowlz/pi-sudo",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "First-class sudo support for pi: masked password prompt, in-process credential cache, and a guard against pam_faillock lockouts.",
   "type": "module",
   "keywords": [

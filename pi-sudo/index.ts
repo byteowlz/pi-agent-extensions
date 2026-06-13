@@ -39,26 +39,39 @@ import { Type } from "typebox";
 const DEFAULT_TTL_MS = 5 * 60 * 1000; // matches sudo default timestamp_timeout
 const MAX_PROMPT_ATTEMPTS = 3;
 
-let cachedPassword: string | undefined;
-let cacheExpiresAt = 0;
-
-function cacheHasPassword(): boolean {
-	return typeof cachedPassword === "string" && Date.now() < cacheExpiresAt;
+interface PasswordCacheEntry {
+	password: string;
+	expiresAt: number;
 }
 
-function cacheSet(pw: string, ttlMs = DEFAULT_TTL_MS): void {
-	cachedPassword = pw;
-	cacheExpiresAt = Date.now() + ttlMs;
+const passwordCache = new Map<string, PasswordCacheEntry>();
+
+function cacheHasPassword(scope = "local"): boolean {
+	const entry = passwordCache.get(scope);
+	return typeof entry?.password === "string" && Date.now() < entry.expiresAt;
 }
 
-function cacheClear(): void {
-	cachedPassword = undefined;
-	cacheExpiresAt = 0;
+function cacheGet(scope = "local"): string | undefined {
+	if (!cacheHasPassword(scope)) return undefined;
+	return passwordCache.get(scope)?.password;
 }
 
-function cacheRemainingMs(): number {
-	if (!cacheHasPassword()) return 0;
-	return Math.max(0, cacheExpiresAt - Date.now());
+function cacheSet(pw: string, ttlMs = DEFAULT_TTL_MS, scope = "local"): void {
+	passwordCache.set(scope, { password: pw, expiresAt: Date.now() + ttlMs });
+}
+
+function cacheClear(scope?: string): void {
+	if (scope) passwordCache.delete(scope);
+	else passwordCache.clear();
+}
+
+function cacheRemainingMs(scope = "local"): number {
+	if (!cacheHasPassword(scope)) return 0;
+	return Math.max(0, (passwordCache.get(scope)?.expiresAt ?? 0) - Date.now());
+}
+
+function cacheScopes(): string[] {
+	return [...passwordCache.keys()].filter((scope) => cacheHasPassword(scope));
 }
 
 // ---------------------------------------------------------------------------
@@ -68,6 +81,18 @@ function cacheRemainingMs(): number {
 function truncateForDisplay(s: string, max: number): string {
 	if (s.length <= max) return s;
 	return `${s.slice(0, max - 1)}…`;
+}
+
+function shellQuote(s: string): string {
+	return `'${s.replaceAll("'", "'\\''")}'`;
+}
+
+function parseSshArgs(raw: string | undefined): string[] {
+	if (!raw?.trim()) return [];
+	// Intentionally conservative: users can pass common ssh flags as one string,
+	// but shell metacharacters are rejected because we spawn ssh directly.
+	if (/[;&|`$<>\n\r]/.test(raw)) throw new Error("sshOptions contains shell metacharacters");
+	return raw.trim().split(/\s+/).filter(Boolean);
 }
 
 // ---------------------------------------------------------------------------
@@ -159,12 +184,15 @@ interface SudoRunResult {
 const AUTH_FAIL_RE = /\b(incorrect password|try again|authentication failure|Sorry, try again)\b/i;
 const PROMPT_LINE_RE = /^\[sudo\] password for [^\n]*\n?/;
 
-function runSudo(command: string, password: string, signal: AbortSignal | undefined, timeoutMs: number): Promise<SudoRunResult> {
+function runPrivileged(
+	program: string,
+	args: string[],
+	password: string,
+	signal: AbortSignal | undefined,
+	timeoutMs: number
+): Promise<SudoRunResult> {
 	return new Promise((resolve) => {
-		// `-S` reads the password from stdin, `-p ""` suppresses the prompt
-		// string, `--` terminates sudo options safely, and the command runs
-		// through a login shell so PATH additions in ~/.profile apply.
-		const child = spawn("sudo", ["-S", "-p", "", "--", "bash", "-lc", command], {
+		const child = spawn(program, args, {
 			stdio: ["pipe", "pipe", "pipe"],
 			env: process.env,
 		});
@@ -241,15 +269,17 @@ type EnsureOutcome = SudoRunResult | { error: string };
 async function ensurePasswordAndRun(
 	command: string,
 	reason: string | undefined,
-	timeoutMs: number,
-	signal: AbortSignal | undefined,
-	ctx: ExtensionContext
+	_timeoutMs: number,
+	_signal: AbortSignal | undefined,
+	ctx: ExtensionContext,
+	scope: string,
+	runner: (password: string) => Promise<SudoRunResult>
 ): Promise<EnsureOutcome> {
 	let attempts = 0;
 
 	while (attempts < MAX_PROMPT_ATTEMPTS) {
-		if (!cacheHasPassword()) {
-			const title = "sudo: password required";
+		if (!cacheHasPassword(scope)) {
+			const title = scope === "local" ? "sudo: local password required" : `sudo: password required for ${scope}`;
 			const subtitle = reason
 				? `${reason} — will run: ${truncateForDisplay(command, 80)}`
 				: `will run: ${truncateForDisplay(command, 80)}`;
@@ -261,29 +291,27 @@ async function ensurePasswordAndRun(
 				attempts = attempts + 1;
 				continue;
 			}
-			cacheSet(pw);
+			cacheSet(pw, DEFAULT_TTL_MS, scope);
 		}
 
-		const pw = cachedPassword;
+		const pw = cacheGet(scope);
 		if (typeof pw !== "string") {
-			// Race: cleared between check and use. Loop to re-prompt.
 			attempts = attempts + 1;
 			continue;
 		}
 
-		const result = await runSudo(command, pw, signal, timeoutMs);
+		const result = await runner(pw);
 
 		if (result.cancelled || result.timedOut) return result;
 
 		if (result.authFailed) {
-			cacheClear();
+			cacheClear(scope);
 			attempts = attempts + 1;
-			ctx.ui.notify(`sudo: incorrect password (attempt ${attempts}/${MAX_PROMPT_ATTEMPTS})`, "warning");
+			ctx.ui.notify(`sudo: incorrect password for ${scope} (attempt ${attempts}/${MAX_PROMPT_ATTEMPTS})`, "warning");
 			continue;
 		}
 
-		// On success, refresh the TTL.
-		cacheSet(pw);
+		cacheSet(pw, DEFAULT_TTL_MS, scope);
 		return result;
 	}
 
@@ -311,6 +339,14 @@ export type SudoExecInput = {
 	timeout?: number;
 };
 
+export type RemoteSudoExecInput = {
+	host: string;
+	command: string;
+	sshOptions?: string;
+	reason?: string;
+	timeout?: number;
+};
+
 export default function pisudo(pi: ExtensionAPI): void {
 	// ---- session_shutdown: drop the cached password ---------------------
 	pi.on("session_shutdown", async () => {
@@ -322,15 +358,17 @@ export default function pisudo(pi: ExtensionAPI): void {
 		if (!isToolCallEventType("bash", event)) return;
 		const cmd = event.input.command ?? "";
 		// Allow `sudo -n …` (non-interactive credential check) since it cannot
-		// hang. Block any other leading `sudo` token because it would try to
-		// prompt and either deadlock or trip pam_faillock.
+		// hang. Block any other interactive sudo token locally or inside obvious
+		// ssh invocations; the latter needs a remote password cache, not the local one.
 		const hasNonInteractive = /(^|[\s;&|])sudo\s+-n\b/.test(cmd);
 		const hasInteractive = /(^|[\s;&|])sudo(\s+(?!-n\b)|$)/.test(cmd);
-		if (hasInteractive && !hasNonInteractive) {
+		const hasRemoteInteractive = /(^|[\s;&|])ssh\s+[^\n;&|]+\s+['"]?[^'"\n;&|]*\bsudo\b(?!\s+-n\b)/.test(cmd);
+		if ((hasInteractive || hasRemoteInteractive) && !hasNonInteractive) {
 			return {
 				block: true,
-				reason:
-					"Direct `sudo` in the bash tool is disabled by pi-sudo. Use the `sudo_exec` tool instead — it handles password prompting through pi's UI and avoids locking out the user via pam_faillock.",
+				reason: hasRemoteInteractive
+					? "Direct remote `sudo` through `ssh` is disabled by pi-sudo. Use the `remote_sudo_exec` tool so pi can prompt for and cache the remote machine's sudo password separately from the local password."
+					: "Direct `sudo` in the bash tool is disabled by pi-sudo. Use the `sudo_exec` tool instead — it handles password prompting through pi's UI and avoids locking out the user via pam_faillock.",
 			};
 		}
 		return undefined;
@@ -388,7 +426,9 @@ export default function pisudo(pi: ExtensionAPI): void {
 				};
 			}
 
-			const outcome = await ensurePasswordAndRun(command, reason, timeoutMs, signal, ctx);
+			const outcome = await ensurePasswordAndRun(command, reason, timeoutMs, signal, ctx, "local", (pw) =>
+				runPrivileged("sudo", ["-S", "-p", "", "--", "bash", "-lc", command], pw, signal, timeoutMs)
+			);
 
 			if ("error" in outcome) {
 				const details: SudoExecDetails = {
@@ -458,15 +498,118 @@ export default function pisudo(pi: ExtensionAPI): void {
 		},
 	});
 
+	// ---- Tool: remote_sudo_exec -----------------------------------------
+	pi.registerTool({
+		name: "remote_sudo_exec",
+		label: "remote sudo",
+		description:
+			"Run a shell command with sudo on a remote machine over ssh. Use this for `ssh host sudo ...`; it prompts for and caches the remote sudo password separately from local sudo.",
+		promptSnippet: "Run a sudo command on a remote host over ssh with remote password prompting",
+		promptGuidelines: [
+			"Use `remote_sudo_exec` instead of `bash` commands like `ssh host sudo ...`.",
+			"Pass the SSH destination in `host` (for example `user@example.com`) and only the remote root command in `command`.",
+			"Always pass a short human-readable `reason` explaining why root is needed on the remote machine.",
+		],
+		parameters: Type.Object({
+			host: Type.String({ description: "SSH destination, e.g. `server`, `user@server`, or a Host alias from ~/.ssh/config." }),
+			command: Type.String({
+				description: "Remote shell command to run under sudo. Executed remotely via `sudo -S -p '' -- bash -lc <command>`.",
+			}),
+			sshOptions: Type.Optional(
+				Type.String({
+					description: "Optional simple ssh flags, e.g. `-p 2222 -i ~/.ssh/key`. Shell metacharacters are rejected.",
+				})
+			),
+			reason: Type.Optional(Type.String({ description: "Short explanation shown in the password prompt." })),
+			timeout: Type.Optional(
+				Type.Number({
+					description: "Timeout in milliseconds (default 120000 = 2 minutes).",
+					minimum: 1000,
+					maximum: 30 * 60 * 1000,
+				})
+			),
+		}),
+
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			const timeoutMs = params.timeout ?? 120_000;
+			if (!ctx.hasUI) {
+				return {
+					content: [{ type: "text", text: "remote_sudo_exec requires an interactive UI to prompt for the remote sudo password" }],
+					details: { host: params.host, command: params.command, errorMessage: "remote_sudo_exec requires an interactive UI" },
+					isError: true,
+				};
+			}
+
+			let sshArgs: string[];
+			try {
+				sshArgs = parseSshArgs(params.sshOptions);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : "invalid sshOptions";
+				return {
+					content: [{ type: "text", text: message }],
+					details: { host: params.host, command: params.command, errorMessage: message },
+					isError: true,
+				};
+			}
+
+			const remote = `sudo -S -p '' -- bash -lc ${shellQuote(params.command)}`;
+			const scope = `remote:${params.host}`;
+			const outcome = await ensurePasswordAndRun(params.command, params.reason, timeoutMs, signal, ctx, scope, (pw) =>
+				runPrivileged("ssh", [...sshArgs, params.host, remote], pw, signal, timeoutMs)
+			);
+
+			if ("error" in outcome) {
+				return {
+					content: [{ type: "text", text: outcome.error }],
+					isError: true,
+					details: { host: params.host, command: params.command, errorMessage: outcome.error },
+				};
+			}
+
+			const header = outcome.cancelled
+				? "remote sudo: cancelled"
+				: outcome.timedOut
+					? `remote sudo: timed out after ${timeoutMs}ms`
+					: `remote sudo: exit ${outcome.exitCode}`;
+			const parts: string[] = [];
+			if (outcome.stdout) parts.push(`stdout:\n${outcome.stdout}`);
+			if (outcome.stderr) parts.push(`stderr:\n${outcome.stderr}`);
+			return {
+				content: [{ type: "text", text: parts.length > 0 ? `${header}\n\n${parts.join("\n")}` : header }],
+				details: {
+					host: params.host,
+					command: params.command,
+					exitCode: outcome.exitCode,
+					stdout: outcome.stdout,
+					stderr: outcome.stderr,
+					cancelled: outcome.cancelled,
+					timedOut: outcome.timedOut,
+				},
+				isError: outcome.exitCode !== 0 || outcome.cancelled || outcome.timedOut,
+			};
+		},
+
+		renderCall(args, theme) {
+			const host = typeof args?.host === "string" ? args.host : "";
+			const cmd = typeof args?.command === "string" ? args.command : "";
+			return new Text(
+				`${theme.fg("toolTitle", theme.bold("remote sudo "))}${theme.fg("muted", `${host}: ${truncateForDisplay(cmd, 100)}`)}`,
+				0,
+				0
+			);
+		},
+	});
+
 	// ---- Commands --------------------------------------------------------
 	pi.registerCommand("sudo-status", {
 		description: "Show pi-sudo password cache status",
 		handler: async (_args, ctx) => {
-			if (cacheHasPassword()) {
-				const secs = Math.ceil(cacheRemainingMs() / 1000);
-				ctx.ui.notify(`sudo: password cached (${secs}s remaining)`, "info");
+			const scopes = cacheScopes();
+			if (scopes.length > 0) {
+				const summary = scopes.map((scope) => `${scope} ${Math.ceil(cacheRemainingMs(scope) / 1000)}s`).join(", ");
+				ctx.ui.notify(`sudo: cached passwords (${summary})`, "info");
 			} else {
-				ctx.ui.notify("sudo: no cached password", "info");
+				ctx.ui.notify("sudo: no cached passwords", "info");
 			}
 		},
 	});
@@ -482,7 +625,9 @@ export default function pisudo(pi: ExtensionAPI): void {
 	pi.registerCommand("sudo-test", {
 		description: "Verify the cached sudo password still works (runs `sudo true`)",
 		handler: async (_args, ctx) => {
-			const outcome = await ensurePasswordAndRun("true", "sudo-test", 15_000, undefined, ctx);
+			const outcome = await ensurePasswordAndRun("true", "sudo-test", 15_000, undefined, ctx, "local", (pw) =>
+				runPrivileged("sudo", ["-S", "-p", "", "--", "bash", "-lc", "true"], pw, undefined, 15_000)
+			);
 			if ("error" in outcome) {
 				ctx.ui.notify(outcome.error, "error");
 				return;

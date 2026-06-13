@@ -4,6 +4,12 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Added - 2026-06-13
+
+#### pi-sudo: remote sudo support
+
+Added `remote_sudo_exec` for commands that need sudo on an SSH target. Remote sudo passwords are prompted through pi's masked UI and cached per host (`remote:<host>`) separately from the local sudo password. The bash guard now detects obvious `ssh host sudo ...` commands and tells the agent to use `remote_sudo_exec`, so the extension can distinguish local elevation from remote elevation.
+
 ### Fixed - 2026-06-11
 
 #### pi-history-search: bounded HistoryRead output

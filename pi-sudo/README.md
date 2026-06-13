@@ -1,10 +1,10 @@
 # pi-sudo
 
-First-class `sudo` support for pi. Gives the agent a `sudo_exec` tool that
-prompts for the user's password through pi's own masked TUI, caches it
-in-process for the timestamp window, and blocks naked `sudo` in the bash
-tool so the agent can never hang on an unanswerable password prompt or lock
-the account via `pam_faillock`.
+First-class `sudo` support for pi. Gives the agent local and remote sudo tools
+that prompt for passwords through pi's own masked TUI, cache them in-process per
+machine for the timestamp window, and block naked `sudo` in the bash tool so the
+agent can never hang on an unanswerable password prompt or lock the account via
+`pam_faillock`.
 
 ## Install
 
@@ -26,10 +26,11 @@ account — even though no password was ever typed.
 This extension removes the trigger by:
 
 - Never letting interactive `sudo …` run from the `bash` tool.
+- Detecting obvious `ssh host sudo …` commands and routing the agent to a remote-specific tool.
 - Piping the password on stdin via `sudo -S`, which has no TTY requirement.
 - Prompting the user only once per timestamp window, through pi's native UI.
 
-## Tool
+## Tools
 
 ### `sudo_exec`
 
@@ -46,11 +47,30 @@ reason. The password is cached in-process for 5 minutes (matching sudo's
 default `timestamp_timeout`). Auth failures clear the cache immediately and
 retry up to three times, then return a hard error to the LLM.
 
-The LLM is instructed (via `promptGuidelines`) to use this tool whenever
-root is needed. The built-in `bash` tool is guarded: any command starting
-with interactive `sudo …` is blocked with an error telling the LLM to use
-`sudo_exec` instead. `sudo -n …` (non-interactive credential check) is
-still allowed since it cannot hang.
+The LLM is instructed (via `promptGuidelines`) to use this tool whenever local
+root is needed. The built-in `bash` tool is guarded: any command starting with
+interactive `sudo …` is blocked with an error telling the LLM to use `sudo_exec`
+instead. `sudo -n …` (non-interactive credential check) is still allowed since it
+cannot hang.
+
+### `remote_sudo_exec`
+
+```ts
+remote_sudo_exec({
+  host: string,        // ssh destination: server, user@server, or ~/.ssh/config Host
+  command: string,     // remote root command, run via sudo bash -lc
+  sshOptions?: string, // optional simple flags like "-p 2222 -i ~/.ssh/key"
+  reason?: string,     // shown to the user in the password prompt
+  timeout?: number,    // ms, default 120000, max 30min
+})
+```
+
+Use this instead of `bash` commands like `ssh host sudo systemctl restart foo`.
+The extension prompts for the remote machine's sudo password and caches it under
+`remote:<host>`, separately from the local password and from other hosts. SSH
+itself still uses the user's normal SSH setup (agent, keys, config, known_hosts).
+The sudo password is piped to the remote `sudo -S -p '' -- bash -lc <command>`
+over the SSH process stdin; it is never placed in argv, env, or files.
 
 ## Commands
 
