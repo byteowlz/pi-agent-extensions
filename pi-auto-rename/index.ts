@@ -856,14 +856,36 @@ function resolveReadableIdSuffix(
 	if (!config.readableIdSuffix) return null;
 	const override = resolveReadableIdOverride(config);
 	if (override) {
-		return override === name ? null : override;
+		return name.includes(override) ? null : override;
 	}
 	if (!sessionId || !wordlist) {
 		debugNotify(ctx, config, "[auto-rename] readableIdSuffix enabled but wordlist or sessionId missing", "warning");
 		return null;
 	}
 	const readableId = readableIdFromSessionId(sessionId, wordlist);
-	return readableId === name ? null : readableId;
+	return name.includes(readableId) ? null : readableId;
+}
+
+function extractReadableIdSuffix(name: string | null | undefined): string | null {
+	const match = name?.trim().match(/\s\[([a-z][a-z0-9-]*-[a-z][a-z0-9-]*-[a-z][a-z0-9-]*)\]$/i);
+	return match?.[1] ?? null;
+}
+
+function formatManualNamePreservingReadableId(
+	name: string,
+	currentName: string | null | undefined,
+	config: ResolvedConfig,
+	ctx: ExtensionCommandContext
+): string {
+	if (!config.readableIdSuffix || extractReadableIdSuffix(name)) return name;
+
+	const currentSuffix = extractReadableIdSuffix(currentName);
+	if (currentSuffix && !name.includes(currentSuffix)) return formatFullName("", name, currentSuffix);
+
+	const sessionId = getSessionId(ctx);
+	const wordlist = loadWordlist(config, ctx.cwd);
+	const suffix = resolveReadableIdSuffix(config, sessionId, wordlist, name, ctx);
+	return formatFullName("", name, suffix);
 }
 
 // ============================================================================
@@ -1090,9 +1112,10 @@ export default function (pi: ExtensionAPI) {
 			} else if (trimmed === "test") {
 				await handleTest(ctx, config);
 			} else if (trimmed) {
-				pi.setSessionName(trimmed);
+				const fullName = formatManualNamePreservingReadableId(trimmed, pi.getSessionName(), config, ctx);
+				setNameAndNotify(fullName, ctx);
 				sessionRenamed = true;
-				ctx.ui.notify(`Session renamed: ${trimmed}`, "info");
+				ctx.ui.notify(`Session renamed: ${fullName}`, "info");
 			} else {
 				const name = pi.getSessionName();
 				ctx.ui.notify(name ? `Current name: ${name}` : "No session name set", "info");
