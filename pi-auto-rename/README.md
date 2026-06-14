@@ -172,7 +172,7 @@ Result: `feature/auth: Add OAuth Support`
 | Command | Description |
 |---------|-------------|
 | `/auto-rename` | Show current session name |
-| `/auto-rename <name>` | Manually set session name |
+| `/auto-rename <name>` | Manually set session name (preserves the readable-id suffix when `readableIdSuffix` is enabled) |
 | `/auto-rename regen` | Force regenerate name from first query |
 | `/auto-rename config` | Show current configuration |
 | `/auto-rename init` | Create default config in current directory |
@@ -249,6 +249,7 @@ This is the canonical field for session names in pi-agent session files.
 - Use a fast, cheap model (like `claude-3-5-haiku` or `gpt-4o-mini`) for quick naming
 - Set up a fallback model from a different provider for reliability
 - Use `fallbackDeterministic: "readable-id"` for canonical session IDs
+- Use `readableIdSuffix: true` when you want manual renames to keep the stable human-readable session id in the TUI
 - Keep the prefix short to avoid truncation in the session selector
 - Enable `debug: true` temporarily to troubleshoot issues
 - Use `/auto-rename test` to verify model connectivity before relying on it
