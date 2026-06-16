@@ -71,3 +71,4 @@
 {"id":"evt_be4ppqj1","issue_id":"piext-3kk3.6","action":"updated","timestamp":"2026-06-07T19:39:45.462948058Z","changes":[{"field":"status","from":"open","to":"in_progress"}]}
 {"id":"evt_tcd4nt5d","issue_id":"piext-3kk3.6","action":"closed","timestamp":"2026-06-07T19:42:49.181020982Z","note":"README + CHANGELOG updated; pi-markdown-export passes biome + typecheck (pre-existing errors in pi-kyz/pi-message-timestamps are unrelated)"}
 {"id":"evt_fnxh6t14","issue_id":"piext-3kk3","action":"closed","timestamp":"2026-06-07T19:42:49.196020889Z","note":"All child tasks complete: bulk export, multi-select picker, config-driven redaction implemented and verified"}
+{"id":"evt_s85dv810","issue_id":"piext-b2rp","action":"created","timestamp":"2026-06-16T12:18:47.331247489Z"}
