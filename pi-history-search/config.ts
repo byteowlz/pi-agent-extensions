@@ -27,6 +27,8 @@ export interface HistorySearchConfig {
 	maxResults: number;
 	/** Snippets returned per matching session. */
 	snippetsPerSession: number;
+	/** Optional manual aliases keyed by branch/session id. */
+	branchAliases: Record<string, string>;
 }
 
 const CONFIG_FILENAME = "history-search.json";
@@ -38,6 +40,7 @@ export const DEFAULT_CONFIG: HistorySearchConfig = {
 	includeToolResults: true,
 	maxResults: 10,
 	snippetsPerSession: 3,
+	branchAliases: {},
 };
 
 export function loadConfig(cwd: string): HistorySearchConfig {

@@ -35,6 +35,12 @@
 			"minimum": 1,
 			"default": 3,
 			"description": "Number of matching snippets returned per session."
+		},
+		"branchAliases": {
+			"type": "object",
+			"default": {},
+			"additionalProperties": { "type": "string" },
+			"description": "Optional manual aliases keyed by branch/session id."
 		}
 	}
 }

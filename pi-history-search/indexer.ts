@@ -93,12 +93,30 @@ export interface HistoryMatch {
 	snippet: string;
 }
 
+export interface BranchMeta {
+	branchId: string;
+	parentBranchId: string | null;
+	rootSessionId: string;
+	forkMsgIndex: number | null;
+	createdAt: string;
+	updatedAt: string;
+	cwd: string;
+	lastCwd: string;
+	messageCount: number;
+	lastUserPreview: string | null;
+	lastAssistantPreview: string | null;
+	recentFiles: string[];
+	recentCommands: string[];
+	alias?: string;
+}
+
 export interface HistoryHit {
 	sessionId: string;
 	project: string;
 	timestamp: string;
 	title: string | null;
 	matches: HistoryMatch[];
+	branch?: BranchMeta;
 }
 
 export interface IndexStats {
@@ -485,16 +503,23 @@ function searchDb(
 	query: string,
 	limit: number,
 	snippetsPerSession: number,
-	roleFilter: RoleFilter
+	roleFilter: RoleFilter,
+	allowedSessionIds?: Set<string>
 ): HistoryHit[] {
 	const tokens = sanitizeTokens(query);
 	const ftsQuery = buildFtsQuery(tokens);
 	if (!ftsQuery) return [];
 
+	const sessionFilter =
+		allowedSessionIds && allowedSessionIds.size > 0
+			? ` AND session_path IN (SELECT path FROM sessions WHERE session_id IN (${[...allowedSessionIds]
+					.map((id) => `'${id.replace(/'/g, "''")}'`)
+					.join(", ")}))`
+			: "";
 	const best = db
 		.prepare(
 			`SELECT session_path AS path, MIN(rank) AS br
-			 FROM messages_fts WHERE messages_fts MATCH ?${roleSqlClause(roleFilter)}
+			 FROM messages_fts WHERE messages_fts MATCH ?${roleSqlClause(roleFilter)}${sessionFilter}
 			 GROUP BY session_path ORDER BY br LIMIT ?`
 		)
 		.all(ftsQuery, limit) as unknown as { path: string; br: number }[];
@@ -567,12 +592,15 @@ function scanProject(
 	query: string,
 	limit: number,
 	snippetsPerSession: number,
-	roleFilter: RoleFilter
+	roleFilter: RoleFilter,
+	allowedSessionIds?: Set<string>
 ): HistoryHit[] {
 	const tokens = sanitizeTokens(query);
 	if (tokens.length === 0) return [];
 	const scored: { hit: HistoryHit; score: number }[] = [];
 	for (const filename of listSessionFiles(projDir)) {
+		const sessionId = sessionIdFromFilename(filename);
+		if (allowedSessionIds && !allowedSessionIds.has(sessionId)) continue;
 		const filePath = path.join(projDir, filename);
 		const { score, matches, firstUserMessage } = scanFile(filePath, tokens, snippetsPerSession, roleFilter);
 		if (score === 0) continue;
@@ -601,21 +629,22 @@ export async function searchProject(
 	config: HistorySearchConfig,
 	limit: number,
 	isCurrent: boolean,
-	roleFilter: RoleFilter = "all"
+	roleFilter: RoleFilter = "all",
+	allowedSessionIds?: Set<string>
 ): Promise<HistoryHit[]> {
 	const project = prettyProject(path.basename(projDir));
 	if (isCurrent) {
 		try {
 			await updateProjectIndex(projDir, config);
 			const db = openDb(projDir, "rw");
-			if (db) return searchDb(db, project, query, limit, config.snippetsPerSession, roleFilter);
+			if (db) return searchDb(db, project, query, limit, config.snippetsPerSession, roleFilter, allowedSessionIds);
 		} catch {
 			// fall through to read-only / scan
 		}
 	}
 	const ro = openDb(projDir, "ro");
-	if (ro) return searchDb(ro, project, query, limit, config.snippetsPerSession, roleFilter);
-	return scanProject(projDir, project, query, limit, config.snippetsPerSession, roleFilter);
+	if (ro) return searchDb(ro, project, query, limit, config.snippetsPerSession, roleFilter, allowedSessionIds);
+	return scanProject(projDir, project, query, limit, config.snippetsPerSession, roleFilter, allowedSessionIds);
 }
 
 /**
@@ -637,12 +666,16 @@ export function queryProject(
 }
 
 /** Most recent sessions in a project (for the overlay's empty-query view). */
-export function listRecent(projDir: string, limit: number): HistoryHit[] {
+export function listRecent(projDir: string, limit: number, allowedSessionIds?: Set<string>): HistoryHit[] {
 	const project = prettyProject(path.basename(projDir));
 	const db = openDb(projDir, fs.existsSync(indexDbPath(projDir)) ? "ro" : "rw");
 	if (db) {
+		const where =
+			allowedSessionIds && allowedSessionIds.size > 0
+				? `WHERE session_id IN (${[...allowedSessionIds].map((id) => `'${id.replace(/'/g, "''")}'`).join(", ")})`
+				: "";
 		const rows = db
-			.prepare("SELECT session_id, session_ts, first_user_message FROM sessions ORDER BY session_ts DESC LIMIT ?")
+			.prepare(`SELECT session_id, session_ts, first_user_message FROM sessions ${where} ORDER BY session_ts DESC LIMIT ?`)
 			.all(limit) as unknown as { session_id: string; session_ts: string; first_user_message: string | null }[];
 		return rows.map((r) => ({
 			sessionId: r.session_id,
@@ -653,7 +686,11 @@ export function listRecent(projDir: string, limit: number): HistoryHit[] {
 		}));
 	}
 	// No index: derive from filenames, newest first.
-	const files = listSessionFiles(projDir).sort().reverse().slice(0, limit);
+	const files = listSessionFiles(projDir)
+		.filter((f) => !allowedSessionIds || allowedSessionIds.has(sessionIdFromFilename(f)))
+		.sort()
+		.reverse()
+		.slice(0, limit);
 	return files.map((filename) => ({
 		sessionId: sessionIdFromFilename(filename),
 		project,
@@ -672,6 +709,239 @@ export function listProjectDirs(base: string): string[] {
 		return [];
 	}
 	return entries.filter((e) => e.isDirectory()).map((e) => path.join(base, e.name));
+}
+
+// ── Branch/session metadata ─────────────────────────────────────────
+
+interface SessionHeader {
+	sessionId: string;
+	filePath: string;
+	parentSessionId: string | null;
+	timestamp: string;
+	cwd: string;
+}
+
+function extractTextBlock(content: unknown): string {
+	if (!Array.isArray(content)) return "";
+	const text = content
+		.map((b) => (b && typeof b === "object" && (b as { type?: string }).type === "text" ? (b as { text?: string }).text : ""))
+		.filter((t): t is string => typeof t === "string" && t.trim().length > 0)
+		.join(" ")
+		.replace(/\s+/g, " ")
+		.trim();
+	return text;
+}
+
+function extractPathLikes(input: unknown, out: Set<string>): void {
+	if (!input) return;
+	if (typeof input === "string") {
+		if (input.includes("/") || input.endsWith(".ts") || input.endsWith(".js") || input.endsWith(".json")) {
+			out.add(input);
+		}
+		return;
+	}
+	if (Array.isArray(input)) {
+		for (const v of input) extractPathLikes(v, out);
+		return;
+	}
+	if (typeof input === "object") {
+		for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+			if (["path", "file", "filePath", "target", "cwd", "oldPath", "newPath"].includes(k)) extractPathLikes(v, out);
+			else if (typeof v === "object") extractPathLikes(v, out);
+		}
+	}
+}
+
+function parseSessionHeader(filePath: string): SessionHeader | null {
+	try {
+		const first = fs.readFileSync(filePath, "utf-8").split("\n", 1)[0];
+		if (!first) return null;
+		const o = JSON.parse(first) as Record<string, unknown>;
+		if (o.type !== "session") return null;
+		const parentPath = typeof o.parentSession === "string" ? o.parentSession : null;
+		return {
+			sessionId: String(o.id ?? sessionIdFromFilename(path.basename(filePath))),
+			filePath,
+			parentSessionId: parentPath ? sessionIdFromFilename(path.basename(parentPath)) : null,
+			timestamp: typeof o.timestamp === "string" ? o.timestamp : timestampFromFilename(path.basename(filePath)),
+			cwd: typeof o.cwd === "string" ? o.cwd : "",
+		};
+	} catch {
+		return null;
+	}
+}
+
+function computeForkMsgIndex(parentFilePath: string | null, childFirstParentId: string | null): number | null {
+	if (!parentFilePath || !childFirstParentId) return null;
+	try {
+		const lines = fs.readFileSync(parentFilePath, "utf-8").split("\n");
+		let msgIndex = -1;
+		for (const line of lines) {
+			if (!line.trim()) continue;
+			const e = JSON.parse(line) as Record<string, unknown>;
+			if (e.type !== "message") continue;
+			msgIndex += 1;
+			if (e.id === childFirstParentId) return msgIndex;
+		}
+	} catch {
+		// ignore parse failures
+	}
+	return null;
+}
+
+function buildBranchMeta(
+	filePath: string,
+	headersById: Map<string, SessionHeader>,
+	aliases: Record<string, string>
+): BranchMeta | null {
+	const header = parseSessionHeader(filePath);
+	if (!header) return null;
+	let data: string;
+	try {
+		data = fs.readFileSync(filePath, "utf-8");
+	} catch {
+		return null;
+	}
+	const lines = data.split("\n");
+	let messageCount = 0;
+	let lastUserPreview: string | null = null;
+	let lastAssistantPreview: string | null = null;
+	const lastCwd = header.cwd;
+	let updatedAt = header.timestamp;
+	let childFirstParentId: string | null = null;
+	const commands: string[] = [];
+	const files = new Set<string>();
+
+	for (const line of lines) {
+		if (!line.trim()) continue;
+		let e: Record<string, unknown>;
+		try {
+			e = JSON.parse(line) as Record<string, unknown>;
+		} catch {
+			continue;
+		}
+		if (typeof e.timestamp === "string") updatedAt = e.timestamp;
+		if (e.type !== "message") continue;
+		messageCount += 1;
+		if (!childFirstParentId && typeof e.parentId === "string") childFirstParentId = e.parentId;
+		const msg = e.message as Record<string, unknown> | undefined;
+		if (!msg) continue;
+		const role = String(msg.role ?? "");
+		const preview = extractTextBlock(msg.content);
+		if (role === "user" && preview) lastUserPreview = preview.slice(0, 180);
+		if (role === "assistant" && preview) lastAssistantPreview = preview.slice(0, 180);
+
+		if (Array.isArray(msg.content)) {
+			for (const block of msg.content as Record<string, unknown>[]) {
+				if (block?.type === "toolCall") {
+					if (typeof block.name === "string" && block.name === "bash") {
+						const cmd = (block.arguments as { command?: unknown })?.command;
+						if (typeof cmd === "string") commands.push(cmd);
+					}
+					extractPathLikes(block.arguments, files);
+				}
+			}
+		}
+		if (role === "toolResult") {
+			const toolName = (msg.toolName as string | undefined) ?? "";
+			const details = msg.details;
+			if (toolName === "bash") {
+				const cmd = (details as { command?: unknown } | undefined)?.command;
+				if (typeof cmd === "string") commands.push(cmd);
+			}
+			extractPathLikes(details, files);
+		}
+	}
+
+	const parentBranchId = header.parentSessionId;
+	let rootSessionId = header.sessionId;
+	const seen = new Set<string>();
+	while (true) {
+		const cur = headersById.get(rootSessionId);
+		if (!cur?.parentSessionId || seen.has(rootSessionId)) break;
+		seen.add(rootSessionId);
+		rootSessionId = cur.parentSessionId;
+	}
+	const parentPath = parentBranchId ? (headersById.get(parentBranchId)?.filePath ?? null) : null;
+
+	return {
+		branchId: header.sessionId,
+		parentBranchId,
+		rootSessionId,
+		forkMsgIndex: computeForkMsgIndex(parentPath, childFirstParentId),
+		createdAt: header.timestamp,
+		updatedAt,
+		cwd: header.cwd,
+		lastCwd,
+		messageCount,
+		lastUserPreview,
+		lastAssistantPreview,
+		recentFiles: [...files].slice(-8),
+		recentCommands: commands.slice(-8),
+		alias: aliases[header.sessionId],
+	};
+}
+
+export function listBranchesInProject(
+	projDir: string,
+	currentSessionId: string | null,
+	aliases: Record<string, string> = {}
+): { currentBranchId: string | null; branches: BranchMeta[] } {
+	const headers: SessionHeader[] = [];
+	for (const filename of listSessionFiles(projDir)) {
+		const parsed = parseSessionHeader(path.join(projDir, filename));
+		if (parsed) headers.push(parsed);
+	}
+	const headersById = new Map(headers.map((h) => [h.sessionId, h]));
+	const branches = headers
+		.map((h) => buildBranchMeta(h.filePath, headersById, aliases))
+		.filter((b): b is BranchMeta => b !== null)
+		.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+	return { currentBranchId: currentSessionId, branches };
+}
+
+export function branchScopeSessionIds(
+	branches: BranchMeta[],
+	currentBranchId: string | null,
+	scope: "current-branch" | "siblings" | "ancestors" | "descendants" | "current-tree" | "project"
+): Set<string> | undefined {
+	if (scope === "project") return undefined;
+	if (!currentBranchId) return new Set();
+	const byId = new Map(branches.map((b) => [b.branchId, b]));
+	const current = byId.get(currentBranchId);
+	if (!current) return new Set();
+	if (scope === "current-branch") return new Set([currentBranchId]);
+	if (scope === "siblings") {
+		return new Set(
+			branches.filter((b) => b.parentBranchId && b.parentBranchId === current.parentBranchId).map((b) => b.branchId)
+		);
+	}
+	if (scope === "ancestors") {
+		const out = new Set<string>();
+		let p = current.parentBranchId;
+		while (p && byId.has(p)) {
+			out.add(p);
+			p = byId.get(p)?.parentBranchId ?? null;
+		}
+		return out;
+	}
+	if (scope === "descendants") {
+		const out = new Set<string>();
+		const stack = [currentBranchId];
+		while (stack.length > 0) {
+			const id = stack.pop() as string;
+			for (const b of branches) {
+				if (b.parentBranchId === id && !out.has(b.branchId)) {
+					out.add(b.branchId);
+					stack.push(b.branchId);
+				}
+			}
+		}
+		out.delete(currentBranchId);
+		return out;
+	}
+	const root = current.rootSessionId;
+	return new Set(branches.filter((b) => b.rootSessionId === root).map((b) => b.branchId));
 }
 
 // ── Reading a specific session ───────────────────────────────────────
