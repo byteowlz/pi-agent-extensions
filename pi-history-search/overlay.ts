@@ -41,6 +41,16 @@ function oneLine(s: string): string {
 	return s.replace(/\s+/g, " ").trim();
 }
 
+const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+
+function visibleLength(s: string): number {
+	return s.replace(ANSI_ESCAPE, "").length;
+}
+
+function padVisible(s: string, width: number): string {
+	return s + " ".repeat(Math.max(0, width - visibleLength(s)));
+}
+
 /** Basic greedy word-wrap to a column width. */
 function wrap(text: string, width: number): string[] {
 	const out: string[] = [];
@@ -176,15 +186,32 @@ export class HistoryOverlay implements Component {
 	// ── Render ────────────────────────────────────────────────────────
 
 	render(width: number): string[] {
-		const w = Math.max(20, width);
-		return this.mode === "preview" ? this.renderPreview(w) : this.renderSearch(w);
+		const w = Math.max(24, width);
+		const contentWidth = Math.max(20, w - 2);
+		const body = this.mode === "preview" ? this.renderPreview(contentWidth) : this.renderSearch(contentWidth);
+		return this.frame(body, contentWidth);
+	}
+
+	private frame(lines: string[], innerWidth: number): string[] {
+		const t = this.theme;
+		const border = t.fg("muted", "─".repeat(innerWidth));
+		return [
+			t.fg("muted", "┌") + border + t.fg("muted", "┐"),
+			...lines.map((line) => t.fg("muted", "│") + padVisible(truncateToWidth(line, innerWidth), innerWidth) + t.fg("muted", "│")),
+			t.fg("muted", "└") + border + t.fg("muted", "┘"),
+		];
 	}
 
 	private renderSearch(w: number): string[] {
 		const t = this.theme;
 		const lines: string[] = [];
 		lines.push(t.fg("accent", t.bold("History search")) + t.fg("muted", "  ↑↓ select · ⏎ preview · Esc close"));
-		lines.push(t.fg("text", "> ") + this.query + t.fg("accent", "▏"));
+		const inputInner = Math.max(10, w - 6);
+		const prompt = t.fg("text", truncateToWidth(`> ${this.query}`, Math.max(0, inputInner - 1)));
+		const inputText = padVisible(prompt + t.fg("accent", "▏"), inputInner);
+		lines.push(t.fg("muted", `  ┌${"─".repeat(inputInner)}┐`));
+		lines.push(t.fg("muted", "  │") + inputText + t.fg("muted", "│"));
+		lines.push(t.fg("muted", `  └${"─".repeat(inputInner)}┘`));
 		lines.push("");
 
 		if (this.results.length === 0) {

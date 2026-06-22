@@ -21,9 +21,11 @@ import {
 	type HistoryHit,
 	type ReadResult,
 	type RoleFilter,
+	branchScopeSessionIds,
 	closeAll,
 	findSessionPath,
 	getStats,
+	listBranchesInProject,
 	listProjectDirs,
 	listRecent,
 	projectDir,
@@ -44,9 +46,9 @@ const HistorySearchParams = Type.Object({
 		})
 	),
 	scope: Type.Optional(
-		StringEnum(["project", "all"] as const, {
+		StringEnum(["project", "all", "current-tree", "current-branch", "siblings", "ancestors", "descendants"] as const, {
 			description:
-				"'project' (default) searches only the current project's history. 'all' also searches other projects, but only those the environment exposes (e.g. a sandbox may restrict this).",
+				"'project' (default) searches current project history. 'all' spans accessible projects. Branch-aware scopes: 'current-tree', 'current-branch', 'siblings', 'ancestors', 'descendants'.",
 		})
 	),
 	project: Type.Optional(
@@ -61,8 +63,19 @@ const HistorySearchParams = Type.Object({
 	limit: Type.Optional(Type.Number({ description: "Max sessions to return (default from config, usually 10)." })),
 });
 
+const HistoryBranchesParams = Type.Object({
+	scope: Type.Optional(
+		StringEnum(["current-tree", "project"] as const, {
+			description: "Branch listing scope. 'current-tree' default limits to current session tree, 'project' lists all in project.",
+		})
+	),
+	grep: Type.Optional(Type.String({ description: "Optional text filter across branch id/alias/previews/files/commands." })),
+	limit: Type.Optional(Type.Number({ description: "Maximum branches to return (default 50)." })),
+});
+
 const HistoryReadParams = Type.Object({
-	sessionId: Type.String({ description: "Session id from a HistorySearch result." }),
+	sessionId: Type.Optional(Type.String({ description: "Session id from a HistorySearch result." })),
+	branchId: Type.Optional(Type.String({ description: "Read by branch id (same as session id for branches)." })),
 	query: Type.Optional(
 		Type.String({ description: "Return only messages in this session matching these terms (with the message text)." })
 	),
@@ -120,6 +133,18 @@ function formatHits(query: string | undefined, scope: string, hits: HistoryHit[]
 	const lines: string[] = [header, ""];
 	hits.forEach((h, i) => {
 		lines.push(`[${i + 1}] ${h.project} · ${formatTs(h.timestamp)} · sessionId=${h.sessionId}`);
+		if (h.branch) {
+			lines.push(
+				`    branch=${h.branch.alias ? `${h.branch.alias} (${h.branch.branchId})` : h.branch.branchId} parent=${h.branch.parentBranchId ?? "-"} root=${h.branch.rootSessionId} forkMsg=${h.branch.forkMsgIndex ?? "-"}`
+			);
+			lines.push(
+				`    created=${formatTs(h.branch.createdAt)} updated=${formatTs(h.branch.updatedAt)} cwd=${h.branch.cwd} lastCwd=${h.branch.lastCwd} messages=${h.branch.messageCount}`
+			);
+			if (h.branch.lastUserPreview) lines.push(`    last user: ${h.branch.lastUserPreview}`);
+			if (h.branch.lastAssistantPreview) lines.push(`    last assistant: ${h.branch.lastAssistantPreview}`);
+			if (h.branch.recentFiles.length > 0) lines.push(`    files: ${h.branch.recentFiles.join(", ")}`);
+			if (h.branch.recentCommands.length > 0) lines.push(`    commands: ${h.branch.recentCommands.join(" | ")}`);
+		}
 		if (h.title) lines.push(`    title: ${h.title.slice(0, 120)}`);
 		for (const m of h.matches) {
 			lines.push(`    ${m.role} (msg ${m.msgIndex}): ${m.snippet}`);
@@ -129,6 +154,26 @@ function formatHits(query: string | undefined, scope: string, hits: HistoryHit[]
 	lines.push(
 		"Use HistoryRead{sessionId, around: <msg>} to expand a hit, or HistoryRead{sessionId, query} to pull all matches from a session."
 	);
+	return lines.join("\n").trimEnd();
+}
+
+function formatBranches(
+	branches: ReturnType<typeof listBranchesInProject>["branches"],
+	scope: "current-tree" | "project"
+): string {
+	if (branches.length === 0) return `No branches found (scope: ${scope}).`;
+	const lines = [`${branches.length} branch(es) (scope: ${scope}):`, ""];
+	for (const b of branches) {
+		lines.push(
+			`- ${b.alias ? `${b.alias} (${b.branchId})` : b.branchId} parent=${b.parentBranchId ?? "-"} root=${b.rootSessionId} forkMsg=${b.forkMsgIndex ?? "-"}`
+		);
+		lines.push(`  updated=${formatTs(b.updatedAt)} messages=${b.messageCount} cwd=${b.cwd}`);
+		if (b.lastUserPreview) lines.push(`  last user: ${b.lastUserPreview}`);
+		if (b.lastAssistantPreview) lines.push(`  last assistant: ${b.lastAssistantPreview}`);
+		if (b.recentFiles.length > 0) lines.push(`  files: ${b.recentFiles.join(", ")}`);
+		if (b.recentCommands.length > 0) lines.push(`  commands: ${b.recentCommands.join(" | ")}`);
+		lines.push("");
+	}
 	return lines.join("\n").trimEnd();
 }
 
@@ -168,10 +213,18 @@ async function runSearch(
 	const scope = params.scope ?? "project";
 	const query = params.query?.trim() ?? "";
 	const roleFilter: RoleFilter = params.roleFilter ?? "conversation";
+	const currentSessionId = (ctx.sessionManager.getSessionId?.() as string | undefined) ?? null;
+	const branchListing = listBranchesInProject(currentDir, currentSessionId, config.branchAliases);
 
 	if (scope !== "all") {
-		// Blank query → most recent sessions ("what did we do here / recently").
-		return query ? searchProject(currentDir, query, config, limit, true, roleFilter) : listRecent(currentDir, limit);
+		const branchScope =
+			scope === "project" ? "project" : (scope as "current-tree" | "current-branch" | "siblings" | "ancestors" | "descendants");
+		const scopedIds = branchScopeSessionIds(branchListing.branches, branchListing.currentBranchId, branchScope);
+		const baseHits = query
+			? await searchProject(currentDir, query, config, limit, true, roleFilter, scopedIds)
+			: listRecent(currentDir, limit, scopedIds);
+		const metaById = new Map(branchListing.branches.map((b) => [b.branchId, b]));
+		return baseHits.map((h) => ({ ...h, branch: metaById.get(h.sessionId) }));
 	}
 
 	const dirs = listProjectDirs(base);
@@ -301,6 +354,54 @@ export default function historySearch(pi: ExtensionAPI): void {
 		},
 	});
 
+	// ── HistoryBranches ─────────────────────────────────────────────
+	pi.registerTool({
+		name: "HistoryBranches",
+		label: "History Branches",
+		description:
+			"List branches in the current session tree (or whole project) with mechanical metadata only: ids, parent/root, fork msg, previews, files, and commands.",
+		parameters: HistoryBranchesParams,
+		async execute(_id, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
+			const config = loadConfig(ctx.cwd);
+			if (!config.enabled) return disabled("branches");
+			const base = resolveSessionsBase(config);
+			const dir = projectDir(base, ctx.cwd);
+			const currentSessionId = (ctx.sessionManager.getSessionId?.() as string | undefined) ?? null;
+			const listing = listBranchesInProject(dir, currentSessionId, config.branchAliases);
+			const scope = params.scope ?? "current-tree";
+			const allowed = branchScopeSessionIds(
+				listing.branches,
+				listing.currentBranchId,
+				scope === "project" ? "project" : "current-tree"
+			);
+			const grep = params.grep?.trim().toLowerCase();
+			let branches = listing.branches.filter((b) => !allowed || allowed.has(b.branchId));
+			if (grep) {
+				branches = branches.filter((b) =>
+					[
+						b.branchId,
+						b.alias ?? "",
+						b.parentBranchId ?? "",
+						b.rootSessionId,
+						b.lastUserPreview ?? "",
+						b.lastAssistantPreview ?? "",
+						...b.recentFiles,
+						...b.recentCommands,
+					]
+						.join("\n")
+						.toLowerCase()
+						.includes(grep)
+				);
+			}
+			const limit = params.limit ?? 50;
+			branches = branches.slice(0, limit);
+			return {
+				content: [{ type: "text", text: formatBranches(branches, scope) }],
+				details: { action: "branches", scope, count: branches.length, branches },
+			};
+		},
+	});
+
 	// ── HistoryRead ──────────────────────────────────────────────────
 	pi.registerTool({
 		name: "HistoryRead",
@@ -316,11 +417,18 @@ export default function historySearch(pi: ExtensionAPI): void {
 			const config = loadConfig(ctx.cwd);
 			if (!config.enabled) return disabled("read");
 			try {
+				const id = params.branchId ?? params.sessionId;
+				if (!id) {
+					return {
+						content: [{ type: "text", text: "Provide either sessionId or branchId." }],
+						details: { action: "read", error: "missing id" },
+					};
+				}
 				const base = resolveSessionsBase(config);
-				const filePath = findSessionPath(base, params.sessionId, projectDir(base, ctx.cwd));
+				const filePath = findSessionPath(base, id, projectDir(base, ctx.cwd));
 				if (!filePath) {
 					return {
-						content: [{ type: "text", text: `No accessible session found with id "${params.sessionId}".` }],
+						content: [{ type: "text", text: `No accessible session/branch found with id "${id}".` }],
 						details: { action: "read", error: "not found" },
 					};
 				}
@@ -349,7 +457,8 @@ export default function historySearch(pi: ExtensionAPI): void {
 		},
 
 		renderCall(args, theme: Theme) {
-			const id = shortId((args.sessionId as string) ?? "");
+			const rawId = ((args.branchId as string) ?? (args.sessionId as string) ?? "") as string;
+			const id = shortId(rawId);
 			const mode = args.around !== undefined ? `around ${args.around}` : args.query ? `query "${args.query}"` : "outline";
 			return new Text(theme.fg("toolTitle", theme.bold("HistoryRead ")) + theme.fg("muted", `${id} · ${mode}`), 0, 0);
 		},
@@ -364,7 +473,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 
 	// ── /history command (humans: stats / reindex / quick search) ─────
 	pi.registerCommand("history", {
-		description: "Search session history, or manage the index: /history [stats|reindex|<query>]",
+		description: "Search session history, manage index, or inspect branches: /history [stats|reindex|branches|<query>]",
 		handler: async (args, ctx) => {
 			const config = loadConfig(ctx.cwd);
 			const base = resolveSessionsBase(config);
@@ -391,6 +500,16 @@ export default function historySearch(pi: ExtensionAPI): void {
 				return;
 			}
 
+			if (arg.startsWith("branches")) {
+				const currentSessionId = (ctx.sessionManager.getSessionId?.() as string | undefined) ?? null;
+				const listing = listBranchesInProject(dir, currentSessionId, config.branchAliases);
+				const branches = branchScopeSessionIds(listing.branches, listing.currentBranchId, "current-tree");
+				const filtered = listing.branches.filter((b) => !branches || branches.has(b.branchId));
+				if (ctx.hasUI) ctx.ui.notify(`Found ${filtered.length} branches in current tree`, "info");
+				else console.log(formatBranches(filtered, "current-tree"));
+				return;
+			}
+
 			// Interactive TUI: open the live overlay (optionally seeded with the query).
 			if (ctx.hasUI) {
 				await openOverlay(ctx, arg || undefined);
@@ -398,7 +517,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 			}
 
 			if (!arg) {
-				console.log("Usage: /history [stats|reindex|<query>] — agents use the HistorySearch tool");
+				console.log("Usage: /history [stats|reindex|branches|<query>] — agents use HistorySearch/HistoryBranches tools");
 				return;
 			}
 

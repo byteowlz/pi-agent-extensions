@@ -4,6 +4,20 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Added - 2026-06-16
+
+#### pi-history-search: branch-aware scopes and branch metadata (piext-b2rp)
+
+`HistorySearch` now supports branch-aware scopes in the current project (`current-tree`, `current-branch`, `siblings`, `ancestors`, `descendants`) in addition to `project` and `all`.
+
+New `HistoryBranches` tool lists branches with mechanical metadata only (no summarization): branch id, parent/root ids, fork message index, created/updated timestamps, cwd, message count, last user/assistant previews, and recent touched files/commands.
+
+`HistoryRead` can now read by `branchId` as an alternative to `sessionId`.
+
+Config adds optional `branchAliases` (`history-search.json`) for manual human-friendly labels keyed by branch/session id.
+
+Also added `/history branches` for interactive branch listing.
+
 ### Added - 2026-06-13
 
 #### pi-sudo: remote sudo support

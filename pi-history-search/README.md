@@ -17,7 +17,7 @@ Full-text, BM25-ranked search over past sessions.
 | Param | Type | Notes |
 |---|---|---|
 | `query` | string (optional) | Search terms. **Omit/empty → most recent sessions** (for "what did we do here/recently"). |
-| `scope` | `"project"` \| `"all"` | Default `"project"`. `"all"` also searches other projects the environment exposes. |
+| `scope` | `"project"` \| `"all"` \| `"current-tree"` \| `"current-branch"` \| `"siblings"` \| `"ancestors"` \| `"descendants"` | Default `"project"`. `"all"` searches other projects. Branch-aware scopes limit to the current session graph. |
 | `project` | string | With `scope:"all"`, keep only sessions whose project label contains this. |
 | `roleFilter` | `all` \| `conversation` \| `user` \| `assistant` \| `tool` | **Default `conversation`** (user+assistant) — best signal, skips the tool-output noise that otherwise dominates. Use `all` to also search tool output (error messages, file paths, command output), or `tool` for only that. |
 | `limit` | number | Max sessions (default from config). |
@@ -25,13 +25,24 @@ Full-text, BM25-ranked search over past sessions.
 Returns matching sessions, each with a `sessionId`, a project + timestamp, and
 snippets tagged by `role` and `msgIndex`.
 
+### `HistoryBranches`
+
+List branches in the current session tree (or full project) with mechanical metadata only.
+
+| Param | Type | Notes |
+|---|---|---|
+| `scope` | `"current-tree"` \| `"project"` | Default `"current-tree"`. |
+| `grep` | string | Optional text filter over ids/aliases/previews/files/commands. |
+| `limit` | number | Max branches returned (default 50). |
+
 ### `HistoryRead`
 
 Pull fuller context from one session returned by `HistorySearch`.
 
 | Param | Type | Notes |
 |---|---|---|
-| `sessionId` | string (required) | From a `HistorySearch` hit. |
+| `sessionId` | string (optional) | From a `HistorySearch` hit. |
+| `branchId` | string (optional) | Read by branch id (same id as the session file). |
 | `around` | number | Window of messages centered on this `msgIndex`. |
 | `before` / `after` | number | Window size. For `around`: default 3 each. For `query`: context before/after each matching message, default 2 each. |
 | `query` | string | Return merged, budgeted context windows around messages matching these terms. |
@@ -49,8 +60,8 @@ With neither `around` nor `query`, returns the whole session — a compact
 You can search history interactively, not just via the agent tools:
 
 - **`Ctrl+Shift+F`** — open the live search overlay.
-- **`/history`** — open the same overlay (in an interactive TUI). `/history <query>`
-  opens it seeded with that query.
+- **`/history`** — open the same overlay (in an interactive TUI). `/history <query>` opens it seeded with that query.
+- **`/history branches`** — list branches for the current session tree.
 
 In the overlay:
 
