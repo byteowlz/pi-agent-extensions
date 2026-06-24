@@ -4,6 +4,12 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed - 2026-06-24
+
+#### pi-auto-rename: avoid stale extension ctx crash after fast prompt sessions (piext-j2wq)
+
+Guarded `pi.setSessionName` and `ctx.ui.setStatus` calls against stale extension context errors. When a short one-shot prompt completes before async rename work finishes, the extension no longer crashes the process. Added `isStaleContextError` helper and wrapped all late-bound context-dependent operations in `setNameAndNotify` and `handleRegen`. Added regression tests covering `before_agent_start` and `agent_end` hooks with simulated stale contexts.
+
 ### Added - 2026-06-16
 
 #### pi-history-search: branch-aware scopes and branch metadata (piext-b2rp)
