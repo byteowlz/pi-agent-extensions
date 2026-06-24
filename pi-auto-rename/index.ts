@@ -534,6 +534,10 @@ async function resolveModel(
 	return { model, apiKey: auth.apiKey ?? null, error: null };
 }
 
+function isStaleContextError(error: unknown): boolean {
+	return error instanceof Error && error.message.includes("ctx is stale");
+}
+
 function debugNotify(
 	ctx: ExtensionContext,
 	config: ResolvedConfig,
@@ -925,11 +929,19 @@ async function handleRegen(
 	if (result.name) {
 		const suffix = resolveReadableIdSuffix(config, sessionId, wordlist, result.name, ctx);
 		const fullName = formatFullName(prefix, result.name, suffix);
-		pi.setSessionName(fullName);
-		setRenamed();
-		ctx.ui.notify(`Session renamed (${result.source}): ${fullName}`, "info");
+		try {
+			pi.setSessionName(fullName);
+			setRenamed();
+			ctx.ui.notify(`Session renamed (${result.source}): ${fullName}`, "info");
+		} catch (err) {
+			if (!isStaleContextError(err)) throw err;
+		}
 	} else {
-		ctx.ui.notify(`Failed to generate name: ${result.error || "unknown error"}`, "error");
+		try {
+			ctx.ui.notify(`Failed to generate name: ${result.error || "unknown error"}`, "error");
+		} catch (err) {
+			if (!isStaleContextError(err)) throw err;
+		}
 	}
 }
 
@@ -996,12 +1008,26 @@ export default function (pi: ExtensionAPI) {
 	 * Set the session name and notify the Oqto runner via a status event.
 	 * The runner picks up the TITLE_CHANGED_STATUS_KEY and broadcasts
 	 * a canonical session.title_changed event to the frontend.
+	 *
+	 * Swallows stale-context errors so async rename work that completes
+	 * after a fast session does not crash the process.
 	 */
 	const setNameAndNotify = (name: string, ctx: ExtensionContext) => {
-		pi.setSessionName(name);
+		try {
+			pi.setSessionName(name);
+		} catch (err) {
+			if (isStaleContextError(err)) {
+				return;
+			}
+			throw err;
+		}
 		// Keep interactive TUI status line clean; emit status only for non-TUI/rpc consumers.
 		if (!ctx.hasUI) {
-			ctx.ui.setStatus(TITLE_CHANGED_STATUS_KEY, name);
+			try {
+				ctx.ui.setStatus(TITLE_CHANGED_STATUS_KEY, name);
+			} catch (err) {
+				if (!isStaleContextError(err)) throw err;
+			}
 		}
 	};
 

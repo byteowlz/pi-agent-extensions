@@ -1,6 +1,6 @@
 {
 	"name": "pi-agent-extensions",
-	"version": "1.2.0",
+	"version": "1.2.1",
 	"description": "Extensions for the pi coding agent",
 	"type": "module",
 	"private": true,
