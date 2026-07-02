@@ -145,6 +145,7 @@ function formatHits(query: string | undefined, scope: string, hits: HistoryHit[]
 			if (h.branch.recentFiles.length > 0) lines.push(`    files: ${h.branch.recentFiles.join(", ")}`);
 			if (h.branch.recentCommands.length > 0) lines.push(`    commands: ${h.branch.recentCommands.join(" | ")}`);
 		}
+		if (h.sessionName) lines.push(`    name: ${h.sessionName.slice(0, 120)}`);
 		if (h.title) lines.push(`    title: ${h.title.slice(0, 120)}`);
 		for (const m of h.matches) {
 			lines.push(`    ${m.role} (msg ${m.msgIndex}): ${m.snippet}`);
@@ -273,7 +274,11 @@ export default function historySearch(pi: ExtensionAPI): void {
 	});
 
 	// ── Interactive overlay (humans) ──────────────────────────────────
-	async function openOverlay(ctx: ExtensionContext, initialQuery?: string): Promise<void> {
+	async function openOverlay(
+		ctx: ExtensionContext,
+		initialQuery?: string,
+		opener?: (sessionFile: string) => Promise<void> | void
+	): Promise<void> {
 		if (!ctx.hasUI) {
 			ctx.ui.notify("History overlay needs an interactive TUI", "warning");
 			return;
@@ -295,7 +300,8 @@ export default function historySearch(pi: ExtensionAPI): void {
 			ctx.ui.setStatus("history-search", undefined);
 		}
 		await ctx.ui.custom<void>(
-			(tui, theme, _kb, done) => new HistoryOverlay(done, tui, theme, { base, dir, config, initialQuery }),
+			(tui, theme, _kb, done) =>
+				new HistoryOverlay(done, tui, theme, { base, dir, config, initialQuery }, opener ? (file) => opener(file) : undefined),
 			{
 				overlay: true,
 				overlayOptions: { anchor: "center", width: "80%", maxHeight: "80%" },
@@ -304,7 +310,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 	}
 
 	pi.registerShortcut("ctrl+shift+f", {
-		description: "Search session history",
+		description: "Search session history (view-only; use /history to open sessions)",
 		handler: (ctx) => openOverlay(ctx as ExtensionContext),
 	});
 
@@ -511,8 +517,11 @@ export default function historySearch(pi: ExtensionAPI): void {
 			}
 
 			// Interactive TUI: open the live overlay (optionally seeded with the query).
+			// Command context has switchSession, so 'o' can open the selected session.
 			if (ctx.hasUI) {
-				await openOverlay(ctx, arg || undefined);
+				await openOverlay(ctx, arg || undefined, async (sessionFile) => {
+					await ctx.switchSession(sessionFile);
+				});
 				return;
 			}
 

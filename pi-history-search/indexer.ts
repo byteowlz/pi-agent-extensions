@@ -115,6 +115,8 @@ export interface HistoryHit {
 	project: string;
 	timestamp: string;
 	title: string | null;
+	/** Human display name (from session_info entries), if any. */
+	sessionName: string | null;
 	matches: HistoryMatch[];
 	branch?: BranchMeta;
 }
@@ -199,16 +201,32 @@ const TEXT_ONLY = new Set(["text"]);
  * thinking blocks and tool calls are dropped from the indexed text but the entry
  * is still emitted so ordinals never shift.
  */
-export function extractMessages(data: string): { messages: ExtractedMessage[]; firstUserMessage: string | null } {
+/**
+ * Extract one entry per `message` record, in file order. The ordinal of each
+ * entry is the stable `msgIndex` used by HistorySearch and HistoryRead. Assistant
+ * thinking blocks and tool calls are dropped from the indexed text but the entry
+ * is still emitted so ordinals never shift. Also returns the session display name
+ * (from the last `session_info` entry) and the first user message.
+ */
+export function extractMessages(data: string): {
+	messages: ExtractedMessage[];
+	firstUserMessage: string | null;
+	sessionName: string | null;
+} {
 	const messages: ExtractedMessage[] = [];
 	let firstUserMessage: string | null = null;
+	let sessionName: string | null = null;
 
 	for (const line of data.split("\n")) {
 		if (!line.trim()) continue;
-		let entry: { type?: string; message?: { role?: string; content?: unknown } };
+		let entry: { type?: string; name?: unknown; message?: { role?: string; content?: unknown } };
 		try {
 			entry = JSON.parse(line);
 		} catch {
+			continue;
+		}
+		if (entry.type === "session_info") {
+			if (typeof entry.name === "string" && entry.name.trim()) sessionName = entry.name.trim();
 			continue;
 		}
 		if (entry.type !== "message" || !entry.message) continue;
@@ -221,7 +239,7 @@ export function extractMessages(data: string): { messages: ExtractedMessage[]; f
 		}
 	}
 
-	return { messages, firstUserMessage };
+	return { messages, firstUserMessage, sessionName };
 }
 
 // ── Query sanitization (ported from the reference) ───────────────────
@@ -278,7 +296,7 @@ function roleSqlClause(filter: RoleFilter): string {
 
 // ── Database lifecycle ───────────────────────────────────────────────
 
-const openDbs = new Map<string, SqlDatabase>();
+const openDbs = new Map<string, { db: SqlDatabase; writable: boolean }>();
 
 /** Run a function inside a transaction; rolls back on throw. */
 function tx(db: SqlDatabase, fn: () => void): void {
@@ -317,13 +335,27 @@ function initSchema(db: SqlDatabase): void {
 		);
 		CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 	`);
+	// Migration: add session_name column if missing (additive, safe on existing indexes).
+}
+
+/** Idempotent schema migrations. Safe to call repeatedly; cheap (a PRAGMA probe). */
+function migrateSchema(db: SqlDatabase): void {
+	const cols = db.prepare("PRAGMA table_info(sessions)").all() as unknown as { name: string }[];
+	if (!cols.some((c) => c.name === "session_name")) {
+		db.exec("ALTER TABLE sessions ADD COLUMN session_name TEXT");
+	}
 }
 
 /** Open (and cache) the index for a project dir. Returns null when unavailable. */
 function openDb(projDir: string, mode: "rw" | "ro"): SqlDatabase | null {
 	const dbPath = indexDbPath(projDir);
 	const cached = openDbs.get(dbPath);
-	if (cached) return cached;
+	if (cached) {
+		// Re-run idempotent migrations on any writable handle, so a schema upgrade
+		// applied after the handle was first opened still takes effect.
+		if (cached.writable) migrateSchema(cached.db);
+		return cached.db;
+	}
 
 	const opener = getOpener();
 	if (!opener) return null;
@@ -333,12 +365,13 @@ function openDb(projDir: string, mode: "rw" | "ro"): SqlDatabase | null {
 			fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 			const db = opener(dbPath, false);
 			initSchema(db);
-			openDbs.set(dbPath, db);
+			migrateSchema(db);
+			openDbs.set(dbPath, { db, writable: true });
 			return db;
 		}
 		if (!fs.existsSync(dbPath)) return null;
 		const db = opener(dbPath, true);
-		openDbs.set(dbPath, db);
+		openDbs.set(dbPath, { db, writable: false });
 		return db;
 	} catch {
 		return null;
@@ -346,7 +379,7 @@ function openDb(projDir: string, mode: "rw" | "ro"): SqlDatabase | null {
 }
 
 export function closeAll(): void {
-	for (const db of openDbs.values()) {
+	for (const { db } of openDbs.values()) {
 		try {
 			db.close();
 		} catch {
@@ -376,10 +409,17 @@ function indexOneFile(
 	data: string
 ): void {
 	const filename = path.basename(filePath);
-	const { messages, firstUserMessage } = extractMessages(data);
+	const { messages, firstUserMessage, sessionName } = extractMessages(data);
 
 	stmts.deleteFts.run(filePath);
-	stmts.upsert.run(filePath, sessionIdFromFilename(filename), timestampFromFilename(filename), mtime, firstUserMessage);
+	stmts.upsert.run(
+		filePath,
+		sessionIdFromFilename(filename),
+		timestampFromFilename(filename),
+		mtime,
+		firstUserMessage,
+		sessionName
+	);
 
 	for (let i = 0; i < messages.length; i++) {
 		const m = messages[i];
@@ -439,7 +479,7 @@ export async function updateProjectIndex(projDir: string, config: HistorySearchC
 
 	const stmts: PreparedStatements = {
 		upsert: db.prepare(
-			"INSERT OR REPLACE INTO sessions (path, session_id, session_ts, mtime_ms, first_user_message) VALUES (?, ?, ?, ?, ?)"
+			"INSERT OR REPLACE INTO sessions (path, session_id, session_ts, mtime_ms, first_user_message, session_name) VALUES (?, ?, ?, ?, ?, ?)"
 		),
 		deleteFts: db.prepare("DELETE FROM messages_fts WHERE session_path = ?"),
 		insertFts: db.prepare("INSERT INTO messages_fts (content, session_path, role, msg_index) VALUES (?, ?, ?, ?)"),
@@ -524,17 +564,18 @@ function searchDb(
 		)
 		.all(ftsQuery, limit) as unknown as { path: string; br: number }[];
 
-	const meta = db.prepare("SELECT session_id, session_ts, first_user_message FROM sessions WHERE path = ?");
+	const meta = db.prepare("SELECT session_id, session_ts, first_user_message, session_name FROM sessions WHERE path = ?");
 	const hits: HistoryHit[] = [];
 	for (const row of best) {
 		const m = meta.get(row.path) as unknown as
-			| { session_id: string; session_ts: string; first_user_message: string | null }
+			| { session_id: string; session_ts: string; first_user_message: string | null; session_name: string | null }
 			| undefined;
 		hits.push({
 			sessionId: m?.session_id ?? path.basename(row.path),
 			project,
 			timestamp: m?.session_ts ?? "",
 			title: m?.first_user_message ?? null,
+			sessionName: m?.session_name ?? null,
 			matches: snippetsForSession(db, ftsQuery, row.path, snippetsPerSession, roleFilter),
 		});
 	}
@@ -561,14 +602,14 @@ function scanFile(
 	tokens: string[],
 	snippetsPerSession: number,
 	roleFilter: RoleFilter
-): { score: number; matches: HistoryMatch[]; firstUserMessage: string | null } {
+): { score: number; matches: HistoryMatch[]; firstUserMessage: string | null; sessionName: string | null } {
 	let data: string;
 	try {
 		data = fs.readFileSync(filePath, "utf-8");
 	} catch {
-		return { score: 0, matches: [], firstUserMessage: null };
+		return { score: 0, matches: [], firstUserMessage: null, sessionName: null };
 	}
-	const { messages, firstUserMessage } = extractMessages(data);
+	const { messages, firstUserMessage, sessionName } = extractMessages(data);
 	const matches: HistoryMatch[] = [];
 	let score = 0;
 	for (let i = 0; i < messages.length; i++) {
@@ -583,7 +624,7 @@ function scanFile(
 			matches.push({ role: messages[i].role, msgIndex: i, snippet: makeSnippet(messages[i].text, tokens) });
 		}
 	}
-	return { score, matches, firstUserMessage };
+	return { score, matches, firstUserMessage, sessionName };
 }
 
 function scanProject(
@@ -602,7 +643,7 @@ function scanProject(
 		const sessionId = sessionIdFromFilename(filename);
 		if (allowedSessionIds && !allowedSessionIds.has(sessionId)) continue;
 		const filePath = path.join(projDir, filename);
-		const { score, matches, firstUserMessage } = scanFile(filePath, tokens, snippetsPerSession, roleFilter);
+		const { score, matches, firstUserMessage, sessionName } = scanFile(filePath, tokens, snippetsPerSession, roleFilter);
 		if (score === 0) continue;
 		scored.push({
 			score,
@@ -611,6 +652,7 @@ function scanProject(
 				project,
 				timestamp: timestampFromFilename(filename),
 				title: firstUserMessage,
+				sessionName,
 				matches,
 			},
 		});
@@ -660,7 +702,8 @@ export function queryProject(
 	roleFilter: RoleFilter = "all"
 ): HistoryHit[] {
 	const project = prettyProject(path.basename(projDir));
-	const db = openDb(projDir, fs.existsSync(indexDbPath(projDir)) ? "ro" : "rw");
+	// Prefer a writable handle so migrations run even on first query; fall back to RO.
+	const db = openDb(projDir, "rw") ?? openDb(projDir, "ro");
 	if (db) return searchDb(db, project, query, limit, config.snippetsPerSession, roleFilter);
 	return scanProject(projDir, project, query, limit, config.snippetsPerSession, roleFilter);
 }
@@ -668,20 +711,28 @@ export function queryProject(
 /** Most recent sessions in a project (for the overlay's empty-query view). */
 export function listRecent(projDir: string, limit: number, allowedSessionIds?: Set<string>): HistoryHit[] {
 	const project = prettyProject(path.basename(projDir));
-	const db = openDb(projDir, fs.existsSync(indexDbPath(projDir)) ? "ro" : "rw");
+	const db = openDb(projDir, "rw") ?? openDb(projDir, "ro");
 	if (db) {
 		const where =
 			allowedSessionIds && allowedSessionIds.size > 0
 				? `WHERE session_id IN (${[...allowedSessionIds].map((id) => `'${id.replace(/'/g, "''")}'`).join(", ")})`
 				: "";
 		const rows = db
-			.prepare(`SELECT session_id, session_ts, first_user_message FROM sessions ${where} ORDER BY session_ts DESC LIMIT ?`)
-			.all(limit) as unknown as { session_id: string; session_ts: string; first_user_message: string | null }[];
+			.prepare(
+				`SELECT session_id, session_ts, first_user_message, session_name FROM sessions ${where} ORDER BY session_ts DESC LIMIT ?`
+			)
+			.all(limit) as unknown as {
+			session_id: string;
+			session_ts: string;
+			first_user_message: string | null;
+			session_name: string | null;
+		}[];
 		return rows.map((r) => ({
 			sessionId: r.session_id,
 			project,
 			timestamp: r.session_ts,
 			title: r.first_user_message,
+			sessionName: r.session_name,
 			matches: [],
 		}));
 	}
@@ -696,6 +747,7 @@ export function listRecent(projDir: string, limit: number, allowedSessionIds?: S
 		project,
 		timestamp: timestampFromFilename(filename),
 		title: null,
+		sessionName: null,
 		matches: [],
 	}));
 }
