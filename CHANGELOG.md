@@ -4,6 +4,37 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Added - 2026-07-15
+
+#### pi-history-search: context-overflow guard + HistoryGrep (surgical exact search)
+
+All history tool results now pass through a **context-overflow guard** that
+checks how much of the context window is left (`ctx.getContextUsage()`) and,
+when a result would overflow it, truncates to a safe budget and prepends an
+actionable warning (narrower query, `around:<msgIndex>`, `HistoryGrep`, lower
+`maxMessages`/`maxTotalChars`). The budget is the smaller of an absolute cap
+and `remaining_tokens × maxContextFraction × charsPerToken`, floored at a
+minimum so nearly-full windows still return a sliver. `HistoryRead` also feeds
+the budget into the read itself (when no explicit `maxTotalChars` is given) so a
+huge session clips at message boundaries, not mid-stream. Only the result text
+is guarded; structured `details` stay full. Configurable via the new
+`contextGuard` block (`enabled`, `charsPerToken`, `maxContextFraction`,
+`maxResultChars`, `minResultChars`).
+
+New **`HistoryGrep`** tool: surgically and fast-search ONE session for an exact
+substring or regular expression. It reads a single session file once and runs
+one regex pass (no FTS, no tokenization), so it catches what tokenized
+`HistorySearch` misses — code identifiers, camelCase names, stack traces, exact
+error strings, file paths — and is fast even for large older sessions. Returns
+pinpoint matches with `msgIndex` and a `«highlighted»` snippet; optional
+`before`/`after` for a full-text context window. Typical flow: `HistorySearch`
+finds the session, `HistoryGrep` extracts the exact lines.
+
+New modules: `context-guard.ts`, plus `grepSession` in `indexer.ts`. Added unit
+tests (`context-guard.test.ts`, `grep.test.ts`) covering budget math,
+truncation, case sensitivity, regex, role filters, match caps, and the
+zero-width-match guard.
+
 ### Fixed - 2026-06-24
 
 #### pi-auto-rename: avoid stale extension ctx crash after fast prompt sessions (piext-j2wq)

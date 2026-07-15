@@ -7,5 +7,12 @@
 	"snippetsPerSession": 3,
 	"branchAliases": {
 		"019ed061-2bf6-764a-aeef-719178fc8513": "current-work"
+	},
+	"contextGuard": {
+		"enabled": true,
+		"charsPerToken": 4,
+		"maxContextFraction": 0.5,
+		"maxResultChars": 60000,
+		"minResultChars": 4000
 	}
 }

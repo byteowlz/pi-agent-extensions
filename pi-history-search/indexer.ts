@@ -1137,6 +1137,233 @@ export function readSession(filePath: string, opts: ReadOptions): ReadResult {
 	return { ...base, mode: view, messages: out, truncated, omittedMessages: Math.max(0, kept.length - shown.length) };
 }
 
+// ── Surgical grep within one session ───────────────────────────────
+//
+// FTS5 (HistorySearch) is tokenized BM25 — great for ranked recall across many
+// sessions, but it loses exact substrings and code identifiers that tokenizers
+// split or drop (e.g. camelCase, stack traces, error strings). grepSession is
+// the surgical complement: read ONE session file, run a single literal/regex
+// pass over its extracted messages, and return pinpoint matches with msgIndex.
+// No database, no tokenization, no re-indexing — so it's fast even for large
+// older sessions and catches the exact strings FTS can't.
+
+export interface GrepSnippet {
+	msgIndex: number;
+	role: string;
+	/** Match in context, with «» around the matched span. */
+	snippet: string;
+}
+
+export interface GrepResult {
+	sessionId: string;
+	project: string;
+	timestamp: string;
+	totalMessages: number;
+	pattern: string;
+	regex: boolean;
+	ignoreCase: boolean;
+	roleFilter: RoleFilter;
+	/** Distinct messages that matched. */
+	matchedMessages: number;
+	/** Match snippets (capped at maxMatches). */
+	matches: GrepSnippet[];
+	/** Optional full-text context window when before/after > 0 (deduped, ordered). */
+	messages: { role: string; msgIndex: number; text: string }[];
+	truncated: boolean;
+}
+
+export interface GrepOptions {
+	pattern: string;
+	/** Treat pattern as a JavaScript regular expression. Default false (literal substring). */
+	regex?: boolean;
+	/** Case-insensitive match. Default true. */
+	ignoreCase?: boolean;
+	roleFilter?: RoleFilter;
+	/** Max match snippets overall. Default 50. */
+	maxMatches?: number;
+	/** Max snippets recorded per matching message. Default 3. */
+	maxPerMessage?: number;
+	/** Include this many full messages before each match. Default 0 (surgical). */
+	before?: number;
+	/** Include this many full messages after each match. Default 0 (surgical). */
+	after?: number;
+	/** Per-message char cap for the context window. Default 1000. */
+	maxChars?: number;
+}
+
+function escapeRegex(s: string): string {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Build a fresh global RegExp factory; validates the pattern once up front. */
+function makeMatcherFactory(pattern: string, regex: boolean, ignoreCase: boolean): () => RegExp {
+	const flags = `g${ignoreCase ? "i" : ""}`;
+	const source = regex ? pattern : escapeRegex(pattern);
+	// Validate once; throws a clean error for the tool to surface.
+	new RegExp(source, flags);
+	return () => new RegExp(source, flags);
+}
+
+const GREP_CTX = 80; // chars of context on each side of a match in a snippet
+
+/** Build a context snippet around a match, highlighting the matched span. */
+function snippetAround(text: string, start: number, matched: string): string {
+	const end = start + matched.length;
+	const from = Math.max(0, start - GREP_CTX);
+	const pre = text.slice(from, start);
+	const post = text.slice(end, end + GREP_CTX);
+	const lead = from > 0 ? "… " : "";
+	const tail = end + GREP_CTX < text.length ? " …" : "";
+	return `${lead}${pre}«${matched}»${post}${tail}`;
+}
+
+export interface MessageScan {
+	/** Whether the message had at least one match. */
+	matched: boolean;
+	/** Snippets collected from this message (already capped at maxPerMessage). */
+	snippets: GrepSnippet[];
+}
+
+/** Run the matcher over a single message, collecting up to maxPerMessage snippets. */
+/** Run the matcher over a single message. When `collect` is false, stop at the
+ * first match and return no snippets — used once the overall cap is reached so
+ * the tail scan stays minimal while still counting every matching message. */
+function scanMessage(
+	re: RegExp,
+	text: string,
+	msgIndex: number,
+	role: string,
+	maxPerMessage: number,
+	collect: boolean
+): MessageScan {
+	re.lastIndex = 0;
+	const snippets: GrepSnippet[] = [];
+	let matched = false;
+	let hit = re.exec(text);
+	while (hit !== null) {
+		if (hit[0].length === 0) {
+			// Avoid zero-width-match loops.
+			re.lastIndex++;
+			hit = re.exec(text);
+			continue;
+		}
+		matched = true;
+		if (collect && snippets.length < maxPerMessage) {
+			snippets.push({ msgIndex, role, snippet: snippetAround(text, hit.index, hit[0]) });
+		}
+		if (!collect) break; // only existence-checking once capped
+		hit = re.exec(text);
+	}
+	return { matched, snippets };
+}
+
+/** Collect message indices forming the context window around a match index. */
+function contextIndicesAround(
+	messages: ExtractedMessage[],
+	roleFilter: RoleFilter,
+	i: number,
+	before: number,
+	after: number,
+	out: Set<number>
+): void {
+	const from = Math.max(0, i - before);
+	const to = Math.min(messages.length - 1, i + after);
+	for (let k = from; k <= to; k++) {
+		if (messages[k].text && roleAllowed(messages[k].role, roleFilter)) out.add(k);
+	}
+}
+
+interface ResolvedGrep {
+	roleFilter: RoleFilter;
+	ignoreCase: boolean;
+	isRegex: boolean;
+	maxMatches: number;
+	maxPerMessage: number;
+	before: number;
+	after: number;
+	maxChars: number;
+	wantContext: boolean;
+}
+
+function resolveGrepOptions(opts: GrepOptions): ResolvedGrep {
+	const before = opts.before ?? 0;
+	const after = opts.after ?? 0;
+	return {
+		roleFilter: opts.roleFilter ?? "all",
+		ignoreCase: opts.ignoreCase ?? true,
+		isRegex: opts.regex ?? false,
+		maxMatches: opts.maxMatches ?? 50,
+		maxPerMessage: opts.maxPerMessage ?? 3,
+		before,
+		after,
+		maxChars: opts.maxChars ?? 1000,
+		wantContext: before > 0 || after > 0,
+	};
+}
+
+/** Build the (optionally clipped) context-window messages from a set of indices. */
+function buildContextWindow(
+	messages: ExtractedMessage[],
+	indices: Set<number>,
+	maxChars: number
+): { messages: GrepResult["messages"]; truncated: boolean } {
+	const out: GrepResult["messages"] = [];
+	let truncated = false;
+	for (const i of [...indices].sort((a, b) => a - b)) {
+		const c = clip(messages[i].text, maxChars);
+		truncated = truncated || c.truncated;
+		out.push({ role: messages[i].role, msgIndex: i, text: c.text });
+	}
+	return { messages: out, truncated };
+}
+
+export function grepSession(filePath: string, opts: GrepOptions): GrepResult {
+	const filename = path.basename(filePath);
+	const data = fs.readFileSync(filePath, "utf-8");
+	const { messages } = extractMessages(data);
+	const project = prettyProject(path.basename(path.dirname(filePath)));
+	const o = resolveGrepOptions(opts);
+
+	const matcher = makeMatcherFactory(opts.pattern, o.isRegex, o.ignoreCase);
+
+	const matches: GrepSnippet[] = [];
+	let matchedMessages = 0;
+	const ctxIndices = new Set<number>();
+
+	for (let i = 0; i < messages.length; i++) {
+		const m = messages[i];
+		if (!m.text || !roleAllowed(m.role, o.roleFilter)) continue;
+		// Once the snippet cap is hit, keep scanning only to count matches (cheap).
+		const collect = matches.length < o.maxMatches;
+		const { matched, snippets } = scanMessage(matcher(), m.text, i, m.role, o.maxPerMessage, collect);
+		if (!matched) continue;
+		matchedMessages++;
+		for (const s of snippets) {
+			if (matches.length < o.maxMatches) matches.push(s);
+		}
+		if (o.wantContext) contextIndicesAround(messages, o.roleFilter, i, o.before, o.after, ctxIndices);
+	}
+	const truncated = matches.length >= o.maxMatches && matchedMessages > 0;
+
+	// Only surface the context window when the caller asked for one.
+	const ctx = o.wantContext ? buildContextWindow(messages, ctxIndices, o.maxChars) : { messages: [], truncated: false };
+
+	return {
+		sessionId: sessionIdFromFilename(filename),
+		project,
+		timestamp: timestampFromFilename(filename),
+		totalMessages: messages.length,
+		pattern: opts.pattern,
+		regex: o.isRegex,
+		ignoreCase: o.ignoreCase,
+		roleFilter: o.roleFilter,
+		matchedMessages,
+		matches,
+		messages: ctx.messages,
+		truncated: truncated || ctx.truncated,
+	};
+}
+
 // ── Stats ────────────────────────────────────────────────────────────
 
 export function getStats(projDir: string): IndexStats {
