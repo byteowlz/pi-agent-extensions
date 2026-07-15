@@ -41,6 +41,18 @@
 			"default": {},
 			"additionalProperties": { "type": "string" },
 			"description": "Optional manual aliases keyed by branch/session id."
+		},
+		"contextGuard": {
+			"type": "object",
+			"default": { "enabled": true, "charsPerToken": 4, "maxContextFraction": 0.5, "maxResultChars": 60000, "minResultChars": 4000 },
+			"description": "Context-overflow guard: truncate large tool results to fit the remaining context window, with a warning.",
+			"properties": {
+				"enabled": { "type": "boolean", "default": true, "description": "Master switch for the guard." },
+				"charsPerToken": { "type": "number", "default": 4, "minimum": 1, "description": "Approximate characters per token for char→token budget math." },
+				"maxContextFraction": { "type": "number", "default": 0.5, "minimum": 0, "maximum": 1, "description": "Max fraction of the remaining context window a single result may consume. The rest stays free for the conversation." },
+				"maxResultChars": { "type": "integer", "default": 60000, "minimum": 1000, "description": "Hard absolute cap on returned chars regardless of remaining context." },
+				"minResultChars": { "type": "integer", "default": 4000, "minimum": 0, "description": "Floor for the per-result char budget so tiny remaining windows still yield a usable sliver." }
+			}
 		}
 	}
 }

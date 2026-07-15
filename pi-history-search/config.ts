@@ -11,6 +11,35 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+/**
+ * Context-overflow guard settings. The guard measures how much context window
+ * is left and truncates a tool result (with a warning) when it would otherwise
+ * blow the budget — so a huge HistoryRead can never silently overflow the turn.
+ */
+export interface ContextGuardConfig {
+	/** Master switch for the guard. When false, results are returned unbounded. */
+	enabled: boolean;
+	/** Approximate characters per token, for char→token budget math. Default 4. */
+	charsPerToken: number;
+	/**
+	 * Max fraction of the *remaining* context window a single result may consume
+	 * (0–1). The other half stays free for the actual conversation. Default 0.5.
+	 */
+	maxContextFraction: number;
+	/** Hard absolute cap on returned chars, regardless of remaining context. Default 60000. */
+	maxResultChars: number;
+	/** Floor for the per-result char budget, so tiny remaining windows still yield a usable sliver. Default 4000. */
+	minResultChars: number;
+}
+
+export const DEFAULT_CONTEXT_GUARD: ContextGuardConfig = {
+	enabled: true,
+	charsPerToken: 4,
+	maxContextFraction: 0.5,
+	maxResultChars: 60_000,
+	minResultChars: 4_000,
+};
+
 export interface HistorySearchConfig {
 	/** Master switch. When false, the tools return a disabled notice. */
 	enabled: boolean;
@@ -29,6 +58,8 @@ export interface HistorySearchConfig {
 	snippetsPerSession: number;
 	/** Optional manual aliases keyed by branch/session id. */
 	branchAliases: Record<string, string>;
+	/** Context-overflow guard: truncate large results to fit the remaining context window. */
+	contextGuard: ContextGuardConfig;
 }
 
 const CONFIG_FILENAME = "history-search.json";
@@ -41,7 +72,17 @@ export const DEFAULT_CONFIG: HistorySearchConfig = {
 	maxResults: 10,
 	snippetsPerSession: 3,
 	branchAliases: {},
+	contextGuard: DEFAULT_CONTEXT_GUARD,
 };
+
+/** Merge a partial user config onto the defaults, deep-merging nested objects (contextGuard). */
+function mergeConfig(user: Partial<HistorySearchConfig>): HistorySearchConfig {
+	return {
+		...DEFAULT_CONFIG,
+		...user,
+		contextGuard: { ...DEFAULT_CONTEXT_GUARD, ...(user.contextGuard ?? {}) },
+	};
+}
 
 export function loadConfig(cwd: string): HistorySearchConfig {
 	const paths = [join(cwd, CONFIG_FILENAME), join(cwd, ".pi", CONFIG_FILENAME), join(homedir(), ".pi", "agent", CONFIG_FILENAME)];
@@ -50,7 +91,7 @@ export function loadConfig(cwd: string): HistorySearchConfig {
 		if (!existsSync(configPath)) continue;
 		try {
 			const userConfig = JSON.parse(readFileSync(configPath, "utf-8")) as Partial<HistorySearchConfig>;
-			return { ...DEFAULT_CONFIG, ...userConfig };
+			return mergeConfig(userConfig);
 		} catch {
 			// Invalid JSON — fall through to the next candidate.
 		}

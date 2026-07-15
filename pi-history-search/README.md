@@ -35,6 +35,31 @@ List branches in the current session tree (or full project) with mechanical meta
 | `grep` | string | Optional text filter over ids/aliases/previews/files/commands. |
 | `limit` | number | Max branches returned (default 50). |
 
+### `HistoryGrep`
+
+**Surgical, exact search inside ONE session.** Reads a single session file once
+and runs one literal/regex pass over its messages — no FTS index, no
+tokenization — so it's fast even for large older sessions and catches the exact
+strings that tokenized `HistorySearch` misses: code identifiers, camelCase
+names, stack traces, error strings, file paths.
+
+Typical flow: `HistorySearch` finds the session, then `HistoryGrep` extracts the
+exact lines (each returned with a pinpoint `msgIndex`).
+
+| Param | Type | Notes |
+|---|---|---|
+| `sessionId` / `branchId` | string | The session to search inside (from a `HistorySearch` result). |
+| `pattern` | string | Substring or regular expression to search for. |
+| `regex` | boolean | Treat `pattern` as a JS regular expression. Default `false` (literal substring). |
+| `ignoreCase` | boolean | Case-insensitive match. Default `true`. |
+| `roleFilter` | `all` \| `conversation` \| `user` \| `assistant` \| `tool` | Restrict which roles are scanned. Default `all`. |
+| `before` / `after` | number | Include this many full messages around each match for context. Default `0` (surgical: matches only). |
+| `maxMatches` | number | Max match snippets returned (default 50). |
+| `maxChars` | number | Per-message cap for context messages (default 1000). |
+
+Returns one snippet per match with the matched span wrapped in `«»`, plus the
+`msgIndex` to feed back into `HistoryRead{around}` for full context.
+
 ### `HistoryRead`
 
 Pull fuller context from one session returned by `HistorySearch`.
@@ -54,6 +79,29 @@ Pull fuller context from one session returned by `HistorySearch`.
 
 With neither `around` nor `query`, returns the whole session — a compact
 `outline` by default, or the full `transcript`.
+
+## Context-overflow guard
+
+Every tool result is passed through a **context-overflow guard** before it
+reaches the model. The guard measures how much of the context window is still
+free (`ctx.getContextUsage()`) and, when a result would otherwise overflow it,
+truncates the result to a safe budget and prepends an actionable warning telling
+the agent how to fetch less (narrower query, `around:<msgIndex>`, `HistoryGrep`,
+lower `maxMessages`/`maxTotalChars`).
+
+The per-result budget is the smaller of:
+
+- `maxResultChars` (an absolute cap), and
+- `remaining_tokens × maxContextFraction × charsPerToken` — a result may consume
+  at most `maxContextFraction` of whatever context is left, so the other half
+  stays free for the actual conversation.
+
+It is floored at `minResultChars` so a nearly-full window still returns a usable
+sliver. `HistoryRead` additionally feeds this budget into the read itself (when
+no explicit `maxTotalChars` is given), so a huge session clips at message
+boundaries rather than mid-stream. When context usage is unknown (e.g. right
+after compaction, or print/rpc mode), only the absolute cap applies. Only the
+result's text is guarded; the structured `details` (UI/logs) stay full.
 
 ### TUI overlay (humans)
 
@@ -119,6 +167,11 @@ Loaded from the first match of: `./history-search.json`,
 | `includeToolResults` | `true` | Index tool-result messages too. |
 | `maxResults` | `10` | Default sessions per search. |
 | `snippetsPerSession` | `3` | Snippets per session. |
+| `contextGuard.enabled` | `true` | Master switch for the context-overflow guard. |
+| `contextGuard.charsPerToken` | `4` | Chars-per-token estimate for budget math. |
+| `contextGuard.maxContextFraction` | `0.5` | Max fraction of the *remaining* context window one result may consume. |
+| `contextGuard.maxResultChars` | `60000` | Hard absolute cap on returned chars. |
+| `contextGuard.minResultChars` | `4000` | Floor for the per-result budget (tiny remaining windows still get a sliver). |
 
 ## How it works
 

@@ -17,7 +17,9 @@ import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@ea
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type HistorySearchConfig, loadConfig, resolveSessionsBase } from "./config.js";
+import { type GuardOutcome, applyGuard, computeBudget } from "./context-guard.js";
 import {
+	type GrepResult,
 	type HistoryHit,
 	type ReadResult,
 	type RoleFilter,
@@ -25,6 +27,7 @@ import {
 	closeAll,
 	findSessionPath,
 	getStats,
+	grepSession,
 	listBranchesInProject,
 	listProjectDirs,
 	listRecent,
@@ -106,6 +109,38 @@ const HistoryReadParams = Type.Object({
 	),
 	maxTotalChars: Type.Optional(
 		Type.Number({ description: "Total character budget across all returned messages. Default 16000 for query reads." })
+	),
+});
+
+const HistoryGrepParams = Type.Object({
+	sessionId: Type.Optional(
+		Type.String({ description: "Session id from a HistorySearch result (the session to search inside)." })
+	),
+	branchId: Type.Optional(Type.String({ description: "Read by branch id (same as session id for branches)." })),
+	pattern: Type.String({
+		description:
+			"Substring or regular expression to search for within the session. Exact and case-aware, so it catches code identifiers, stack traces, and error strings that tokenized search (HistorySearch) may miss.",
+	}),
+	regex: Type.Optional(
+		Type.Boolean({ description: "Treat `pattern` as a JavaScript regular expression. Default false (literal substring)." })
+	),
+	ignoreCase: Type.Optional(Type.Boolean({ description: "Case-insensitive match. Default true." })),
+	roleFilter: Type.Optional(
+		StringEnum(["all", "conversation", "user", "assistant", "tool"] as const, {
+			description: "Restrict which message roles are scanned. Default 'all'.",
+		})
+	),
+	before: Type.Optional(
+		Type.Number({
+			description: "Include this many full messages before each match (for context). Default 0 (surgical: matches only).",
+		})
+	),
+	after: Type.Optional(
+		Type.Number({ description: "Include this many full messages after each match (for context). Default 0 (surgical)." })
+	),
+	maxMatches: Type.Optional(Type.Number({ description: "Maximum match snippets returned. Default 50." })),
+	maxChars: Type.Optional(
+		Type.Number({ description: "Per-message character cap for context messages (when before/after > 0). Default 1000." })
 	),
 });
 
@@ -192,6 +227,37 @@ function formatRead(r: ReadResult): string {
 		);
 	const tail = notes.length ? `\n\n(${notes.join("; ")})` : "";
 	return `${head}\n\n${body}${tail}`;
+}
+
+function formatGrep(r: GrepResult): string {
+	const mode = `${r.regex ? "regex" : "literal"} / ${r.ignoreCase ? "i" : "exact"} / roles=${r.roleFilter}`;
+	const head = `Session ${shortId(r.sessionId)} · ${r.project} · ${formatTs(r.timestamp)} · ${r.totalMessages} messages · grep "${r.pattern}" (${mode})`;
+	if (r.matches.length === 0) {
+		return `${head}\n(no matches)`;
+	}
+	const lines = [head, `${r.matches.length} snippet(s) across ${r.matchedMessages} matching message(s):`, ""];
+	for (const m of r.matches) {
+		lines.push(`[msg ${m.msgIndex}] ${m.role}: ${m.snippet}`);
+	}
+	if (r.messages.length > 0) {
+		lines.push("", "context window:");
+		for (const m of r.messages) lines.push(`[msg ${m.msgIndex}] ${m.role}:\n${m.text}`);
+	}
+	const notes: string[] = [];
+	if (r.truncated) notes.push("some matches omitted — raise maxMatches, or narrow with roleFilter");
+	const tail = notes.length ? `\n\n(${notes.join("; ")})` : "";
+	return lines.join("\n").trimEnd() + tail;
+}
+
+/** Compact, stable summary of a guard outcome for tool `details`. */
+function guardMeta(g: GuardOutcome): Record<string, unknown> {
+	return {
+		truncated: g.truncated,
+		origChars: g.origChars,
+		budgetChars: g.budgetChars,
+		remainingTokens: g.remainingTokens,
+		contextWindow: g.contextWindow,
+	};
 }
 
 function disabled(action: string): AgentToolResult<unknown> {
@@ -333,9 +399,10 @@ export default function historySearch(pi: ExtensionAPI): void {
 			try {
 				const hits = await runSearch(ctx, config, params);
 				const scope = params.scope ?? "project";
+				const outcome = applyGuard(formatHits(params.query, scope, hits), ctx, config.contextGuard, "HistorySearch");
 				return {
-					content: [{ type: "text", text: formatHits(params.query, scope, hits) }],
-					details: { action: "search", query: params.query, scope, count: hits.length, hits },
+					content: [{ type: "text", text: outcome.text }],
+					details: { action: "search", query: params.query, scope, count: hits.length, hits, contextGuard: guardMeta(outcome) },
 				};
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
@@ -401,9 +468,10 @@ export default function historySearch(pi: ExtensionAPI): void {
 			}
 			const limit = params.limit ?? 50;
 			branches = branches.slice(0, limit);
+			const outcome = applyGuard(formatBranches(branches, scope), ctx, config.contextGuard, "HistoryBranches");
 			return {
-				content: [{ type: "text", text: formatBranches(branches, scope) }],
-				details: { action: "branches", scope, count: branches.length, branches },
+				content: [{ type: "text", text: outcome.text }],
+				details: { action: "branches", scope, count: branches.length, branches, contextGuard: guardMeta(outcome) },
 			};
 		},
 	});
@@ -447,11 +515,20 @@ export default function historySearch(pi: ExtensionAPI): void {
 					view: params.view ?? "outline",
 					maxChars: params.maxChars ?? 2000,
 					maxMessages: params.maxMessages,
-					maxTotalChars: params.maxTotalChars,
+					// When the caller didn't set an explicit budget, bound the read at the live
+					// context budget so a huge session clips at message boundaries, not mid-stream.
+					maxTotalChars: params.maxTotalChars ?? computeBudget(ctx, config.contextGuard).budgetChars,
 				});
+				const outcome = applyGuard(formatRead(r), ctx, config.contextGuard, "HistoryRead");
 				return {
-					content: [{ type: "text", text: formatRead(r) }],
-					details: { action: "read", sessionId: r.sessionId, mode: r.mode, returned: r.messages.length },
+					content: [{ type: "text", text: outcome.text }],
+					details: {
+						action: "read",
+						sessionId: r.sessionId,
+						mode: r.mode,
+						returned: r.messages.length,
+						contextGuard: guardMeta(outcome),
+					},
 				};
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
@@ -474,6 +551,88 @@ export default function historySearch(pi: ExtensionAPI): void {
 			if (d?.error) return new Text(theme.fg("error", `Error: ${d.error}`), 0, 0);
 			const text = result.content?.[0]?.type === "text" ? result.content[0].text : "";
 			return new Text(text, 0, 0);
+		},
+	});
+
+	// ── HistoryGrep ────────────────────────────────────────────────
+	pi.registerTool({
+		name: "HistoryGrep",
+		label: "History Grep",
+		description:
+			"Surgically and fast-search ONE past session for an exact substring or regular expression, returning pinpoint matches (msgIndex + snippet). " +
+			"Use this when HistorySearch (tokenized BM25) misses the thing you need: code identifiers, camelCase names, stack traces, exact error strings, or file paths. " +
+			"It reads a single session file once and runs one regex pass — no index, no tokenization — so it's fast even for large older sessions. " +
+			"Typical flow: HistorySearch finds the session, then HistoryGrep extracts the exact lines. Identify the session with sessionId from a HistorySearch result.",
+		promptSnippet: "HistoryGrep — fast exact/regex search inside one past session (msgIndex-precise).",
+		parameters: HistoryGrepParams,
+
+		async execute(_id, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
+			const config = loadConfig(ctx.cwd);
+			if (!config.enabled) return disabled("grep");
+			const id = params.branchId ?? params.sessionId;
+			if (!id) {
+				return {
+					content: [{ type: "text", text: "Provide either sessionId or branchId." }],
+					details: { action: "grep", error: "missing id" },
+				};
+			}
+			const base = resolveSessionsBase(config);
+			const filePath = findSessionPath(base, id, projectDir(base, ctx.cwd));
+			if (!filePath) {
+				return {
+					content: [{ type: "text", text: `No accessible session/branch found with id "${id}".` }],
+					details: { action: "grep", error: "not found" },
+				};
+			}
+			try {
+				const r = grepSession(filePath, {
+					pattern: params.pattern,
+					regex: params.regex,
+					ignoreCase: params.ignoreCase,
+					roleFilter: params.roleFilter,
+					before: params.before,
+					after: params.after,
+					maxMatches: params.maxMatches,
+					maxChars: params.maxChars,
+				});
+				const outcome = applyGuard(formatGrep(r), ctx, config.contextGuard, "HistoryGrep");
+				return {
+					content: [{ type: "text", text: outcome.text }],
+					details: {
+						action: "grep",
+						sessionId: r.sessionId,
+						pattern: r.pattern,
+						matchedMessages: r.matchedMessages,
+						matches: r.matches.length,
+						contextGuard: guardMeta(outcome),
+					},
+				};
+			} catch (e) {
+				const msg = e instanceof Error ? e.message : String(e);
+				return {
+					content: [{ type: "text", text: `History grep failed: ${msg}` }],
+					details: { action: "grep", error: msg },
+				};
+			}
+		},
+
+		renderCall(args, theme: Theme) {
+			const rawId = ((args.branchId as string) ?? (args.sessionId as string) ?? "") as string;
+			const id = shortId(rawId);
+			const pattern = (args.pattern as string) ?? "";
+			const flag = `${args.regex ? "regex" : "lit"}/${args.ignoreCase === false ? "exact" : "i"}`;
+			return new Text(
+				theme.fg("toolTitle", theme.bold("HistoryGrep ")) + theme.fg("muted", `${id} · "${pattern}" (${flag})`),
+				0,
+				0
+			);
+		},
+
+		renderResult(result, _opts, theme: Theme) {
+			const d = result.details as { error?: string; matchedMessages?: number; matches?: number } | undefined;
+			if (d?.error) return new Text(theme.fg("error", `Error: ${d.error}`), 0, 0);
+			const text = result.content?.[0]?.type === "text" ? result.content[0].text : "";
+			return new Text(theme.fg("muted", `${d?.matches ?? 0} match(es) in ${d?.matchedMessages ?? 0} msg(s)\n`) + text, 0, 0);
 		},
 	});
 
