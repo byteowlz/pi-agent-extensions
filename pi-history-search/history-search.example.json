@@ -5,6 +5,7 @@
 	"includeToolResults": true,
 	"maxResults": 10,
 	"snippetsPerSession": 3,
+	"excludeCurrentSession": true,
 	"branchAliases": {
 		"019ed061-2bf6-764a-aeef-719178fc8513": "current-work"
 	},

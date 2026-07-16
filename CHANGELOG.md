@@ -35,6 +35,12 @@ tests (`context-guard.test.ts`, `grep.test.ts`) covering budget math,
 truncation, case sensitivity, regex, role filters, match caps, and the
 zero-width-match guard.
 
+Follow-up: the current (live) session is now excluded from `HistorySearch`
+results by default (new `excludeCurrentSession` config, default `true`) — it is
+already in the agent's context, so returning it is noise. The explicit
+`current-branch` scope is exempt (it would otherwise always be empty).
+Added `exclude-current.test.ts` (4 cases).
+
 ### Fixed - 2026-06-24
 
 #### pi-auto-rename: avoid stale extension ctx crash after fast prompt sessions (piext-j2wq)

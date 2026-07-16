@@ -25,6 +25,11 @@ Full-text, BM25-ranked search over past sessions.
 Returns matching sessions, each with a `sessionId`, a project + timestamp, and
 snippets tagged by `role` and `msgIndex`.
 
+> **The current (live) session is excluded by default** — it's already in the
+> agent's context, so returning it is noise. Disable with `excludeCurrentSession`
+> in config. The explicit `current-branch` scope is the one exception (it would
+> otherwise always be empty).
+
 ### `HistoryBranches`
 
 List branches in the current session tree (or full project) with mechanical metadata only.
@@ -167,6 +172,7 @@ Loaded from the first match of: `./history-search.json`,
 | `includeToolResults` | `true` | Index tool-result messages too. |
 | `maxResults` | `10` | Default sessions per search. |
 | `snippetsPerSession` | `3` | Snippets per session. |
+| `excludeCurrentSession` | `true` | Exclude the current (live) session from `HistorySearch` results — it's already in context. |
 | `contextGuard.enabled` | `true` | Master switch for the context-overflow guard. |
 | `contextGuard.charsPerToken` | `4` | Chars-per-token estimate for budget math. |
 | `contextGuard.maxContextFraction` | `0.5` | Max fraction of the *remaining* context window one result may consume. |

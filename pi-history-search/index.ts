@@ -269,7 +269,7 @@ function disabled(action: string): AgentToolResult<unknown> {
 
 // ── Search execution ─────────────────────────────────────────────────
 
-async function runSearch(
+export async function runSearch(
 	ctx: ExtensionContext,
 	config: HistorySearchConfig,
 	params: { query?: string; scope?: string; project?: string; limit?: number; roleFilter?: RoleFilter }
@@ -281,6 +281,13 @@ async function runSearch(
 	const query = params.query?.trim() ?? "";
 	const roleFilter: RoleFilter = params.roleFilter ?? "conversation";
 	const currentSessionId = (ctx.sessionManager.getSessionId?.() as string | undefined) ?? null;
+	// The live session is already in the agent's context, so exclude it by default.
+	// Skip for the explicit `current-branch` scope (that would otherwise always be empty).
+	const exclude = config.excludeCurrentSession && currentSessionId !== null && scope !== "current-branch";
+	// Over-fetch by one when excluding so dropping the current session doesn't cost a result slot.
+	const fetchLimit = exclude ? limit + 1 : limit;
+	const stripCurrent = (hits: HistoryHit[]): HistoryHit[] =>
+		exclude ? hits.filter((h) => h.sessionId !== currentSessionId) : hits;
 	const branchListing = listBranchesInProject(currentDir, currentSessionId, config.branchAliases);
 
 	if (scope !== "all") {
@@ -288,24 +295,26 @@ async function runSearch(
 			scope === "project" ? "project" : (scope as "current-tree" | "current-branch" | "siblings" | "ancestors" | "descendants");
 		const scopedIds = branchScopeSessionIds(branchListing.branches, branchListing.currentBranchId, branchScope);
 		const baseHits = query
-			? await searchProject(currentDir, query, config, limit, true, roleFilter, scopedIds)
-			: listRecent(currentDir, limit, scopedIds);
+			? await searchProject(currentDir, query, config, fetchLimit, true, roleFilter, scopedIds)
+			: listRecent(currentDir, fetchLimit, scopedIds);
 		const metaById = new Map(branchListing.branches.map((b) => [b.branchId, b]));
-		return baseHits.map((h) => ({ ...h, branch: metaById.get(h.sessionId) }));
+		return stripCurrent(baseHits)
+			.map((h) => ({ ...h, branch: metaById.get(h.sessionId) }))
+			.slice(0, limit);
 	}
 
 	const dirs = listProjectDirs(base);
 	const all: HistoryHit[] = [];
 	for (const dir of dirs) {
 		const isCurrent = dir === currentDir;
-		const hits = query ? await searchProject(dir, query, config, limit, isCurrent, roleFilter) : listRecent(dir, limit);
+		const hits = query ? await searchProject(dir, query, config, fetchLimit, isCurrent, roleFilter) : listRecent(dir, fetchLimit);
 		all.push(...hits);
 	}
 	const projFilter = params.project?.toLowerCase();
 	const filtered = projFilter ? all.filter((h) => h.project.toLowerCase().includes(projFilter)) : all;
 	// Sessions already come back per-project-ranked; order by recency across projects.
 	filtered.sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
-	return filtered.slice(0, limit);
+	return stripCurrent(filtered).slice(0, limit);
 }
 
 // ── Extension entry point ────────────────────────────────────────────

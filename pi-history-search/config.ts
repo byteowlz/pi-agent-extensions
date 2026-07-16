@@ -56,6 +56,11 @@ export interface HistorySearchConfig {
 	maxResults: number;
 	/** Snippets returned per matching session. */
 	snippetsPerSession: number;
+	/**
+	 * Exclude the current (live) session from HistorySearch results by default —
+	 * it's already in the agent's context, so returning it is noise. Default true.
+	 */
+	excludeCurrentSession: boolean;
 	/** Optional manual aliases keyed by branch/session id. */
 	branchAliases: Record<string, string>;
 	/** Context-overflow guard: truncate large results to fit the remaining context window. */
@@ -71,6 +76,7 @@ export const DEFAULT_CONFIG: HistorySearchConfig = {
 	includeToolResults: true,
 	maxResults: 10,
 	snippetsPerSession: 3,
+	excludeCurrentSession: true,
 	branchAliases: {},
 	contextGuard: DEFAULT_CONTEXT_GUARD,
 };
