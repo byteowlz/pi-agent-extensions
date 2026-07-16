@@ -36,6 +36,11 @@
 			"default": 3,
 			"description": "Number of matching snippets returned per session."
 		},
+		"excludeCurrentSession": {
+			"type": "boolean",
+			"default": true,
+			"description": "Exclude the current (live) session from HistorySearch results by default — it is already in the agent's context."
+		},
 		"branchAliases": {
 			"type": "object",
 			"default": {},
