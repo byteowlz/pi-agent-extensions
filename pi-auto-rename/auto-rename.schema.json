@@ -22,6 +22,36 @@
 			},
 			"required": ["provider", "id"],
 			"additionalProperties": false
+		},
+		"endpointConfig": {
+			"type": "object",
+			"description": "Direct HTTP endpoint configuration. Bypasses the Pi model registry entirely. Useful for local title-generation servers (e.g. llama.cpp) that should not be added to models.json.",
+			"properties": {
+				"url": {
+					"type": "string",
+					"description": "OpenAI-compatible chat completions endpoint URL.",
+					"examples": ["http://127.0.0.1:8090/v1/chat/completions"]
+				},
+				"model": {
+					"type": "string",
+					"description": "Model identifier sent in the request body.",
+					"examples": ["gemma-3-1b-title", "local-llama"]
+				},
+				"apiKey": {
+					"type": ["string", "null"],
+					"description": "Optional Bearer token for the endpoint.",
+					"default": null
+				},
+				"timeout": {
+					"type": "integer",
+					"description": "Request timeout in milliseconds.",
+					"default": 15000,
+					"minimum": 1000,
+					"maximum": 120000
+				}
+			},
+			"required": ["url", "model"],
+			"additionalProperties": false
 		}
 	},
 	"properties": {
@@ -30,7 +60,15 @@
 				{ "$ref": "#/definitions/modelConfig" },
 				{ "type": "null" }
 			],
-			"description": "Primary LLM model to use for generating session names. Set to null to use auto-selection strategy.",
+			"description": "Primary LLM model to use for generating session names. Set to null to use auto-selection strategy. Ignored when endpoint is set.",
+			"default": null
+		},
+		"endpoint": {
+			"oneOf": [
+				{ "$ref": "#/definitions/endpointConfig" },
+				{ "type": "null" }
+			],
+			"description": "Direct HTTP endpoint for title generation. When set, bypasses the Pi model registry and sends an OpenAI-compatible request directly. Use this for local servers (e.g. llama.cpp) that should not be added to models.json.",
 			"default": null
 		},
 		"fallbackModel": {
@@ -131,6 +169,14 @@
 	},
 	"additionalProperties": false,
 	"examples": [
+		{
+			"endpoint": {
+				"url": "http://127.0.0.1:8090/v1/chat/completions",
+				"model": "gemma-3-1b-title"
+			},
+			"fallbackDeterministic": "words",
+			"enabled": true
+		},
 		{
 			"model": null,
 			"fallbackModel": null,
