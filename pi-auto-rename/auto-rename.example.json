@@ -1,6 +1,7 @@
 {
   "$schema": "./auto-rename.schema.json",
   "model": null,
+  "endpoint": null,
   "fallbackModel": null,
   "fallbackDeterministic": "readable-id",
   "modelSelection": "current",

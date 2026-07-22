@@ -69,6 +69,17 @@ interface ModelConfig {
 	id: string;
 }
 
+interface EndpointConfig {
+	/** Direct HTTP endpoint URL (OpenAI-compatible chat completions format). */
+	url: string;
+	/** Model identifier to send in the request body. */
+	model: string;
+	/** Optional API key (Bearer token). */
+	apiKey?: string;
+	/** Request timeout in milliseconds (default 15000). */
+	timeout?: number;
+}
+
 interface WordlistConfig {
 	adjectives: string[];
 	nouns: string[];
@@ -76,6 +87,8 @@ interface WordlistConfig {
 
 interface AutoRenameConfig {
 	model?: ModelConfig;
+	/** Direct endpoint that bypasses the Pi model registry entirely. */
+	endpoint?: EndpointConfig | null;
 	fallbackModel?: ModelConfig | null;
 	fallbackDeterministic?: "truncate" | "words" | "none" | "readable-id";
 	modelSelection?: "current" | "cheapest";
@@ -95,6 +108,7 @@ interface AutoRenameConfig {
 
 type ResolvedConfig = {
 	model: ModelConfig | null;
+	endpoint: EndpointConfig | null | undefined;
 	fallbackModel: ModelConfig | null | undefined;
 	fallbackDeterministic: "truncate" | "words" | "none" | "readable-id";
 	modelSelection: "current" | "cheapest";
@@ -144,8 +158,12 @@ Rules:
 
 Reply with ONLY the title, nothing else.`;
 
+/** Names that should be treated as "not yet renamed" so the extension still runs. */
+const DEFAULT_NAMES = new Set(["chat", "new session", "untitled", "session", ""]);
+
 const DEFAULT_CONFIG: ResolvedConfig = {
 	model: null,
+	endpoint: null,
 	fallbackModel: null,
 	fallbackDeterministic: "readable-id",
 	modelSelection: "current",
@@ -534,6 +552,11 @@ async function resolveModel(
 	return { model, apiKey: auth.apiKey ?? null, error: null };
 }
 
+function isDefaultName(name: string | null | undefined): boolean {
+	if (!name) return true;
+	return DEFAULT_NAMES.has(name.trim().toLowerCase());
+}
+
 function isStaleContextError(error: unknown): boolean {
 	return error instanceof Error && error.message.includes("ctx is stale");
 }
@@ -544,9 +567,17 @@ function debugNotify(
 	message: string,
 	level: "info" | "warning" | "error" = "info"
 ): void {
-	if (config.debug && ctx.hasUI) {
-		ctx.ui.notify(message, level);
+	if (!config.debug) return;
+	if (ctx.hasUI) {
+		try {
+			ctx.ui.notify(message, level);
+		} catch {
+			// UI may not support notify in this mode
+		}
 	}
+	// Always mirror to console so RPC / headless modes are observable.
+	const method = level === "error" ? console.error : level === "warning" ? console.warn : console.log;
+	method(`[auto-rename] ${message}`);
 }
 
 async function resolveCurrentModel(ctx: ExtensionContext): Promise<{ model: Model<Api>; apiKey: string } | null> {
@@ -681,11 +712,7 @@ function looksLikeReasoning(line: string): boolean {
 	return false;
 }
 
-function parseNameFromResponse(
-	response: { content: Array<{ type: string; text?: string; thinking?: string }> },
-	maxNameLength: number
-): string | null {
-	const raw = stripThinkTags(extractTextFromContent(response.content));
+function parseNameFromText(raw: string, maxNameLength: number): string | null {
 	if (!raw) return null;
 
 	const lines = raw
@@ -709,24 +736,83 @@ function parseNameFromResponse(
 	name = name.replace(/\.+$/, "").trim();
 	if (!name || looksLikeReasoning(name)) return null;
 
-	name = enforceNameLength(name, maxNameLength);
-	return name || null;
+	return enforceNameLength(name, maxNameLength) || null;
+}
+
+function parseNameFromResponse(
+	response: { content: Array<{ type: string; text?: string; thinking?: string }> },
+	maxNameLength: number
+): string | null {
+	const raw = stripThinkTags(extractTextFromContent(response.content));
+	return parseNameFromText(raw, maxNameLength);
+}
+
+async function tryEndpointGeneration(
+	query: string,
+	config: ResolvedConfig,
+	ctx: ExtensionContext
+): Promise<NameGenerationResult | null> {
+	const endpoint = config.endpoint;
+	if (!endpoint?.url) return null;
+
+	const trimmedQuery = truncateQuery(query, config.maxQueryLength);
+	const prompt = config.prompt.replace("{{query}}", trimmedQuery);
+
+	const controller = new AbortController();
+	const timeoutMs = endpoint.timeout ?? 15000;
+	const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+	try {
+		const response = await fetch(endpoint.url, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				...(endpoint.apiKey ? { Authorization: `Bearer ${endpoint.apiKey}` } : {}),
+			},
+			body: JSON.stringify({
+				model: endpoint.model,
+				messages: [{ role: "user", content: prompt }],
+				max_tokens: 64,
+				temperature: 0.3,
+			}),
+			signal: controller.signal,
+		});
+		clearTimeout(timeout);
+
+		if (!response.ok) {
+			debugNotify(ctx, config, `[auto-rename] Endpoint ${response.status}: ${response.statusText}`, "warning");
+			return null;
+		}
+
+		const data = (await response.json()) as {
+			choices?: Array<{ message?: { content?: string }; text?: string }>;
+		};
+		const text = data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text ?? "";
+		const name = parseNameFromText(text, config.maxNameLength);
+		if (!name) {
+			debugNotify(ctx, config, "[auto-rename] Endpoint returned unparseable text, falling back", "warning");
+			return null;
+		}
+		return { name, source: "llm-primary", error: null };
+	} catch (error) {
+		const msg = error instanceof Error ? error.message : String(error);
+		debugNotify(ctx, config, `[auto-rename] Endpoint request failed: ${msg}`, "warning");
+		return null;
+	} finally {
+		clearTimeout(timeout);
+	}
 }
 
 function handleLlmError(errorMsg: string, config: ResolvedConfig, ctx: ExtensionContext): void {
-	if (config.debug && ctx.hasUI) {
-		ctx.ui.notify(`[auto-rename] LLM call failed: ${errorMsg}`, "warning");
-	}
-
-	if (!ctx.hasUI) return;
+	debugNotify(ctx, config, `[auto-rename] LLM call failed: ${errorMsg}`, "warning");
 
 	const providerName = config.model?.provider ?? "unknown";
 	if (errorMsg.includes("401") || errorMsg.includes("403") || errorMsg.includes("authentication")) {
-		ctx.ui.notify(`[auto-rename] Authentication failed for ${providerName}. Check your API key.`, "error");
+		debugNotify(ctx, config, `[auto-rename] Authentication failed for ${providerName}. Check your API key.`, "error");
 	} else if (errorMsg.includes("429") || errorMsg.includes("rate limit")) {
-		ctx.ui.notify(`[auto-rename] Rate limited by ${providerName}. Using fallback.`, "warning");
+		debugNotify(ctx, config, `[auto-rename] Rate limited by ${providerName}. Using fallback.`, "warning");
 	} else if (errorMsg.includes("timeout") || errorMsg.includes("ETIMEDOUT")) {
-		ctx.ui.notify("[auto-rename] Request timed out. Using fallback.", "warning");
+		debugNotify(ctx, config, "[auto-rename] Request timed out. Using fallback.", "warning");
 	}
 }
 
@@ -805,6 +891,13 @@ async function generateSessionName(
 	sessionId: string | null,
 	wordlist: WordlistConfig | null
 ): Promise<NameGenerationResult> {
+	// 0. Prefer direct endpoint (bypasses Pi model registry entirely)
+	const endpointResult = await tryEndpointGeneration(query, config, ctx);
+	if (endpointResult?.name) {
+		return endpointResult;
+	}
+
+	// 1. Fall back to Pi model registry
 	const resolution = await resolveModelWithFallback(config, ctx);
 
 	const llmResult = await tryLlmGeneration(query, config, ctx, resolution);
@@ -812,12 +905,11 @@ async function generateSessionName(
 		return llmResult;
 	}
 
+	// 2. Deterministic fallback
 	const deterministicName = generateDeterministicName(query, config.fallbackDeterministic, sessionId, wordlist);
 
 	if (deterministicName) {
-		if (config.debug && ctx.hasUI) {
-			ctx.ui.notify(`[auto-rename] Using deterministic fallback (${config.fallbackDeterministic})`, "info");
-		}
+		debugNotify(ctx, config, `[auto-rename] Using deterministic fallback (${config.fallbackDeterministic})`, "info");
 		return {
 			name: deterministicName,
 			source: "deterministic",
@@ -947,7 +1039,8 @@ async function handleRegen(
 
 function handleConfig(ctx: ExtensionCommandContext, config: ResolvedConfig): void {
 	const parts = [
-		config.model ? `model=${config.model.provider}/${config.model.id}` : "model=auto (current session model, then cheapest)",
+		config.endpoint ? `endpoint=${config.endpoint.url} (model=${config.endpoint.model})` : null,
+		config.model ? `model=${config.model.provider}/${config.model.id}` : config.endpoint ? null : "model=auto (current session model, then cheapest)",
 		config.fallbackModel ? `fallback=${config.fallbackModel.provider}/${config.fallbackModel.id}` : null,
 		`deterministic=${config.fallbackDeterministic}`,
 		`modelSelection=${config.modelSelection}`,
@@ -981,8 +1074,17 @@ function handleInit(ctx: ExtensionCommandContext, cwd: string): void {
 }
 
 async function handleTest(ctx: ExtensionCommandContext, config: ResolvedConfig): Promise<void> {
-	ctx.ui.notify("Testing model connectivity...", "info");
+	if (config.endpoint?.url) {
+		ctx.ui.notify(`Testing endpoint ${config.endpoint.url}...`, "info");
+		const result = await tryEndpointGeneration("Test connectivity check.", config, ctx);
+		if (result?.name) {
+			ctx.ui.notify(`Endpoint OK: generated "${result.name}"`, "info");
+			return;
+		}
+		ctx.ui.notify("Endpoint failed, falling back to model registry test", "warning");
+	}
 
+	ctx.ui.notify("Testing model connectivity...", "info");
 	const resolution = await resolveModelWithFallback(config, ctx);
 
 	if (resolution.model) {
@@ -1032,10 +1134,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const checkExistingName = () => {
-		const existingName = pi.getSessionName();
-		if (!existingName) return;
-		const normalized = existingName.trim().toLowerCase();
-		if (!normalized || normalized === "chat") return;
+		if (isDefaultName(pi.getSessionName())) return;
 		sessionRenamed = true;
 	};
 
@@ -1055,7 +1154,7 @@ export default function (pi: ExtensionAPI) {
 		const config = loadConfig(ctx.cwd);
 		if (!config.enabled) return;
 
-		if (pi.getSessionName()) {
+		if (!isDefaultName(pi.getSessionName())) {
 			sessionRenamed = true;
 			return;
 		}
@@ -1109,7 +1208,7 @@ export default function (pi: ExtensionAPI) {
 		const config = loadConfig(ctx.cwd);
 		if (!config.enabled) return;
 
-		if (pi.getSessionName()) {
+		if (!isDefaultName(pi.getSessionName())) {
 			sessionRenamed = true;
 			return;
 		}
