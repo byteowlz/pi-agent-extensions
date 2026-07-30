@@ -176,7 +176,6 @@ function kyzAudit(op: string, detail: string): void {
 // ---------------------------------------------------------------------------
 
 let secretCache: CachedSecrets | null = null;
-let refreshInFlight: Promise<CachedSecrets> | null = null;
 
 function loadSecrets(): CachedSecrets {
 	// Return cached if fresh
@@ -221,22 +220,6 @@ function loadSecrets(): CachedSecrets {
 
 function invalidateCache(): void {
 	secretCache = null;
-	refreshInFlight = null;
-}
-
-function refreshSecretsAsync(): Promise<CachedSecrets> {
-	if (secretCache && Date.now() - secretCache.refreshedAt < CACHE_TTL_MS) {
-		return Promise.resolve(secretCache);
-	}
-	if (refreshInFlight) return refreshInFlight;
-
-	refreshInFlight = Promise.resolve().then(() => {
-		const loaded = loadSecrets();
-		refreshInFlight = null;
-		return loaded;
-	});
-
-	return refreshInFlight;
 }
 
 // ---------------------------------------------------------------------------
@@ -279,8 +262,7 @@ export default function (pi: ExtensionAPI) {
 	// Scrub secrets from all tool results
 	// -----------------------------------------------------------------------
 	pi.on("tool_result", async (event, _ctx) => {
-		const entries =
-			secretCache && Date.now() - secretCache.refreshedAt < CACHE_TTL_MS ? secretCache.entries : [];
+		const entries = secretCache && Date.now() - secretCache.refreshedAt < CACHE_TTL_MS ? secretCache.entries : [];
 		if (entries.length === 0) return;
 
 		const scrubbed = event.content.map((c) => (c.type === "text" ? { ...c, text: scrubText(c.text, entries) } : c));
@@ -351,8 +333,7 @@ export default function (pi: ExtensionAPI) {
 	// Inject secret names into system prompt
 	// -----------------------------------------------------------------------
 	pi.on("before_agent_start", async (event) => {
-		const cachedEntries =
-			secretCache && Date.now() - secretCache.refreshedAt < CACHE_TTL_MS ? secretCache.entries : [];
+		const cachedEntries = secretCache && Date.now() - secretCache.refreshedAt < CACHE_TTL_MS ? secretCache.entries : [];
 
 		// Never trigger vault IO on prompt send path.
 		if (cachedEntries.length === 0) {

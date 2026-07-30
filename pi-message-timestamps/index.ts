@@ -86,6 +86,7 @@ function renderWidget(ctx: ExtensionContext): void {
 				}
 				return lines;
 			},
+			invalidate: () => {},
 		}),
 		{ placement: "belowEditor" }
 	);
