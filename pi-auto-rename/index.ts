@@ -1040,7 +1040,11 @@ async function handleRegen(
 function handleConfig(ctx: ExtensionCommandContext, config: ResolvedConfig): void {
 	const parts = [
 		config.endpoint ? `endpoint=${config.endpoint.url} (model=${config.endpoint.model})` : null,
-		config.model ? `model=${config.model.provider}/${config.model.id}` : config.endpoint ? null : "model=auto (current session model, then cheapest)",
+		config.model
+			? `model=${config.model.provider}/${config.model.id}`
+			: config.endpoint
+				? null
+				: "model=auto (current session model, then cheapest)",
 		config.fallbackModel ? `fallback=${config.fallbackModel.provider}/${config.fallbackModel.id}` : null,
 		`deterministic=${config.fallbackDeterministic}`,
 		`modelSelection=${config.modelSelection}`,
