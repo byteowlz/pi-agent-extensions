@@ -4,6 +4,12 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed - 2026-08-07
+
+#### pi-kyz: prevent audit status lines from leaking into the TUI
+
+Removed the extension's direct writes to the pi process's stderr. The pseudo-audit logger emitted `[kyz] ...` status lines for tool lifecycle events and secret operations; because pi owns that terminal stream, those lines could bleed into or corrupt the interactive TUI. The current kyz CLI has no audit subcommand, so the misleading stderr fallback and its hooks were removed rather than redirected. Added a regression test asserting that tool lifecycle events do not write to process stderr.
+
 ### Added - 2026-07-15
 
 #### pi-history-search: context-overflow guard + HistoryGrep (surgical exact search)
