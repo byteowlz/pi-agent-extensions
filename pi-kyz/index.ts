@@ -10,7 +10,6 @@
  * 6. /kyz-set command — set a secret from within pi session
  * 7. /kyz-scope command — limit which secrets are injected by tag
  * 8. Tag-based scoping — only inject secrets matching specified tags
- * 9. Audit events — log tool_call events to kyz's audit log
  *
  * Integration: CLI only — shells out to `kyz` binary on PATH.
  *
@@ -160,17 +159,6 @@ function kyzExecWithSecrets(command: string): { ok: boolean; output: string } {
 	}
 }
 
-function kyzAudit(op: string, detail: string): void {
-	try {
-		// Use stderr-based audit logging via kyz exec dry-run (logs audit event)
-		// For now, just log to stderr directly in kyz's format
-		const ts = new Date().toISOString();
-		process.stderr.write(`[kyz] ${ts} op=${op} detail=${detail}\n`);
-	} catch {
-		// Audit is best-effort
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Secret loading and caching
 // ---------------------------------------------------------------------------
@@ -279,11 +267,6 @@ export default function (pi: ExtensionAPI) {
 		async execute(id, params, signal, onUpdate, _ctx) {
 			const { entries } = loadSecrets();
 
-			kyzAudit(
-				"agent_bash",
-				`cmd=${typeof params === "object" && params && "command" in params ? (params as { command: string }).command.slice(0, 100) : "?"}`
-			);
-
 			const injectedBash = createBashTool(cwd, {
 				spawnHook: ({ command, cwd: spawnCwd, env }) => {
 					const injectedEnv = { ...env };
@@ -356,13 +339,6 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// -----------------------------------------------------------------------
-	// Audit: log tool calls that may touch secrets
-	// -----------------------------------------------------------------------
-	pi.on("tool_execution_start", async (event) => {
-		kyzAudit("tool_start", `tool=${event.toolName}`);
-	});
-
-	// -----------------------------------------------------------------------
 	// /kyz command — list secret names (never values)
 	// -----------------------------------------------------------------------
 	pi.registerCommand("kyz", {
@@ -425,7 +401,6 @@ export default function (pi: ExtensionAPI) {
 
 			if (kyzSetSecret(service, key, value)) {
 				invalidateCache();
-				kyzAudit("agent_set_secret", `secret=${ref_}`);
 				ctx.ui.notify(`Secret ${ref_} saved`, "info");
 			} else {
 				ctx.ui.notify(`Failed to set secret ${ref_}`, "error");
@@ -471,7 +446,6 @@ export default function (pi: ExtensionAPI) {
 			}
 			if (kyzSetSecretFields(service, key, fields)) {
 				invalidateCache();
-				kyzAudit("agent_set_secret_fields", `secret=${ref_} fields=${fieldNames.join(",")}`);
 				ctx.ui.notify(`Secret ${ref_} saved with ${fieldNames.length} field(s)`, "info");
 			} else {
 				ctx.ui.notify(`Failed to set secret ${ref_}`, "error");
@@ -524,7 +498,6 @@ export default function (pi: ExtensionAPI) {
 
 			activeTagScope = tags;
 			invalidateCache();
-			kyzAudit("agent_scope_change", `tags=${tags.join(",")}`);
 			ctx.ui.notify(`Secret scope set to tags: ${tags.join(", ")}`, "info");
 		},
 	});
