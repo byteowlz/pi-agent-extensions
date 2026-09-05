@@ -4,6 +4,20 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-09-05
+
+- Clarify agent hints for post-compaction recall, current-session versus related-branch scopes, anchored drilldown, and incomplete search results. Correct HistoryGrep's outdated description of HistorySearch (piext-5ydf).
+
+## [1.4.0] - 2026-09-05
+
+### pi-history-search: evidence-first recall (piext-xcfm)
+
+- Literal-first identifier search (`auto`/`grep`), explicit `exact`/`regex`/`fts` modes, and disclosed regex fallback on literal misses.
+- Search and grep now return budgeted JSON (3,000 chars by default), ≤300-character evidence snippets, stable message/character anchors, and honest unknown completeness. Consumers of the old prose output must adapt.
+- All-role evidence selection finds tool-result field values without command/file metadata floods; strict user/assistant/tool filters remain available. Empty branch scopes no longer escape into project-wide indexed results.
+- `HistoryRead` accepts `matchPosition` for evidence deep inside a message; raw message whitespace is preserved.
+- Recall contract regressions live here; shared/internal before/after benchmarks live in `byteowlz/bench`, with private cases kept outside git.
+
 ### Fixed - 2026-08-07
 
 #### pi-kyz: prevent audit status lines from leaking into the TUI
