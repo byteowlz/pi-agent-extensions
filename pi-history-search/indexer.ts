@@ -155,13 +155,13 @@ function indexDbPath(projDir: string): string {
 }
 
 /** Session id is the filename suffix: `{ts}_{id}.jsonl`. */
-function sessionIdFromFilename(filename: string): string {
+export function sessionIdFromFilename(filename: string): string {
 	const m = filename.replace(/\.jsonl$/, "").match(/_([^_]+)$/);
 	return m ? m[1] : filename.replace(/\.jsonl$/, "");
 }
 
 /** Reconstruct an ISO timestamp from `2026-02-18T16-02-59-202Z_uuid.jsonl`. */
-function timestampFromFilename(filename: string): string {
+export function timestampFromFilename(filename: string): string {
 	if (!/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}/.test(filename)) return "";
 	return filename
 		.replace(/\.jsonl$/, "")
@@ -169,7 +169,7 @@ function timestampFromFilename(filename: string): string {
 		.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d+)Z/, "T$1:$2:$3.$4Z");
 }
 
-function listSessionFiles(projDir: string): string[] {
+export function listSessionFiles(projDir: string): string[] {
 	let entries: string[];
 	try {
 		entries = fs.readdirSync(projDir);
@@ -190,17 +190,11 @@ function blocksToText(content: unknown, includeTypes: Set<string>): string {
 			parts.push(block.text);
 		}
 	}
-	return parts.join(" ");
+	return parts.join("\n");
 }
 
 const TEXT_ONLY = new Set(["text"]);
 
-/**
- * Extract one entry per `message` record, in file order. The ordinal of each
- * entry is the stable `msgIndex` used by HistorySearch and HistoryRead. Assistant
- * thinking blocks and tool calls are dropped from the indexed text but the entry
- * is still emitted so ordinals never shift.
- */
 /**
  * Extract one entry per `message` record, in file order. The ordinal of each
  * entry is the stable `msgIndex` used by HistorySearch and HistoryRead. Assistant
@@ -232,7 +226,7 @@ export function extractMessages(data: string): {
 		if (entry.type !== "message" || !entry.message) continue;
 
 		const role = entry.message.role ?? "unknown";
-		const text = blocksToText(entry.message.content, TEXT_ONLY).replace(/\s+/g, " ").trim();
+		const text = blocksToText(entry.message.content, TEXT_ONLY);
 		messages.push({ role, text });
 		if (role === "user" && !firstUserMessage && text) {
 			firstUserMessage = text.slice(0, 200);
@@ -282,7 +276,7 @@ function rolesFor(filter: RoleFilter): string[] | null {
 	}
 }
 
-function roleAllowed(role: string, filter: RoleFilter): boolean {
+export function roleAllowed(role: string, filter: RoleFilter): boolean {
 	const roles = rolesFor(filter);
 	return roles === null || roles.includes(role);
 }
@@ -546,6 +540,7 @@ function searchDb(
 	roleFilter: RoleFilter,
 	allowedSessionIds?: Set<string>
 ): HistoryHit[] {
+	if (allowedSessionIds?.size === 0) return [];
 	const tokens = sanitizeTokens(query);
 	const ftsQuery = buildFtsQuery(tokens);
 	if (!ftsQuery) return [];
@@ -618,8 +613,8 @@ function scanFile(
 		if (!lower) continue;
 		let hits = 0;
 		for (const t of tokens) if (lower.includes(t.toLowerCase())) hits++;
-		if (hits === 0) continue;
-		score += hits;
+		if (hits !== tokens.length) continue;
+		score = Math.max(score, hits);
 		if (matches.length < snippetsPerSession) {
 			matches.push({ role: messages[i].role, msgIndex: i, snippet: makeSnippet(messages[i].text, tokens) });
 		}
@@ -710,6 +705,7 @@ export function queryProject(
 
 /** Most recent sessions in a project (for the overlay's empty-query view). */
 export function listRecent(projDir: string, limit: number, allowedSessionIds?: Set<string>): HistoryHit[] {
+	if (allowedSessionIds?.size === 0) return [];
 	const project = prettyProject(path.basename(projDir));
 	const db = openDb(projDir, "rw") ?? openDb(projDir, "ro");
 	if (db) {
@@ -1026,6 +1022,8 @@ export interface ReadResult {
 export interface ReadOptions {
 	query?: string;
 	around?: number;
+	/** UTF-16 character position in the anchored message, as returned by search. */
+	matchPosition?: number;
 	before?: number;
 	after?: number;
 	maxChars: number;
@@ -1104,8 +1102,9 @@ export function readSession(filePath: string, opts: ReadOptions): ReadResult {
 		const from = Math.max(0, opts.around - before);
 		const to = Math.min(messages.length, opts.around + after + 1);
 		const out = messages.slice(from, to).map((m, k) => {
-			const c = clip(m.text, opts.maxChars);
-			return { role: m.role, msgIndex: from + k, text: c.text, _t: c.truncated };
+			const start = from + k === opts.around ? Math.max(0, (opts.matchPosition ?? 0) - 60) : 0;
+			const c = clip(m.text.slice(start), opts.maxChars);
+			return { role: m.role, msgIndex: from + k, text: c.text, _t: c.truncated || start > 0 };
 		});
 		return {
 			...base,
@@ -1152,6 +1151,7 @@ export interface GrepSnippet {
 	role: string;
 	/** Match in context, with «» around the matched span. */
 	snippet: string;
+	matchPosition: number;
 }
 
 export interface GrepResult {
@@ -1160,6 +1160,8 @@ export interface GrepResult {
 	timestamp: string;
 	totalMessages: number;
 	pattern: string;
+	attempts: string[];
+	warnings: string[];
 	regex: boolean;
 	ignoreCase: boolean;
 	roleFilter: RoleFilter;
@@ -1176,6 +1178,8 @@ export interface GrepOptions {
 	pattern: string;
 	/** Treat pattern as a JavaScript regular expression. Default false (literal substring). */
 	regex?: boolean;
+	/** Disable automatic regex retry after a literal miss. */
+	fallback?: boolean;
 	/** Case-insensitive match. Default true. */
 	ignoreCase?: boolean;
 	roleFilter?: RoleFilter;
@@ -1214,7 +1218,7 @@ function snippetAround(text: string, start: number, matched: string): string {
 	const post = text.slice(end, end + GREP_CTX);
 	const lead = from > 0 ? "… " : "";
 	const tail = end + GREP_CTX < text.length ? " …" : "";
-	return `${lead}${pre}«${matched}»${post}${tail}`;
+	return `${lead}${pre}«${matched}»${post}${tail}`.slice(0, 300);
 }
 
 export interface MessageScan {
@@ -1224,7 +1228,6 @@ export interface MessageScan {
 	snippets: GrepSnippet[];
 }
 
-/** Run the matcher over a single message, collecting up to maxPerMessage snippets. */
 /** Run the matcher over a single message. When `collect` is false, stop at the
  * first match and return no snippets — used once the overall cap is reached so
  * the tail scan stays minimal while still counting every matching message. */
@@ -1249,9 +1252,9 @@ function scanMessage(
 		}
 		matched = true;
 		if (collect && snippets.length < maxPerMessage) {
-			snippets.push({ msgIndex, role, snippet: snippetAround(text, hit.index, hit[0]) });
+			snippets.push({ msgIndex, role, snippet: snippetAround(text, hit.index, hit[0]), matchPosition: hit.index });
 		}
-		if (!collect) break; // only existence-checking once capped
+		if (!collect || snippets.length >= maxPerMessage) break;
 		hit = re.exec(text);
 	}
 	return { matched, snippets };
@@ -1317,10 +1320,27 @@ function buildContextWindow(
 	return { messages: out, truncated };
 }
 
+export function regexShaped(pattern: string): boolean {
+	return /[\\[\]()|*+?^$]/.test(pattern);
+}
+
 export function grepSession(filePath: string, opts: GrepOptions): GrepResult {
+	const { messages } = extractMessages(fs.readFileSync(filePath, "utf-8"));
+	const result = grepMessages(filePath, messages, opts);
+	if (result.matchedMessages || opts.regex || opts.fallback === false || !regexShaped(opts.pattern)) return result;
+	try {
+		const retry = grepMessages(filePath, messages, { ...opts, regex: true });
+		retry.attempts.unshift("literal");
+		return retry;
+	} catch {
+		result.attempts.push("regex");
+		result.warnings.push("Invalid regex fallback; literal pass found no matches.");
+		return result;
+	}
+}
+
+function grepMessages(filePath: string, messages: ExtractedMessage[], opts: GrepOptions): GrepResult {
 	const filename = path.basename(filePath);
-	const data = fs.readFileSync(filePath, "utf-8");
-	const { messages } = extractMessages(data);
 	const project = prettyProject(path.basename(path.dirname(filePath)));
 	const o = resolveGrepOptions(opts);
 
@@ -1354,6 +1374,8 @@ export function grepSession(filePath: string, opts: GrepOptions): GrepResult {
 		timestamp: timestampFromFilename(filename),
 		totalMessages: messages.length,
 		pattern: opts.pattern,
+		attempts: [o.isRegex ? "regex" : "literal"],
+		warnings: [],
 		regex: o.isRegex,
 		ignoreCase: o.ignoreCase,
 		roleFilter: o.roleFilter,
