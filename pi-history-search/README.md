@@ -1,7 +1,8 @@
 # pi-history-search
 
 Lets a pi agent **search its own session history** efficiently, via a SQLite
-FTS5 index. Two LLM-callable tools — `HistorySearch` and `HistoryRead` — so the
+FTS5 index and literal scans. `HistorySearch`, `HistoryRead`, `HistoryGrep`, and
+`HistoryBranches` let the
 agent can recall earlier decisions, prior solutions, file paths, error messages,
 or what was already tried, instead of re-deriving them.
 
@@ -12,18 +13,32 @@ to work just as well with plain pi. No external LLM / OpenRouter dependency.
 
 ### `HistorySearch`
 
-Full-text, BM25-ranked search over past sessions.
+Evidence-first recall: identifiers use literal → regex (when shaped) → FTS;
+natural-language queries use FTS candidates with all-role evidence selection.
 
 | Param | Type | Notes |
 |---|---|---|
 | `query` | string (optional) | Search terms. **Omit/empty → most recent sessions** (for "what did we do here/recently"). |
 | `scope` | `"project"` \| `"all"` \| `"current-tree"` \| `"current-branch"` \| `"siblings"` \| `"ancestors"` \| `"descendants"` | Default `"project"`. `"all"` searches other projects. Branch-aware scopes limit to the current session graph. |
 | `project` | string | With `scope:"all"`, keep only sessions whose project label contains this. |
-| `roleFilter` | `all` \| `conversation` \| `user` \| `assistant` \| `tool` | **Default `conversation`** (user+assistant) — best signal, skips the tool-output noise that otherwise dominates. Use `all` to also search tool output (error messages, file paths, command output), or `tool` for only that. |
+| `roleFilter` | `all` \| `conversation` \| `user` \| `assistant` \| `tool` | Default `conversation` prefers conversational prose but still selects tool evidence. `user`, `assistant`, and `tool` are strict evidence filters. |
 | `limit` | number | Max sessions (default from config). |
+| `mode` | `auto` \| `grep` \| `exact` \| `regex` \| `fts` | Default `auto`; `grep` forces literal-first routing. `exact` is case-sensitive literal-only; `regex` forces a JS regex. |
+| `maxTotalChars` | integer | Serialized JSON budget, default 3000 (1000–60000). |
+| `verbose` | boolean | Include branch metadata within the same budget. |
 
-Returns matching sessions, each with a `sessionId`, a project + timestamp, and
-snippets tagged by `role` and `msgIndex`.
+Returns a JSON envelope with `attempts`, `truncated`, filters, limitations, and
+`hits`. Each hit has a title, timestamp, `sessionId`, and one ≤300-character
+snippet with `role`, `msgIndex`, and `matchPosition`. Expand in one call:
+`HistoryRead{sessionId, around: msgIndex, matchPosition}`. Positions are UTF-16
+character offsets in extracted message text; message ordinals are not JSONL lines.
+
+FTS considers up to 20 candidate sessions per project and 192 passage positions
+per message. Exact/grep bypass stale indexes. Completeness is always `unknown`:
+accessible files may be copies, malformed records are skipped, and missing hits
+are never global proof of absence. Search covers stored message text blocks,
+not images, thinking blocks, or tool-call arguments. All-project searches remain
+local to accessible files; no remote-source discovery is implied.
 
 > **The current (live) session is excluded by default** — it's already in the
 > agent's context, so returning it is noise. Disable with `excludeCurrentSession`
@@ -56,14 +71,17 @@ exact lines (each returned with a pinpoint `msgIndex`).
 | `sessionId` / `branchId` | string | The session to search inside (from a `HistorySearch` result). |
 | `pattern` | string | Substring or regular expression to search for. |
 | `regex` | boolean | Treat `pattern` as a JS regular expression. Default `false` (literal substring). |
+| `fallback` | boolean | Retry regex-shaped literal misses as regex; default `true`. Disable for literal-only behavior. |
+| `maxTotalChars` | integer | Total serialized output budget, default 3000. |
 | `ignoreCase` | boolean | Case-insensitive match. Default `true`. |
 | `roleFilter` | `all` \| `conversation` \| `user` \| `assistant` \| `tool` | Restrict which roles are scanned. Default `all`. |
 | `before` / `after` | number | Include this many full messages around each match for context. Default `0` (surgical: matches only). |
 | `maxMatches` | number | Max match snippets returned (default 50). |
 | `maxChars` | number | Per-message cap for context messages (default 1000). |
 
-Returns one snippet per match with the matched span wrapped in `«»`, plus the
-`msgIndex` to feed back into `HistoryRead{around}` for full context.
+Returns budgeted JSON with `attempts` (including on misses), `matchedMessages`,
+`truncated`, and ≤300-character snippets. Each includes `msgIndex` and
+`matchPosition` for anchored `HistoryRead`.
 
 ### `HistoryRead`
 
@@ -74,6 +92,7 @@ Pull fuller context from one session returned by `HistorySearch`.
 | `sessionId` | string (optional) | From a `HistorySearch` hit. |
 | `branchId` | string (optional) | Read by branch id (same id as the session file). |
 | `around` | number | Window of messages centered on this `msgIndex`. |
+| `matchPosition` | number | Center the anchored message excerpt on this search-provided character position. |
 | `before` / `after` | number | Window size. For `around`: default 3 each. For `query`: context before/after each matching message, default 2 each. |
 | `query` | string | Return merged, budgeted context windows around messages matching these terms. |
 | `view` | `outline` \| `transcript` | Whole-session rendering (ignored with `around`/`query`). **Default `outline`** = user+assistant only, tool noise dropped (compact recall, ~60% fewer chars). `transcript` = every non-empty message. |
@@ -106,7 +125,9 @@ sliver. `HistoryRead` additionally feeds this budget into the read itself (when
 no explicit `maxTotalChars` is given), so a huge session clips at message
 boundaries rather than mid-stream. When context usage is unknown (e.g. right
 after compaction, or print/rpc mode), only the absolute cap applies. Only the
-result's text is guarded; the structured `details` (UI/logs) stay full.
+result's text is context-guarded. Search `details` contain only the budgeted
+hits, not hidden full metadata. A stricter custom context guard may further
+truncate the serialized response.
 
 ### TUI overlay (humans)
 
@@ -169,9 +190,9 @@ Loaded from the first match of: `./history-search.json`,
 | `enabled` | `true` | Master switch. |
 | `sessionsDir` | `null` | Override pi's sessions base (else `$PI_SESSIONS_DIR`, else `~/.pi/agent/sessions`). |
 | `indexOnStart` | `true` | Incrementally index the current project on `session_start`. |
-| `includeToolResults` | `true` | Index tool-result messages too. |
+| `includeToolResults` | `true` | Background/overlay indexing preference. Agent recall always includes tool evidence. |
 | `maxResults` | `10` | Default sessions per search. |
-| `snippetsPerSession` | `3` | Snippets per session. |
+| `snippetsPerSession` | `3` | Overlay/index candidate snippets; agent recall emits one best snippet. |
 | `excludeCurrentSession` | `true` | Exclude the current (live) session from `HistorySearch` results — it's already in context. |
 | `contextGuard.enabled` | `true` | Master switch for the context-overflow guard. |
 | `contextGuard.charsPerToken` | `4` | Chars-per-token estimate for budget math. |
