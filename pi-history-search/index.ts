@@ -12,6 +12,7 @@
  * sandbox at all. See indexer.ts for the rationale.
  */
 
+import { basename } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -22,7 +23,6 @@ import {
 	type GrepResult,
 	type HistoryHit,
 	type ReadResult,
-	type RoleFilter,
 	branchScopeSessionIds,
 	closeAll,
 	findSessionPath,
@@ -30,14 +30,14 @@ import {
 	grepSession,
 	listBranchesInProject,
 	listProjectDirs,
-	listRecent,
+	prettyProject,
 	projectDir,
 	readSession,
 	rebuildProjectIndex,
-	searchProject,
 	updateProjectIndex,
 } from "./indexer.js";
 import { HistoryOverlay } from "./overlay.js";
+import { type RecallParams, type RecallReport, formatRecall, searchRecall } from "./recall.js";
 
 // ── Tool parameter schemas ───────────────────────────────────────────
 
@@ -51,7 +51,7 @@ const HistorySearchParams = Type.Object({
 	scope: Type.Optional(
 		StringEnum(["project", "all", "current-tree", "current-branch", "siblings", "ancestors", "descendants"] as const, {
 			description:
-				"'project' (default) searches current project history. 'all' spans accessible projects. Branch-aware scopes: 'current-tree', 'current-branch', 'siblings', 'ancestors', 'descendants'.",
+				"'project' (default) searches project history; 'all' spans accessible projects. Use 'current-branch' for the active session's saved messages, including before compaction; 'current-tree' for related branches sharing its root. The active session is excluded except with 'current-branch', unless excludeCurrentSession=false. Also: 'siblings', 'ancestors', 'descendants'.",
 		})
 	),
 	project: Type.Optional(
@@ -60,10 +60,22 @@ const HistorySearchParams = Type.Object({
 	roleFilter: Type.Optional(
 		StringEnum(["all", "conversation", "user", "assistant", "tool"] as const, {
 			description:
-				"Which message roles to search. Default 'conversation' (user+assistant) — best signal for 'what did we do'. Use 'all' to also search tool output (error messages, file paths, command output), or 'tool' for only that.",
+				"Default 'conversation' prefers conversational evidence but also searches tool results. 'all' searches every role; user/assistant/tool are strict evidence filters.",
 		})
 	),
-	limit: Type.Optional(Type.Number({ description: "Max sessions to return (default from config, usually 10)." })),
+	limit: Type.Optional(
+		Type.Integer({ minimum: 1, maximum: 100, description: "Max sessions before output budgeting (default 10)." })
+	),
+	mode: Type.Optional(
+		StringEnum(["auto", "grep", "exact", "regex", "fts"] as const, {
+			description:
+				"Auto routes identifier-shaped queries to literal scan, regex retry, then FTS. grep forces that route; exact is case-sensitive literal only; regex and fts force their modes.",
+		})
+	),
+	maxTotalChars: Type.Optional(
+		Type.Integer({ minimum: 1000, maximum: 60000, description: "Total serialized response budget. Default 3000." })
+	),
+	verbose: Type.Optional(Type.Boolean({ description: "Include branch metadata, still within maxTotalChars." })),
 });
 
 const HistoryBranchesParams = Type.Object({
@@ -84,6 +96,12 @@ const HistoryReadParams = Type.Object({
 	),
 	around: Type.Optional(
 		Type.Number({ description: "Return a window of messages centered on this msgIndex (from a HistorySearch match)." })
+	),
+	matchPosition: Type.Optional(
+		Type.Integer({
+			minimum: 0,
+			description: "Character position from a search hit; centers the anchored message excerpt on the evidence.",
+		})
 	),
 	before: Type.Optional(
 		Type.Number({ description: "Messages before `around`, or context before each query match (default 3 around, 2 query)." })
@@ -124,6 +142,12 @@ const HistoryGrepParams = Type.Object({
 	regex: Type.Optional(
 		Type.Boolean({ description: "Treat `pattern` as a JavaScript regular expression. Default false (literal substring)." })
 	),
+	fallback: Type.Optional(
+		Type.Boolean({ description: "Retry regex-shaped literal misses as regex (default true). Set false for literal-only." })
+	),
+	maxTotalChars: Type.Optional(
+		Type.Integer({ minimum: 1000, maximum: 60000, description: "Total output budget, default 3000." })
+	),
 	ignoreCase: Type.Optional(Type.Boolean({ description: "Case-insensitive match. Default true." })),
 	roleFilter: Type.Optional(
 		StringEnum(["all", "conversation", "user", "assistant", "tool"] as const, {
@@ -155,42 +179,6 @@ function formatTs(ts: string): string {
 
 function shortId(id: string): string {
 	return id.length > 12 ? `${id.slice(0, 8)}…` : id;
-}
-
-function formatHits(query: string | undefined, scope: string, hits: HistoryHit[]): string {
-	const q = query?.trim() ?? "";
-	if (hits.length === 0) {
-		return q ? `No past sessions matched "${q}" (scope: ${scope}).` : `No sessions found (scope: ${scope}).`;
-	}
-	const header = q
-		? `Found ${hits.length} session(s) for "${q}" (scope: ${scope}):`
-		: `${hits.length} most recent session(s) (scope: ${scope}):`;
-	const lines: string[] = [header, ""];
-	hits.forEach((h, i) => {
-		lines.push(`[${i + 1}] ${h.project} · ${formatTs(h.timestamp)} · sessionId=${h.sessionId}`);
-		if (h.branch) {
-			lines.push(
-				`    branch=${h.branch.alias ? `${h.branch.alias} (${h.branch.branchId})` : h.branch.branchId} parent=${h.branch.parentBranchId ?? "-"} root=${h.branch.rootSessionId} forkMsg=${h.branch.forkMsgIndex ?? "-"}`
-			);
-			lines.push(
-				`    created=${formatTs(h.branch.createdAt)} updated=${formatTs(h.branch.updatedAt)} cwd=${h.branch.cwd} lastCwd=${h.branch.lastCwd} messages=${h.branch.messageCount}`
-			);
-			if (h.branch.lastUserPreview) lines.push(`    last user: ${h.branch.lastUserPreview}`);
-			if (h.branch.lastAssistantPreview) lines.push(`    last assistant: ${h.branch.lastAssistantPreview}`);
-			if (h.branch.recentFiles.length > 0) lines.push(`    files: ${h.branch.recentFiles.join(", ")}`);
-			if (h.branch.recentCommands.length > 0) lines.push(`    commands: ${h.branch.recentCommands.join(" | ")}`);
-		}
-		if (h.sessionName) lines.push(`    name: ${h.sessionName.slice(0, 120)}`);
-		if (h.title) lines.push(`    title: ${h.title.slice(0, 120)}`);
-		for (const m of h.matches) {
-			lines.push(`    ${m.role} (msg ${m.msgIndex}): ${m.snippet}`);
-		}
-		lines.push("");
-	});
-	lines.push(
-		"Use HistoryRead{sessionId, around: <msg>} to expand a hit, or HistoryRead{sessionId, query} to pull all matches from a session."
-	);
-	return lines.join("\n").trimEnd();
 }
 
 function formatBranches(
@@ -229,24 +217,29 @@ function formatRead(r: ReadResult): string {
 	return `${head}\n\n${body}${tail}`;
 }
 
-function formatGrep(r: GrepResult): string {
-	const mode = `${r.regex ? "regex" : "literal"} / ${r.ignoreCase ? "i" : "exact"} / roles=${r.roleFilter}`;
-	const head = `Session ${shortId(r.sessionId)} · ${r.project} · ${formatTs(r.timestamp)} · ${r.totalMessages} messages · grep "${r.pattern}" (${mode})`;
-	if (r.matches.length === 0) {
-		return `${head}\n(no matches)`;
+export function formatGrep(r: GrepResult, maxTotalChars = 3000): string {
+	if (!Number.isInteger(maxTotalChars) || maxTotalChars < 1000 || maxTotalChars > 60000)
+		throw new Error("maxTotalChars must be 1000..60000");
+	const result = {
+		sessionId: r.sessionId,
+		timestamp: r.timestamp,
+		attempts: r.attempts,
+		warnings: r.warnings,
+		roleFilter: r.roleFilter,
+		ignoreCase: r.ignoreCase,
+		matchedMessages: r.matchedMessages,
+		completeness: "unknown",
+		absence_is_global: false,
+		matches: r.matches.map((m) => ({ ...m, snippet: m.snippet.slice(0, 300) })),
+		messages: [...r.messages],
+		truncated: r.truncated,
+	};
+	while (JSON.stringify(result).length > maxTotalChars && (result.messages.length || result.matches.length)) {
+		if (result.messages.length) result.messages.pop();
+		else result.matches.pop();
+		result.truncated = true;
 	}
-	const lines = [head, `${r.matches.length} snippet(s) across ${r.matchedMessages} matching message(s):`, ""];
-	for (const m of r.matches) {
-		lines.push(`[msg ${m.msgIndex}] ${m.role}: ${m.snippet}`);
-	}
-	if (r.messages.length > 0) {
-		lines.push("", "context window:");
-		for (const m of r.messages) lines.push(`[msg ${m.msgIndex}] ${m.role}:\n${m.text}`);
-	}
-	const notes: string[] = [];
-	if (r.truncated) notes.push("some matches omitted — raise maxMatches, or narrow with roleFilter");
-	const tail = notes.length ? `\n\n(${notes.join("; ")})` : "";
-	return lines.join("\n").trimEnd() + tail;
+	return JSON.stringify(result);
 }
 
 /** Compact, stable summary of a guard outcome for tool `details`. */
@@ -269,52 +262,48 @@ function disabled(action: string): AgentToolResult<unknown> {
 
 // ── Search execution ─────────────────────────────────────────────────
 
-export async function runSearch(
+export async function runSearchReport(
 	ctx: ExtensionContext,
 	config: HistorySearchConfig,
-	params: { query?: string; scope?: string; project?: string; limit?: number; roleFilter?: RoleFilter }
-): Promise<HistoryHit[]> {
+	params: RecallParams
+): Promise<RecallReport> {
 	const base = resolveSessionsBase(config);
-	const limit = params.limit ?? config.maxResults;
 	const currentDir = projectDir(base, ctx.cwd);
 	const scope = params.scope ?? "project";
-	const query = params.query?.trim() ?? "";
-	const roleFilter: RoleFilter = params.roleFilter ?? "conversation";
-	const currentSessionId = (ctx.sessionManager.getSessionId?.() as string | undefined) ?? null;
-	// The live session is already in the agent's context, so exclude it by default.
-	// Skip for the explicit `current-branch` scope (that would otherwise always be empty).
-	const exclude = config.excludeCurrentSession && currentSessionId !== null && scope !== "current-branch";
-	// Over-fetch by one when excluding so dropping the current session doesn't cost a result slot.
-	const fetchLimit = exclude ? limit + 1 : limit;
-	const stripCurrent = (hits: HistoryHit[]): HistoryHit[] =>
-		exclude ? hits.filter((h) => h.sessionId !== currentSessionId) : hits;
-	const branchListing = listBranchesInProject(currentDir, currentSessionId, config.branchAliases);
-
-	if (scope !== "all") {
-		const branchScope =
-			scope === "project" ? "project" : (scope as "current-tree" | "current-branch" | "siblings" | "ancestors" | "descendants");
-		const scopedIds = branchScopeSessionIds(branchListing.branches, branchListing.currentBranchId, branchScope);
-		const baseHits = query
-			? await searchProject(currentDir, query, config, fetchLimit, true, roleFilter, scopedIds)
-			: listRecent(currentDir, fetchLimit, scopedIds);
-		const metaById = new Map(branchListing.branches.map((b) => [b.branchId, b]));
-		return stripCurrent(baseHits)
-			.map((h) => ({ ...h, branch: metaById.get(h.sessionId) }))
-			.slice(0, limit);
+	const currentId = ctx.sessionManager.getSessionId?.() ?? null;
+	const exclude = config.excludeCurrentSession && scope !== "current-branch" ? currentId : null;
+	let allowed: Set<string> | undefined;
+	if (scope !== "all" && scope !== "project") {
+		const listing = listBranchesInProject(currentDir, currentId, config.branchAliases);
+		allowed = branchScopeSessionIds(
+			listing.branches,
+			listing.currentBranchId,
+			scope as "current-tree" | "current-branch" | "siblings" | "ancestors" | "descendants"
+		);
 	}
-
-	const dirs = listProjectDirs(base);
-	const all: HistoryHit[] = [];
-	for (const dir of dirs) {
-		const isCurrent = dir === currentDir;
-		const hits = query ? await searchProject(dir, query, config, fetchLimit, isCurrent, roleFilter) : listRecent(dir, fetchLimit);
-		all.push(...hits);
+	const dirs =
+		scope === "all"
+			? listProjectDirs(base).filter(
+					(dir) => !params.project || prettyProject(basename(dir)).toLowerCase().includes(params.project.toLowerCase())
+				)
+			: [currentDir];
+	const report = await searchRecall(
+		dirs.map((dir) => ({ dir, current: dir === currentDir, allowed })),
+		config,
+		params,
+		exclude
+	);
+	if (params.verbose) {
+		for (const dir of dirs) {
+			const branches = listBranchesInProject(dir, currentId, config.branchAliases).branches;
+			for (const hit of report.hits) hit.branch ??= branches.find((b) => b.branchId === hit.sessionId);
+		}
 	}
-	const projFilter = params.project?.toLowerCase();
-	const filtered = projFilter ? all.filter((h) => h.project.toLowerCase().includes(projFilter)) : all;
-	// Sessions already come back per-project-ranked; order by recency across projects.
-	filtered.sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
-	return stripCurrent(filtered).slice(0, limit);
+	return report;
+}
+
+export async function runSearch(ctx: ExtensionContext, config: HistorySearchConfig, params: RecallParams): Promise<HistoryHit[]> {
+	return (await runSearchReport(ctx, config, params)).hits;
 }
 
 // ── Extension entry point ────────────────────────────────────────────
@@ -394,24 +383,32 @@ export default function historySearch(pi: ExtensionAPI): void {
 		name: "HistorySearch",
 		label: "History Search",
 		description:
-			"Search your own past session history (previous conversations and tool activity) with full-text ranked search. " +
+			"Search saved session history (conversations and tool activity), including messages before compaction, with literal-first or ranked search. " +
 			"Use this to recall earlier decisions, prior solutions, file paths, error messages, or what was already tried — " +
-			"before re-deriving them. Returns matching sessions with snippets and a sessionId + msgIndex for each hit; " +
-			"follow up with HistoryRead to expand any hit. Defaults to the current project; pass scope='all' to search " +
+			"before re-deriving them. Returns a budgeted JSON envelope (default 3000 chars), one best snippet per session, " +
+			"including tool evidence. Identifiers use literal-first search; mode='grep' forces it. Expand with " +
+			"HistoryRead{sessionId, around: msgIndex, matchPosition}. Store completeness is unknown, not proof of absence. Defaults to the current project; pass scope='all' to search " +
 			"other projects the environment exposes.",
-		promptSnippet: "HistorySearch — full-text search over your own past sessions (recall prior work).",
+		promptSnippet: "HistorySearch — recall saved history, including pre-compaction details and related branches.",
+		promptGuidelines: [
+			"After compaction, use HistorySearch with scope='current-branch' to recover details missing from the summary before re-deriving them.",
+			"Use HistorySearch with scope='current-tree' for related branches. It excludes the active session by default; also search scope='current-branch' when both are relevant.",
+			"Expand HistorySearch evidence with HistoryRead{sessionId, around: msgIndex, matchPosition}, preserving both anchors to reach details deep inside long messages.",
+			"A HistorySearch miss is not proof of absence: check scope, filters, and attempts; use mode='grep' for a literal-first scan that bypasses stale indexes.",
+		],
 		parameters: HistorySearchParams,
 
 		async execute(_id, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
 			const config = loadConfig(ctx.cwd);
 			if (!config.enabled) return disabled("search");
 			try {
-				const hits = await runSearch(ctx, config, params);
-				const scope = params.scope ?? "project";
-				const outcome = applyGuard(formatHits(params.query, scope, hits), ctx, config.contextGuard, "HistorySearch");
+				const report = await runSearchReport(ctx, config, params);
+				const text = formatRecall(report, params.maxTotalChars);
+				const outcome = applyGuard(text, ctx, config.contextGuard, "HistorySearch");
+				const emitted = JSON.parse(text) as RecallReport;
 				return {
 					content: [{ type: "text", text: outcome.text }],
-					details: { action: "search", query: params.query, scope, count: hits.length, hits, contextGuard: guardMeta(outcome) },
+					details: { action: "search", ...emitted, count: emitted.hits.length, contextGuard: guardMeta(outcome) },
 				};
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
@@ -493,7 +490,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 			"Read fuller context from one past session returned by HistorySearch. Modes: pass `around` (a msgIndex) for a " +
 			"window of surrounding messages; pass `query` to return every message matching terms; pass neither for the whole " +
 			"session, which defaults to a compact `outline` (user+assistant only, tool noise dropped) — set view='transcript' " +
-			"for everything. Identify the session with `sessionId` from a HistorySearch result.",
+			"for everything. Pass matchPosition from a search hit to reach evidence deep inside a long message. Identify the session with `sessionId` from a HistorySearch result.",
 		parameters: HistoryReadParams,
 
 		async execute(_id, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
@@ -518,6 +515,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 				const r = readSession(filePath, {
 					query: params.query,
 					around: params.around,
+					matchPosition: params.matchPosition,
 					before: params.before,
 					after: params.after,
 					roleFilter: params.roleFilter,
@@ -569,8 +567,9 @@ export default function historySearch(pi: ExtensionAPI): void {
 		label: "History Grep",
 		description:
 			"Surgically and fast-search ONE past session for an exact substring or regular expression, returning pinpoint matches (msgIndex + snippet). " +
-			"Use this when HistorySearch (tokenized BM25) misses the thing you need: code identifiers, camelCase names, stack traces, exact error strings, or file paths. " +
-			"It reads a single session file once and runs one regex pass — no index, no tokenization — so it's fast even for large older sessions. " +
+			"Use HistoryGrep when you already know the session and need exact strings, identifiers, errors, or paths; use HistorySearch to discover sessions. " +
+			"It reads a single session file once, retries regex-shaped literal misses as regex (disable with fallback=false), and reports attempts. " +
+			"Output defaults to 3000 chars with message and character anchors. No index or tokenization. " +
 			"Typical flow: HistorySearch finds the session, then HistoryGrep extracts the exact lines. Identify the session with sessionId from a HistorySearch result.",
 		promptSnippet: "HistoryGrep — fast exact/regex search inside one past session (msgIndex-precise).",
 		parameters: HistoryGrepParams,
@@ -597,6 +596,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 				const r = grepSession(filePath, {
 					pattern: params.pattern,
 					regex: params.regex,
+					fallback: params.fallback,
 					ignoreCase: params.ignoreCase,
 					roleFilter: params.roleFilter,
 					before: params.before,
@@ -604,13 +604,15 @@ export default function historySearch(pi: ExtensionAPI): void {
 					maxMatches: params.maxMatches,
 					maxChars: params.maxChars,
 				});
-				const outcome = applyGuard(formatGrep(r), ctx, config.contextGuard, "HistoryGrep");
+				const outcome = applyGuard(formatGrep(r, params.maxTotalChars), ctx, config.contextGuard, "HistoryGrep");
 				return {
 					content: [{ type: "text", text: outcome.text }],
 					details: {
 						action: "grep",
 						sessionId: r.sessionId,
 						pattern: r.pattern,
+						attempts: r.attempts,
+						warnings: r.warnings,
 						matchedMessages: r.matchedMessages,
 						matches: r.matches.length,
 						contextGuard: guardMeta(outcome),
@@ -700,8 +702,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 
 			// Headless (rpc/print): fall back to printing ranked results.
 			try {
-				const hits = await runSearch(ctx, config, { query: arg, scope: "project" });
-				console.log(formatHits(arg, "project", hits));
+				console.log(formatRecall(await runSearchReport(ctx, config, { query: arg, scope: "project" })));
 			} catch (e) {
 				ctx.ui.notify(`Search failed: ${e instanceof Error ? e.message : String(e)}`, "error");
 			}
