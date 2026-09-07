@@ -4,6 +4,24 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-07
+
+### Added - pi-tui-rpc: dual-frontend session access (piext-6j02)
+
+- New spike extension: run pi in TUI mode and drive the SAME session from external RPC
+  clients over a Unix-socket JSONL server (`PI_TUI_RPC_SOCKET`, else tmpdir per pid).
+- Outbound fanout of pi extension events (agent/turn/message/tool lifecycle, model and
+  thinking changes, compaction, `input`) to all connected clients; `agent_settled` is
+  forwarded forward-compatibly for pi 0.85+.
+- Inbound commands: `prompt` (with `streamingBehavior` mapping), `steer`, `follow_up`,
+  `abort`, `get_state`, `get_messages`, `lease` request/release.
+- Input lease: TUI owns input by default; remote takeover requires a TUI confirm dialog;
+  TUI typing instantly reverts ownership; input commands without the lease fail with
+  `lease_denied:tui_owns_input`; lease changes broadcast and shown in the TUI status bar.
+- Unit tests (lease state machine, dispatch, protocol framing, hub fanout/pruning/parse
+  errors) plus a tmux-driven live E2E against pi 0.85.1; session-JSONL single-writer
+  integrity verified. Spike is bridge-era: pi 2 presentation attachments replace it.
+
 ## [1.4.1] - 2026-09-05
 
 - Clarify agent hints for post-compaction recall, current-session versus related-branch scopes, anchored drilldown, and incomplete search results. Correct HistoryGrep's outdated description of HistorySearch (piext-5ydf).
