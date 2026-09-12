@@ -4,6 +4,14 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-xlatch-session: phone share target bound to one session
+
+- New extension binding a running pi session to a named xlatch slot, so text, links and files shared from a phone land in that specific session over a private `0600` Unix socket.
+- Slots decouple approval from session identity: the manifest pins the socket path in its fixed args, and the revision digest is content-addressed, so a slot is approved and granted once and reused by any later session.
+- Files are written to `~/xlatch/incoming` and only the resulting path is delivered, keeping large payloads out of the socket and the transcript. An optional note shared alongside a file is delivered with it.
+- Delivery adapts to session state: immediate when idle, `deliverAs: "followUp"` while streaming.
+- Link lifecycle is automatic: released on clean exit, pruned after a crash, reclaimed across `/reload` and resume, and never inherited by a new or forked session.
+
 ## [1.4.1] - 2026-09-05
 
 - Clarify agent hints for post-compaction recall, current-session versus related-branch scopes, anchored drilldown, and incomplete search results. Correct HistoryGrep's outdated description of HistorySearch (piext-5ydf).
