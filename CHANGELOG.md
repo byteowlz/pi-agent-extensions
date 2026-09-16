@@ -4,6 +4,21 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-herdr-tools: relay (/send) — cross-tab response forwarding + injection
+
+- New `/send` command (alias `/relay`): copy this agent's most recent assistant
+  output, pick a target herdr agent via a **real fuzzy picker** (search box fed
+  into a `SelectList.setFilter`, ↑↓ navigate, Enter select; own pane excluded
+  via `HERDR_PANE_ID`), add an optional note, and send via
+  `herdr agent prompt <pane>`.
+- Compose box is a custom TUI modal (preview + note editor): **Enter** = send to
+  the target (fire-and-forget), **Ctrl+j**/**Ctrl+Enter** = **cross-inject** —
+  waits for the target to settle (`prompt --wait`), reads its recent output
+  (`agent read --source recent`), and feeds that response back into *this* session
+  as a follow-up via `pi.sendUserMessage`, so the current agent can steer on it.
+  **Esc** = cancel.
+- Adds `herdrRaw` helper for reading raw (non-JSON) `agent read` output.
+
 ### pi-herdr-tools: relay (/send) — forward last response to another tab
 
 - New `/send` command (alias `/relay`): copy this agent's most recent assistant

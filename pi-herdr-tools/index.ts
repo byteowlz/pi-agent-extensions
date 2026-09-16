@@ -42,7 +42,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Editor, type EditorTheme, Key, matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+	Editor,
+	type EditorTheme,
+	Input,
+	Key,
+	type SelectItem,
+	SelectList,
+	type SelectListTheme,
+	matchesKey,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const execFileAsync = promisify(execFile);
@@ -103,6 +113,12 @@ async function herdr(args: string[]): Promise<any> {
 	} catch {
 		return { result: undefined, raw: text };
 	}
+}
+
+/** Run `herdr <args>` and return the raw stdout as a string, without JSON parsing. */
+async function herdrRaw(args: string[]): Promise<string> {
+	const { stdout } = await execFileAsync("herdr", args, { maxBuffer: 16 * 1024 * 1024 });
+	return stdout;
 }
 
 /** Convert a simple glob (e.g. "openai/*") to a RegExp. */
@@ -273,6 +289,82 @@ function composeRelayMessage(note: string, output: string): string {
 	return clean ? `${clean}\n\n${output}` : output;
 }
 
+/**
+ * Fuzzy target picker: a search box + fuzzy-filtered SelectList.
+ * Returns the chosen pane id, or null on cancel.
+ */
+async function fuzzyTargetPicker(ctx: ExtensionContext, targets: RelayTarget[]): Promise<string | null> {
+	const items: SelectItem[] = targets.map((t) => ({ value: t.paneId, label: t.label }));
+
+	return ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+		const listTheme: SelectListTheme = {
+			selectedPrefix: (t) => theme.fg("accent", t),
+			selectedText: (t) => theme.fg("accent", t),
+			description: (t) => theme.fg("muted", t),
+			scrollInfo: (t) => theme.fg("dim", t),
+			noMatch: (t) => theme.fg("warning", t),
+		};
+		const search = new Input();
+		search.focused = true;
+		const maxVisible = Math.min(Math.max(items.length, 1), 10);
+		const list = new SelectList(items, maxVisible, listTheme, { maxPrimaryColumnWidth: 60 });
+		list.onSelect = (item) => done(item.value);
+		list.onCancel = () => done(null);
+		let cachedLines: string[] | undefined;
+
+		function refresh(): void {
+			cachedLines = undefined;
+			tui.requestRender();
+		}
+
+		function handleInput(data: string): void {
+			if (matchesKey(data, Key.escape)) {
+				done(null);
+				return;
+			}
+			const isNav =
+				matchesKey(data, Key.up) ||
+				matchesKey(data, Key.down) ||
+				matchesKey(data, Key.pageUp) ||
+				matchesKey(data, Key.pageDown) ||
+				matchesKey(data, Key.enter);
+			if (isNav) {
+				list.handleInput(data);
+				refresh();
+				return;
+			}
+			search.handleInput(data);
+			list.setFilter(search.getValue());
+			refresh();
+		}
+
+		function render(width: number): string[] {
+			if (cachedLines) return cachedLines;
+			const rw = Math.max(1, width);
+			const lines: string[] = [];
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			lines.push(...wrapTextWithAnsi(theme.fg("accent", "Send last output to:"), rw));
+			lines.push("");
+			lines.push(...search.render(Math.max(1, rw - 2)).map((l) => ` ${l}`));
+			lines.push("");
+			lines.push(...list.render(rw));
+			lines.push("");
+			lines.push(...wrapTextWithAnsi(theme.fg("dim", "Type to filter • ↑↓ navigate • Enter select • Esc cancel"), rw));
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			cachedLines = lines;
+			return lines;
+		}
+
+		return {
+			render,
+			handleInput,
+			invalidate: () => {
+				cachedLines = undefined;
+			},
+		};
+	});
+}
+
 async function relayModal(
 	ctx: ExtensionContext,
 	target: RelayTarget,
@@ -335,7 +427,9 @@ async function relayModal(
 				lines.push(` ${line}`);
 			}
 			lines.push("");
-			pushWrapped(theme.fg("dim", "Enter = send to tab • Ctrl+j = send + paste into this tab • Esc = cancel"));
+			pushWrapped(
+				theme.fg("dim", "Enter = send • Ctrl+j = send + bring back other tab's reply into this session • Esc = cancel")
+			);
 			lines.push(theme.fg("accent", "─".repeat(rw)));
 			cachedLines = lines;
 			return lines;
@@ -351,7 +445,7 @@ async function relayModal(
 	});
 }
 
-async function runSend(ctx: ExtensionContext): Promise<void> {
+async function runSend(ctx: ExtensionContext, pi: ExtensionAPI): Promise<void> {
 	if (!isInHerdr()) {
 		ctx.ui.notify("Not running inside a herdr-managed pane (HERDR_ENV=1 + HERDR_SOCKET_PATH required).", "error");
 		return;
@@ -366,10 +460,9 @@ async function runSend(ctx: ExtensionContext): Promise<void> {
 		ctx.ui.notify("No other herdr agents found to send to.", "warning");
 		return;
 	}
-	const options = targets.map((t) => t.label);
-	const chosen = await ctx.ui.select("Send last output to…", options);
+	const chosen = await fuzzyTargetPicker(ctx, targets);
 	if (!chosen) return;
-	const target = targets.find((t) => t.label === chosen);
+	const target = targets.find((t) => t.paneId === chosen);
 	if (!target) return;
 
 	const result = await relayModal(ctx, target, output);
@@ -380,16 +473,41 @@ async function runSend(ctx: ExtensionContext): Promise<void> {
 
 	const message = composeRelayMessage(result.note, output);
 	try {
-		await herdr(["agent", "prompt", target.paneId, message]);
-		let msg = `Sent to ${target.label}.`;
 		if (result.inject) {
-			ctx.ui.pasteToEditor(message);
-			msg += " Also pasted into this tab's editor.";
+			await injectResponseBack(ctx, pi, target, message);
+		} else {
+			await herdr(["agent", "prompt", target.paneId, message]);
+			ctx.ui.notify(`Sent to ${target.label}.`, "info");
 		}
-		ctx.ui.notify(msg, "info");
 	} catch (err) {
 		ctx.ui.notify(`Send failed: ${(err as Error)?.message ?? err}`, "error");
 	}
+}
+
+/**
+ * Send a prompt to the target, wait for it to settle, read its recent output,
+ * and feed that response back into the *sending* session as a steer/follow-up.
+ */
+async function injectResponseBack(ctx: ExtensionContext, pi: ExtensionAPI, target: RelayTarget, message: string): Promise<void> {
+	ctx.ui.notify(`Sent to ${target.label}; waiting for its response…`, "info");
+	try {
+		await herdr(["agent", "prompt", target.paneId, message, "--wait", "--timeout", "600000"]);
+	} catch (err) {
+		ctx.ui.notify(
+			`Prompt delivered to ${target.label} but waiting failed: ${(err as Error)?.message ?? err}. Still reading its output.`,
+			"warning"
+		);
+	}
+
+	const raw = await herdrRaw(["agent", "read", target.paneId, "--source", "recent", "--lines", "300", "--format", "text"]);
+	const response = raw.trim();
+	if (!response) {
+		ctx.ui.notify(`Could not read a response from ${target.label}.`, "warning");
+		return;
+	}
+	const responseTail = response.length > 6000 ? `${response.slice(-6000)}\n…(truncated)` : response;
+	pi.sendUserMessage(`Response from ${target.label} (relayed from this tab's last output):\n\n${responseTail}`);
+	ctx.ui.notify(`Injected ${target.label}'s response into this session.`, "info");
 }
 
 export default function herdrTools(pi: ExtensionAPI) {
@@ -647,15 +765,15 @@ export default function herdrTools(pi: ExtensionAPI) {
 
 	pi.registerCommand("send", {
 		description:
-			"Send this agent's last response to another herdr tab, optionally with a note. Pick the target tab, type a note; Enter sends to the tab, Ctrl+j also pastes the message into this tab's editor (Esc cancels).",
+			"Send this agent's last response to another herdr tab, optionally with a note. Fuzzy-pick the target, type a note; Enter sends, Ctrl+j sends and brings back that tab's reply into this session as a follow-up (Esc cancels).",
 		handler: async (_args, ctx) => {
-			await runSend(ctx);
+			await runSend(ctx, pi);
 		},
 	});
 	pi.registerCommand("relay", {
 		description: "Alias of /send: copy this agent's last response and forward it to another herdr tab with an optional note.",
 		handler: async (_args, ctx) => {
-			await runSend(ctx);
+			await runSend(ctx, pi);
 		},
 	});
 }

@@ -83,15 +83,17 @@ pick up where this one left off:
 Flow:
 
 1. grabs the most recent assistant output from the current session
-2. opens a **fuzzy picker** of the other live herdr agents (identified by pane)
+2. opens a **fuzzy picker** (search box + fuzzy-filtered list) of the other live
+   herdr agents (identified by pane): type to filter, ↑↓ to navigate, Enter to pick
 3. shows a compose box with a preview of the output; type an optional note
 4. sends `note + output` to the target via `herdr agent prompt <pane> "…"`
 
 Keybindings in the compose box:
 
-- **Enter** — send to the target tab
-- **Ctrl+j** (or Ctrl+Enter) — send **and** also paste the message into this
-  tab's editor, so the current agent can act on it too
+- **Enter** — send to the target tab (fire-and-forget)
+- **Ctrl+j** (or Ctrl+Enter) — **send and cross-inject**: waits for the target to
+  settle, reads its recent output, and feeds that response back into *this* session
+  as a follow-up (via `sendUserMessage`), so this agent can steer on what it replied
 - **Esc** — cancel
 
 Your own pane is excluded from the target list (via `HERDR_PANE_ID`).
