@@ -4,13 +4,21 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
-### pi-xlatch-session: phone share target bound to one session
+### pi-env-ctx: AGENT_CTX v2 — read herdr env directly (piext-wvx0)
 
-- New extension binding a running pi session to a named xlatch slot, so text, links and files shared from a phone land in that specific session over a private `0600` Unix socket.
-- Slots decouple approval from session identity: the manifest pins the socket path in its fixed args, and the revision digest is content-addressed, so a slot is approved and granted once and reused by any later session.
-- Files are written to `~/xlatch/incoming` and only the resulting path is delivered, keeping large payloads out of the socket and the transcript. An optional note shared alongside a file is delivered with it.
-- Delivery adapts to session state: immediate when idle, `deliverAs: "followUp"` while streaming.
-- Link lifecycle is automatic: released on clean exit, pruned after a crash, reclaimed across `/reload` and resume, and never inherited by a new or forked session.
+- Bumped `AGENT_CTX_VERSION` to `2` and adopted the v2 producer-map contract from
+  `byteowlz/schemas/agent-context-env` (platform → multiplexer → harness → host).
+- New multiplexer/agent bag emitted only when `HERDR_ENV === "1"`: `AGENT_CTX_MULTIPLEXER=herdr`,
+  `AGENT_CTX_AGENT_ID`/`AGENT_CTX_AGENT_ADDRESS` = `$HERDR_PANE_ID`, `AGENT_CTX_WORKSPACE_ID`
+  = `$HERDR_WORKSPACE_ID` (opt). `AGENT_LABEL` deliberately deferred (needs an async socket call
+  to herdr for the tab/pane title).
+- New host bag always emitted: `AGENT_CTX_MACHINE_ID` (herdr machine name if exposed else
+  `os.hostname()`), `AGENT_CTX_NODE_HOSTNAME`, `AGENT_CTX_OS_ARCH` (x64 → amd64).
+- `readHerdrLayer`/`readHostLayer` folded into `exportAll`/`refreshFromContext`; all new vars
+  added to `clearOwned`. Host access is injectable (`HostModel`) so unit tests don't touch
+  `process.env`/`os`.
+
+### pi-xlatch-session: phone share target bound to one session
 
 ## [1.5.0] - 2026-09-07
 
