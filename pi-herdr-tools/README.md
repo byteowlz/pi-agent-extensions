@@ -70,6 +70,32 @@ so you can steer it another direction (like Claude `/btw` or Codex `/side`, own 
   into a brand-new session file, opens pi there
 - the fork's header records `parentSession` → the file you came from
 
+`/send` — forward this agent's last response to another herdr tab.
+`/relay` — alias of `/send`.
+
+Handy when an answer belongs in a sibling tab, or you want another agent to
+pick up where this one left off:
+
+```
+/send
+```
+
+Flow:
+
+1. grabs the most recent assistant output from the current session
+2. opens a **fuzzy picker** of the other live herdr agents (identified by pane)
+3. shows a compose box with a preview of the output; type an optional note
+4. sends `note + output` to the target via `herdr agent prompt <pane> "…"`
+
+Keybindings in the compose box:
+
+- **Enter** — send to the target tab
+- **Ctrl+j** (or Ctrl+Enter) — send **and** also paste the message into this
+  tab's editor, so the current agent can act on it too
+- **Esc** — cancel
+
+Your own pane is excluded from the target list (via `HERDR_PANE_ID`).
+
 ## Config file
 
 `~/.pi/agent/subagent-config.json`

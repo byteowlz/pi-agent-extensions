@@ -4,6 +4,15 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-herdr-tools: relay (/send) — forward last response to another tab
+
+- New `/send` command (alias `/relay`): copy this agent's most recent assistant
+  output, pick a target herdr agent via a fuzzy picker (own pane excluded via
+  `HERDR_PANE_ID`), add an optional note, and send via `herdr agent prompt <pane>`.
+- Compose box is a custom TUI modal (preview + note editor): **Enter** = send to
+  the target, **Ctrl+j**/**Ctrl+Enter** = send and also paste the message into
+  this tab's editor, **Esc** = cancel.
+
 ### pi-herdr-tools: herdr-flavored delegation + session forking
 
 - New extension (renamed from `pi-subagent-delegate`; herdr-specific, so the
