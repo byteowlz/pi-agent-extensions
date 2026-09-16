@@ -47,10 +47,10 @@ import {
 	type EditorTheme,
 	Input,
 	Key,
-	type SelectItem,
-	SelectList,
-	type SelectListTheme,
+	fuzzyFilter,
 	matchesKey,
+	truncateToWidth,
+	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -290,31 +290,68 @@ function composeRelayMessage(note: string, output: string): string {
 }
 
 /**
- * Fuzzy target picker: a search box + fuzzy-filtered SelectList.
+ * Fuzzy target picker: a search box + fuzzy-filtered list.
+ * Search matches characters in order (case-insensitive) against the target's
+ * terminal title and pane id, scored and ranked.
  * Returns the chosen pane id, or null on cancel.
  */
 async function fuzzyTargetPicker(ctx: ExtensionContext, targets: RelayTarget[]): Promise<string | null> {
-	const items: SelectItem[] = targets.map((t) => ({ value: t.paneId, label: t.label }));
+	interface Row {
+		value: string;
+		label: string;
+		match: string;
+	}
+	const all: Row[] = targets.map((t) => ({ value: t.paneId, label: t.label, match: `${t.label} ${t.paneId}` }));
 
 	return ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-		const listTheme: SelectListTheme = {
-			selectedPrefix: (t) => theme.fg("accent", t),
-			selectedText: (t) => theme.fg("accent", t),
-			description: (t) => theme.fg("muted", t),
-			scrollInfo: (t) => theme.fg("dim", t),
-			noMatch: (t) => theme.fg("warning", t),
-		};
 		const search = new Input();
-		search.focused = true;
-		const maxVisible = Math.min(Math.max(items.length, 1), 10);
-		const list = new SelectList(items, maxVisible, listTheme, { maxPrimaryColumnWidth: 60 });
-		list.onSelect = (item) => done(item.value);
-		list.onCancel = () => done(null);
+		try {
+			search.focused = true;
+		} catch {
+			// focus is best-effort; input still works without it
+		}
+		let visible: Row[] = all;
+		let selected = 0;
+		const maxVisible = Math.max(1, Math.min(all.length, 10));
 		let cachedLines: string[] | undefined;
+
+		function recompute(query: string): void {
+			const trimmed = query.trim();
+			visible = trimmed ? fuzzyFilter(all, trimmed, (it) => it.match) : all;
+			if (selected >= visible.length) selected = Math.max(0, visible.length - 1);
+			if (selected < 0) selected = 0;
+		}
 
 		function refresh(): void {
 			cachedLines = undefined;
 			tui.requestRender();
+		}
+
+		function handleNavigation(data: string): boolean {
+			if (matchesKey(data, Key.up)) {
+				if (visible.length > 0) selected = (selected - 1 + visible.length) % visible.length;
+				return true;
+			}
+			if (matchesKey(data, Key.down)) {
+				if (visible.length > 0) selected = (selected + 1) % visible.length;
+				return true;
+			}
+			if (matchesKey(data, Key.pageUp)) {
+				selected = Math.max(0, selected - maxVisible);
+				return true;
+			}
+			if (matchesKey(data, Key.pageDown)) {
+				selected = Math.min(visible.length - 1, selected + maxVisible);
+				return true;
+			}
+			if (matchesKey(data, Key.enter)) {
+				const row = visible[selected];
+				if (row) {
+					done(row.value);
+					return true;
+				}
+			}
+			return false;
 		}
 
 		function handleInput(data: string): void {
@@ -322,20 +359,21 @@ async function fuzzyTargetPicker(ctx: ExtensionContext, targets: RelayTarget[]):
 				done(null);
 				return;
 			}
-			const isNav =
-				matchesKey(data, Key.up) ||
-				matchesKey(data, Key.down) ||
-				matchesKey(data, Key.pageUp) ||
-				matchesKey(data, Key.pageDown) ||
-				matchesKey(data, Key.enter);
-			if (isNav) {
-				list.handleInput(data);
+			if (handleNavigation(data)) {
 				refresh();
 				return;
 			}
 			search.handleInput(data);
-			list.setFilter(search.getValue());
+			recompute(search.getValue());
 			refresh();
+		}
+
+		function renderRow(row: Row, isSelected: boolean, width: number): string {
+			const prefix = isSelected ? theme.fg("accent", "→ ") : "  ";
+			const pane = theme.fg("muted", `  [${row.value}]`);
+			const labelWidth = Math.max(1, width - visibleWidth(prefix) - visibleWidth(pane));
+			const label = truncateToWidth(row.label, labelWidth, "…");
+			return isSelected ? theme.fg("accent", `${prefix}${label}`) + pane : prefix + label + pane;
 		}
 
 		function render(width: number): string[] {
@@ -347,9 +385,16 @@ async function fuzzyTargetPicker(ctx: ExtensionContext, targets: RelayTarget[]):
 			lines.push("");
 			lines.push(...search.render(Math.max(1, rw - 2)).map((l) => ` ${l}`));
 			lines.push("");
-			lines.push(...list.render(rw));
+			if (visible.length === 0) {
+				lines.push(theme.fg("warning", "  No matching agents"));
+			} else {
+				const start = Math.max(0, Math.min(selected - Math.floor(maxVisible / 2), visible.length - maxVisible));
+				const end = Math.min(start + maxVisible, visible.length);
+				for (let i = start; i < end; i++) lines.push(renderRow(visible[i], i === selected, rw));
+				if (start > 0 || end < visible.length) lines.push(theme.fg("dim", `  (${selected + 1}/${visible.length})`));
+			}
 			lines.push("");
-			lines.push(...wrapTextWithAnsi(theme.fg("dim", "Type to filter • ↑↓ navigate • Enter select • Esc cancel"), rw));
+			lines.push(...wrapTextWithAnsi(theme.fg("dim", "Type to fuzzy-filter • ↑↓ navigate • Enter select • Esc cancel"), rw));
 			lines.push(theme.fg("accent", "─".repeat(rw)));
 			cachedLines = lines;
 			return lines;

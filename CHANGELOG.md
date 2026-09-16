@@ -7,10 +7,15 @@ All notable changes to pi-agent-extensions will be documented in this file.
 ### pi-herdr-tools: relay (/send) — cross-tab response forwarding + injection
 
 - New `/send` command (alias `/relay`): copy this agent's most recent assistant
-  output, pick a target herdr agent via a **real fuzzy picker** (search box fed
-  into a `SelectList.setFilter`, ↑↓ navigate, Enter select; own pane excluded
+  output, pick a target herdr agent via a **real fuzzy picker** (search box fed into a `SelectList.setFilter`, ↑↓ navigate, Enter select; own pane excluded
   via `HERDR_PANE_ID`), add an optional note, and send via
   `herdr agent prompt <pane>`.
+- The target picker filters with pi-tui's `fuzzyFilter` (in-order, case-insensitive,
+  gap-tolerant subsequence match over the target's terminal title + pane id, scored
+  and ranked). Earlier drafts used `SelectList.setFilter`, which is only a naive
+  `value.startsWith(query)` prefix match that searched the bare pane id — that made
+  any non-pane-id query (e.g. `pixel`) match nothing. The picker now renders and
+  navigates its own fuzzy-scored rows instead.
 - Compose box is a custom TUI modal (preview + note editor): **Enter** = send to
   the target (fire-and-forget), **Ctrl+j**/**Ctrl+Enter** = **cross-inject** —
   waits for the target to settle (`prompt --wait`), reads its recent output
