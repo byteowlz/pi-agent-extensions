@@ -12,6 +12,24 @@ All notable changes to pi-agent-extensions will be documented in this file.
 - Delivery adapts to session state: immediate when idle, `deliverAs: "followUp"` while streaming.
 - Link lifecycle is automatic: released on clean exit, pruned after a crash, reclaimed across `/reload` and resume, and never inherited by a new or forked session.
 
+## [1.5.0] - 2026-09-07
+
+### Added - pi-tui-rpc: dual-frontend session access (piext-6j02)
+
+- New spike extension: run pi in TUI mode and drive the SAME session from external RPC
+  clients over a Unix-socket JSONL server (`PI_TUI_RPC_SOCKET`, else tmpdir per pid).
+- Outbound fanout of pi extension events (agent/turn/message/tool lifecycle, model and
+  thinking changes, compaction, `input`) to all connected clients; `agent_settled` is
+  forwarded forward-compatibly for pi 0.85+.
+- Inbound commands: `prompt` (with `streamingBehavior` mapping), `steer`, `follow_up`,
+  `abort`, `get_state`, `get_messages`, `lease` request/release.
+- Input lease: TUI owns input by default; remote takeover requires a TUI confirm dialog;
+  TUI typing instantly reverts ownership; input commands without the lease fail with
+  `lease_denied:tui_owns_input`; lease changes broadcast and shown in the TUI status bar.
+- Unit tests (lease state machine, dispatch, protocol framing, hub fanout/pruning/parse
+  errors) plus a tmux-driven live E2E against pi 0.85.1; session-JSONL single-writer
+  integrity verified. Spike is bridge-era: pi 2 presentation attachments replace it.
+
 ## [1.4.1] - 2026-09-05
 
 - Clarify agent hints for post-compaction recall, current-session versus related-branch scopes, anchored drilldown, and incomplete search results. Correct HistoryGrep's outdated description of HistorySearch (piext-5ydf).
@@ -161,6 +179,7 @@ Markdown renderer reused by the live-branch export), `redact.ts`, and
 Removed both `delegate/` and `tmux-delegate/` in favor of [pi-subagents](https://github.com/nicobailon/pi-subagents) (`pi install npm:pi-subagents`).
 
 **Why:**
+
 - Both extensions spawned pi subprocesses but captured only raw text output. pi-subagents uses `--mode json` to get structured event streams with token/cost tracking, tool call history, and proper abort propagation.
 - tmux-delegate had multiple bugs that were never caught because the tmux visibility feature was not relied on: wrong `execute()` parameter order (params swapped between pi v0.50 and v0.52), broken exit code capture (`$PIPESTATUS` unavailable in zsh), and child sessions never created due to the parameter bug.
 - The "watch live in tmux" value proposition is covered by Oqto child sessions and `onUpdate` streaming.
@@ -173,6 +192,7 @@ Removed both `delegate/` and `tmux-delegate/` in favor of [pi-subagents](https:/
 **Problem:** `TmuxDelegate` crashed with "Cannot read properties of undefined (reading 'getSessionDir')" when `ctx.sessionManager` was undefined at runtime, and previously failed with "no active session file" when `getSessionFile()` returned `undefined`.
 
 **Fix:** Made session linking fully optional with graceful fallback:
+
 - Guard `ctx.sessionManager` access with optional chaining (`?.`)
 - Only create linked child sessions (with `parentSession` in header) when the parent session file exists AND the task runs in the same working directory
 - Cross-project delegations (different `cwd`) get their own independent sessions -- no parent link needed since they live in separate session directories
@@ -205,20 +225,24 @@ Tools: `TmuxDelegate`, `TmuxDelegateStatus`
 **Changes:**
 
 **oqto-todos extension:**
+
 - `todowrite` → `TodoWrite`
 - `todoread` → `TodoRead`  
 - `todo` → `Todo`
 
 **delegate extension:**
+
 - `delegate` → `Delegate`
 - `delegate_status` → `DelegateStatus`
 
 **Documentation:**
+
 - Added OAuth tool naming requirements to `AGENTS.md`
 - Created `OAUTH-FIX.md` with technical details
 - Updated global `~/.pi/agent/AGENTS.md` with naming convention
 
 **Impact:**
+
 - ✅ OAuth authentication now works
 - ✅ All tools maintain full functionality
 - ✅ Follows official Claude Code naming conventions
