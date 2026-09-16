@@ -6,15 +6,25 @@
  * harness, session, and model they are running under.
  *
  * Ownership contract (this extension owns ONLY these vars):
- *   AGENT_CTX_VERSION             "1"          — contract version
+ *   AGENT_CTX_VERSION             "2"          — contract version
  *   AGENT_CTX_HARNESS             "pi"         — fixed harness identifier
  *   AGENT_CTX_HARNESS_SESSION_ID  <session id> — Pi session id (authoritative)
  *   AGENT_CTX_MODEL               provider/id  — currently active model
  *   AGENT_CTX_SESSION_NAME        <name>       — display name (mutable, may
  *                                                appear after auto-rename)
+ *  -- multiplexer/agent bag (only when HERDR_ENV === "1") --
+ *   AGENT_CTX_MULTIPLEXER         "herdr"      — hosting multiplexer
+ *   AGENT_CTX_AGENT_ID            <pane id>    — stable agent identity (= pane)
+ *   AGENT_CTX_AGENT_ADDRESS       <pane id>    — id others reach this agent by
+ *   AGENT_CTX_WORKSPACE_ID        <workspace>  — herdr workspace id (opt)
+ *  -- host bag (always emitted) --
+ *   AGENT_CTX_MACHINE_ID          <hostname>   — stable logical node id
+ *   AGENT_CTX_NODE_HOSTNAME       <hostname>   — OS hostname
+ *   AGENT_CTX_OS_ARCH             os/arch      — e.g. darwin/arm64, linux/amd64
  *
- * Out of scope (owned by runner/sandbox, not this extension):
- *   AGENT_CTX_WORKSPACE, AGENT_CTX_PLATFORM_SESSION_ID, AGENT_CTX_USER_ID, etc.
+ * Out of scope (owned by runner/sandbox/platform, not this extension):
+ *   AGENT_CTX_WORKSPACE, AGENT_CTX_PLATFORM_*, AGENT_CTX_USER_ID, AGENT_LABEL,
+ *   AGENT_CTX_REQUEST_ID, AGENT_CTX_CORRELATION_ID, etc.
  *
  * Semantics:
  *   - Optional: missing values leave the var UNSET (never an empty string) so

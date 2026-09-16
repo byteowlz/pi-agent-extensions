@@ -40,6 +40,9 @@ describe("pi-env-ctx event wiring", () => {
 			AGENT_CTX_HARNESS_SESSION_ID: process.env.AGENT_CTX_HARNESS_SESSION_ID,
 			AGENT_CTX_MODEL: process.env.AGENT_CTX_MODEL,
 			AGENT_CTX_SESSION_NAME: process.env.AGENT_CTX_SESSION_NAME,
+			AGENT_CTX_MACHINE_ID: process.env.AGENT_CTX_MACHINE_ID,
+			AGENT_CTX_NODE_HOSTNAME: process.env.AGENT_CTX_NODE_HOSTNAME,
+			AGENT_CTX_OS_ARCH: process.env.AGENT_CTX_OS_ARCH,
 		};
 
 		const restore = () => {
@@ -59,11 +62,14 @@ describe("pi-env-ctx event wiring", () => {
 				})
 			);
 
-			expect(process.env.AGENT_CTX_VERSION).toBe("1");
+			expect(process.env.AGENT_CTX_VERSION).toBe("2");
 			expect(process.env.AGENT_CTX_HARNESS).toBe("pi");
 			expect(process.env.AGENT_CTX_HARNESS_SESSION_ID).toBe("sess_wired");
 			expect(process.env.AGENT_CTX_MODEL).toBe("anthropic/claude-3-7-sonnet");
 			expect(process.env.AGENT_CTX_SESSION_NAME).toBe("wired");
+			expect(process.env.AGENT_CTX_MACHINE_ID).toBeTruthy();
+			expect(process.env.AGENT_CTX_NODE_HOSTNAME).toBeTruthy();
+			expect(process.env.AGENT_CTX_OS_ARCH).toBeTruthy();
 
 			pi.handlers.get("model_select")({ type: "model_select", model: { provider: "openai", id: "gpt-4.1" } }, makeCtx());
 			expect(process.env.AGENT_CTX_MODEL).toBe("openai/gpt-4.1");
@@ -86,6 +92,9 @@ describe("pi-env-ctx event wiring", () => {
 			expect(process.env.AGENT_CTX_HARNESS_SESSION_ID).toBeUndefined();
 			expect(process.env.AGENT_CTX_MODEL).toBeUndefined();
 			expect(process.env.AGENT_CTX_SESSION_NAME).toBeUndefined();
+			expect(process.env.AGENT_CTX_MACHINE_ID).toBeUndefined();
+			expect(process.env.AGENT_CTX_NODE_HOSTNAME).toBeUndefined();
+			expect(process.env.AGENT_CTX_OS_ARCH).toBeUndefined();
 		} finally {
 			restore();
 		}
