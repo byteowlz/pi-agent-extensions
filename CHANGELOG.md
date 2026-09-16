@@ -4,6 +4,18 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-herdr-tools: herdr-flavored delegation + session forking
+
+- New extension (renamed from `pi-subagent-delegate`; herdr-specific, so the
+  name reflects the bundle): `delegate_subagent` tool + `/subagent` config for
+  agent-initiated subagent spawning, and `/side`/`/btw` to fork the current
+  session into its own named herdr tab.
+- Spawning is user-gated via `~/.pi/agent/subagent-config.json` (kill switch,
+  confirmation prompt, model allowlist, concurrent allowance) and driven
+  through the herdr CLI (`tab create -> agent start -> prompt`).
+- `/side`/`/btw` fork via `pi --fork <session file>` (single-writer safety:
+  each tab gets its own file, never two TUI writers on one file).
+
 ### pi-env-ctx: AGENT_CTX v2 — read herdr env directly (piext-wvx0)
 
 - Bumped `AGENT_CTX_VERSION` to `2` and adopted the v2 producer-map contract from
