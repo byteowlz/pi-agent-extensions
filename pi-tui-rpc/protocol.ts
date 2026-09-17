@@ -19,6 +19,9 @@ export type ClientCommand =
 	| { id?: string; type: "abort" }
 	| { id?: string; type: "get_state" }
 	| { id?: string; type: "get_messages" }
+	| { id?: string; type: "get_available_models" }
+	| { id?: string; type: "set_model"; provider: string; modelId: string }
+	| { id?: string; type: "set_thinking_level"; level: string }
 	| { id?: string; type: "lease"; action: "request" | "release" };
 
 export type ResponseFrame = {
@@ -108,7 +111,20 @@ export function validateCommand(value: unknown): CommandResult {
 		case "abort":
 		case "get_state":
 		case "get_messages":
+		case "get_available_models":
 			return { ok: true, command: { id, type: record.type } };
+		case "set_model": {
+			if (typeof record.provider !== "string" || typeof record.modelId !== "string") {
+				return { ok: false, error: "set_model requires provider and modelId strings" };
+			}
+			return { ok: true, command: { id, type: "set_model", provider: record.provider, modelId: record.modelId } };
+		}
+		case "set_thinking_level": {
+			if (typeof record.level !== "string") {
+				return { ok: false, error: "set_thinking_level requires a level string" };
+			}
+			return { ok: true, command: { id, type: "set_thinking_level", level: record.level } };
+		}
 		case "lease": {
 			if (record.action !== "request" && record.action !== "release") {
 				return { ok: false, error: 'lease.action must be "request" or "release"' };

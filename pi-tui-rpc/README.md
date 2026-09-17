@@ -43,6 +43,16 @@ node pi-tui-rpc/test-client.mjs "$PI_TUI_RPC_SOCKET" \
   --send '{"id":"1","type":"prompt","message":"Reply with exactly: PONG"}' --wait-settled
 ```
 
+### Model commands
+
+- `get_available_models` → `{ models: [...] }` in pi RPC shape (session-scoped models when configured).
+- `set_model { provider, modelId }` → switches the live session's model.
+- `set_thinking_level { level }`.
+
+### Lease
+
+Remote lease requests are granted immediately; the terminal revokes on any interactive keystroke. Set `PI_TUI_RPC_LEASE_CONFIRM=1` to require a TUI confirmation.
+
 ### Socket path
 
 - `PI_TUI_RPC_SOCKET` env var (set by the oqto runner per session), else

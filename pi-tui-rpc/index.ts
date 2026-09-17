@@ -76,6 +76,13 @@ export default function (pi: ExtensionAPI) {
 				// No TUI to ask; the socket shares the process trust domain.
 				return true;
 			}
+			// Same-user socket: the terminal already revokes the lease on any
+			// interactive keystroke, so a takeover prompt only adds a round trip
+			// through a window the user is not looking at. Auto-grant by default;
+			// PI_TUI_RPC_LEASE_CONFIRM=1 restores the prompt for shared terminals.
+			if (process.env.PI_TUI_RPC_LEASE_CONFIRM?.trim() !== "1") {
+				return true;
+			}
 			return ctx.ui.confirm("Remote input request", "An RPC client requests input control. Allow?");
 		},
 		onChange: (owner, reason) => {
@@ -128,6 +135,33 @@ export default function (pi: ExtensionAPI) {
 			},
 			getState: () => ({ ...snapshot() }),
 			getMessages: () => (ctx ? ctx.sessionManager.getBranch() : []),
+			getAvailableModels: () => {
+				if (!ctx) return { models: [] };
+				// Mirror the built-in picker: session-scoped models when configured,
+				// otherwise the whole available catalogue.
+				const scoped = ((ctx as unknown as { scopedModels?: Array<{ model: unknown }> }).scopedModels ?? []).map((s) => s.model);
+				const models = (scoped.length > 0 ? scoped : ctx.modelRegistry.getAvailable()) as Array<Record<string, unknown>>;
+				return {
+					models: models.map((m) => ({
+						id: m.id,
+						name: m.name,
+						provider: m.provider,
+						api: m.api,
+						reasoning: m.reasoning,
+						contextWindow: m.contextWindow,
+						maxTokens: m.maxTokens,
+					})),
+				};
+			},
+			setModel: async (provider, modelId) => {
+				if (!ctx) return false;
+				const model = ctx.modelRegistry.find(provider, modelId);
+				if (!model) return false;
+				return pi.setModel(model);
+			},
+			setThinkingLevel: (level) => {
+				pi.setThinkingLevel(level as Parameters<typeof pi.setThinkingLevel>[0]);
+			},
 			leaseRequest: () => lease.requestRemote(),
 			leaseRelease: () => {
 				lease.release("client_release");
