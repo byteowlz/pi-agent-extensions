@@ -15,6 +15,11 @@ export interface RpcDeps {
 	abort(): void;
 	getState(): Promise<Record<string, unknown>> | Record<string, unknown>;
 	getMessages(): Promise<unknown> | unknown;
+	/** Same shape as pi RPC `get_available_models`: `{ models: [...] }`. */
+	getAvailableModels(): Promise<unknown> | unknown;
+	/** Resolve `provider/modelId` and switch; false when unknown or unauthenticated. */
+	setModel(provider: string, modelId: string): Promise<boolean> | boolean;
+	setThinkingLevel(level: string): void;
 	leaseRequest(): Promise<{ granted: boolean; reason: string }>;
 	leaseRelease(): void;
 	leaseOwner(): LeaseOwner;
@@ -43,6 +48,16 @@ export async function dispatchCommand(command: ClientCommand, deps: RpcDeps): Pr
 			return { success: true, data: await deps.getState() };
 		case "get_messages":
 			return { success: true, data: await deps.getMessages() };
+		case "get_available_models":
+			return { success: true, data: await deps.getAvailableModels() };
+		case "set_model": {
+			const ok = await deps.setModel(command.provider, command.modelId);
+			if (!ok) return { success: false, error: `unknown or unavailable model ${command.provider}/${command.modelId}` };
+			return { success: true, data: { provider: command.provider, modelId: command.modelId } };
+		}
+		case "set_thinking_level":
+			deps.setThinkingLevel(command.level);
+			return { success: true, data: { level: command.level } };
 		case "lease": {
 			if (command.action === "release") {
 				deps.leaseRelease();
