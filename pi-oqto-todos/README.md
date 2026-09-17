@@ -109,6 +109,7 @@ Create `oqto-todos.json` in your project root, `.pi/` directory, or `~/.pi/agent
 | `sessionScoped` | boolean | `true` | Store todos per session (vs. shared) |
 | `storagePath` | string | `.pi/todos` | Directory for todo storage |
 | `tuiWidget` | boolean | `true` | Render persistent todo widget in Pi TUI (set to `false` for Oqto-only frontend usage) |
+| `preserveInCompaction` | boolean | `true` | After context compaction, inject the current todo list into the LLM context so the model keeps using the todo tools |
 
 ## Installation
 

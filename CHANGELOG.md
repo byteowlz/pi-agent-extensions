@@ -4,6 +4,20 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-oqto-todos: preserve todos across context compaction
+
+- New `session_compact` (after-compaction) handler: after pi compacts the
+  session, the extension injects the **current to-do list** into the LLM context
+  as a `custom_message` entry (via `pi.sendMessage` with `triggerTurn: false`),
+  with a reminder to keep using the `TodoWrite` / `TodoRead` / `Todo` tools.
+- Uses the **after**-compaction hook, so the extension never re-runs or
+  replaces pi's own summarizer — no extra LLM call, no API key, and the
+  compaction summary itself is left untouched.
+- Fixes the failure mode where a model, after a context compaction, forgot the
+  todo panel existed and stopped updating it.
+- Gated by new config option `preserveInCompaction` (default `true`); set to
+  `false` to disable. Falls back silently on any error.
+
 ### pi-herdr-tools: relay (/send) — cross-tab response forwarding + injection
 
 - New `/send` command (alias `/relay`): copy this agent's most recent assistant
