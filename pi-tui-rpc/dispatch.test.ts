@@ -25,6 +25,23 @@ function createDeps(options: { streaming?: boolean; owner?: "tui" | "remote" } =
 		leaseRequest: async () => ({ granted: (options.owner ?? "tui") === "remote" || true, reason: "test" }),
 		leaseRelease: () => undefined,
 		leaseOwner: () => options.owner ?? "tui",
+		getEntries: () => ({ entries: [], leafId: null }),
+		getTree: () => ({ tree: [], leafId: null }),
+		getForkMessages: () => ({ messages: [] }),
+		getLastAssistantText: () => "hi",
+		getSessionStats: () => ({ totalMessages: 1 }),
+		getCommands: () => ({ commands: [] }),
+		currentModel: () => ({ id: "a", provider: "p" }),
+		getThinkingLevel: () => "off",
+		getAvailableThinkingLevels: () => ["off", "high"],
+		newSession: async () => ({ cancelled: false }),
+		switchSession: async () => ({ cancelled: false }),
+		fork: async () => ({ cancelled: false }),
+		setSessionName: () => undefined,
+		exportHtml: async () => undefined,
+		compact: () => undefined,
+		bash: async () => ({ stdout: "ok", stderr: "", exitCode: 0, cancelled: false }),
+		abortBash: () => false,
 	};
 }
 
@@ -127,5 +144,55 @@ describe("pi-tui-rpc dispatch", () => {
 		deps.leaseOwner = () => "tui";
 		const release = await dispatchCommand({ type: "lease", action: "release" }, deps);
 		expect(release.data).toEqual({ owner: "tui" });
+	});
+});
+
+describe("pi-tui-rpc rpc parity", () => {
+	test("commands pi cannot back answer unsupported deterministically", async () => {
+		const deps = createDeps();
+		for (const type of ["clear_queue", "set_steering_mode", "set_follow_up_mode", "set_auto_compaction", "set_auto_retry", "abort_retry", "extension_ui_response"] as const) {
+			const command = { type } as unknown as ClientCommand;
+			const result = await dispatchCommand(command, deps);
+			expect(result.success).toBe(false);
+			expect(result.error?.startsWith("unsupported:")).toBe(true);
+		}
+	});
+
+	test("set_thinking_level validates against available levels", async () => {
+		const deps = createDeps();
+		const bad = await dispatchCommand({ type: "set_thinking_level", level: "nope" }, deps);
+		expect(bad.success).toBe(false);
+		const good = await dispatchCommand({ type: "set_thinking_level", level: "high" }, deps);
+		expect(good.success).toBe(true);
+		expect(good.data).toEqual({ level: "off" }); // deps stub ignores the change
+	});
+
+	test("cycle_model advances and wraps", async () => {
+		const deps = createDeps();
+		deps.getAvailableModels = () => ({
+			models: [
+				{ id: "a", provider: "p" },
+				{ id: "b", provider: "p" },
+			],
+		});
+		deps.setModel = async (_provider, modelId) => {
+			deps.currentModel = () => ({ id: modelId, provider: "p" });
+			return true;
+		};
+		const first = await dispatchCommand({ type: "cycle_model" }, deps);
+		expect(first.success).toBe(true);
+		expect((first.data as { model: { id: string } }).model.id).toBe("b");
+		const second = await dispatchCommand({ type: "cycle_model" }, deps);
+		expect((second.data as { model: { id: string } }).model.id).toBe("a");
+	});
+
+	test("observation commands pass through", async () => {
+		const deps = createDeps();
+		const entries = await dispatchCommand({ type: "get_entries", since: "x" } as unknown as ClientCommand, deps);
+		expect(entries.success).toBe(true);
+		const text = await dispatchCommand({ type: "get_last_assistant_text" }, deps);
+		expect(text.data).toEqual({ text: "hi" });
+		const shell = await dispatchCommand({ type: "bash", command: "echo hi" } as unknown as ClientCommand, deps);
+		expect(shell.data).toEqual({ stdout: "ok", stderr: "", exitCode: 0, cancelled: false });
 	});
 });

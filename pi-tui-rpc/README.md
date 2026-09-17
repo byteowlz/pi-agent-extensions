@@ -43,6 +43,18 @@ node pi-tui-rpc/test-client.mjs "$PI_TUI_RPC_SOCKET" \
   --send '{"id":"1","type":"prompt","message":"Reply with exactly: PONG"}' --wait-settled
 ```
 
+### RPC parity
+
+Command names, arguments and response shapes mirror pi's RPC mode: session
+(new_session, switch_session, fork, set_session_name), observation
+(get_entries, get_tree, get_fork_messages, get_last_assistant_text,
+get_session_stats, get_commands), models and thinking (incl. cycle_model,
+cycle_thinking_level, get_available_thinking_levels), bash/abort_bash, and
+compact. The `hello` frame lists every supported type (`commands`). Commands
+pi's extension API cannot back (clear_queue, queue modes, auto-compaction /
+auto-retry settings, export_html on some installs, extension_ui_response)
+answer `success: false` with an `unsupported:` error.
+
 ### Model commands
 
 - `get_available_models` → `{ models: [...] }` in pi RPC shape (session-scoped models when configured).

@@ -23,7 +23,14 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { type RpcDeps, dispatchCommand } from "./dispatch.js";
 import { type Hub, createHub } from "./hub.js";
 import { createLease } from "./lease.js";
-import { type ClientCommand, type LeaseOwner, eventFrame, responseFrame, validateCommand } from "./protocol.js";
+import {
+	COMMAND_TYPES,
+	type ClientCommand,
+	type LeaseOwner,
+	eventFrame,
+	responseFrame,
+	validateCommand,
+} from "./protocol.js";
 
 const STATUS_KEY = "pi_tui_rpc";
 
@@ -54,6 +61,7 @@ export default function (pi: ExtensionAPI) {
 
 	let currentCtx: ExtensionContext | null = null;
 	let hub: Hub | null = null;
+	let bashAbort: AbortController | null = null;
 
 	const updateTuiStatus = (): boolean => {
 		const ctx = currentCtx;
@@ -106,16 +114,18 @@ export default function (pi: ExtensionAPI) {
 				lease: lease.owner(),
 			};
 		}
-		const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : null;
 		return {
 			mode: isRpcMode ? "rpc" : "tui",
 			cwd: ctx.cwd,
 			sessionFile: ctx.sessionManager.getSessionFile() ?? null,
 			sessionId: ctx.sessionManager.getSessionId(),
 			sessionName: pi.getSessionName() ?? null,
-			model,
+			// pi RPC shape: the full model object.
+			model: ctx.model ?? null,
 			thinkingLevel: pi.getThinkingLevel(),
 			isStreaming: !ctx.isIdle(),
+			isCompacting: false,
+			messageCount: ctx.sessionManager.getBranch().length,
 			lease: lease.owner(),
 		};
 	};
@@ -162,6 +172,196 @@ export default function (pi: ExtensionAPI) {
 			setThinkingLevel: (level) => {
 				pi.setThinkingLevel(level as Parameters<typeof pi.setThinkingLevel>[0]);
 			},
+			currentModel: () => {
+				const m = ctx?.model;
+				return m ? { id: m.id, name: m.name, provider: m.provider, reasoning: m.reasoning } : undefined;
+			},
+			getThinkingLevel: () => pi.getThinkingLevel(),
+			getAvailableThinkingLevels: () => {
+				const model = ctx?.model;
+				if (!model) return ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+				if (!model.reasoning) return ["off"];
+				// Mirrors @earendil-works/pi-ai's getSupportedThinkingLevels.
+				const base = ["off", "minimal", "low", "medium", "high"];
+				const map = model.thinkingLevelMap as Record<string, string | null | undefined> | undefined;
+				const extended = ["xhigh", "max"].filter((l) => map?.[l] !== undefined);
+				const dropped = new Set(Object.entries(map ?? {}).filter(([, v]) => v === null).map(([k]) => k));
+				return [...base.filter((l) => !dropped.has(l)), ...extended];
+			},
+			getEntries: (since) => {
+				const sm = ctx?.sessionManager;
+				if (!sm) return { entries: [], leafId: null };
+				let entries = sm.getEntries();
+				if (since !== undefined) {
+					const index = entries.findIndex((e) => e.id === since);
+					if (index === -1) throw new Error(`Entry not found: ${since}`);
+					entries = entries.slice(index + 1);
+				}
+				return { entries, leafId: sm.getLeafId() };
+			},
+			getTree: () => {
+				const sm = ctx?.sessionManager;
+				return sm ? { tree: sm.getTree(), leafId: sm.getLeafId() } : { tree: [], leafId: null };
+			},
+			getForkMessages: () => {
+				const sm = ctx?.sessionManager;
+				if (!sm) return { messages: [] };
+				const text = (content: unknown): string => {
+					if (typeof content === "string") return content;
+					if (Array.isArray(content)) {
+						return content
+							.filter((c) => (c as { type?: string }).type === "text")
+							.map((c) => (c as { text?: string }).text ?? "")
+							.join("");
+					}
+					return "";
+				};
+				const messages: Array<{ entryId: string; text: string }> = [];
+				for (const entry of sm.getEntries()) {
+					if (entry.type !== "message") continue;
+					const message = (entry as { message?: { role?: string; content?: unknown } }).message;
+					if (message?.role !== "user") continue;
+					const value = text(message.content).trim();
+					if (value) messages.push({ entryId: entry.id, text: value });
+				}
+				return { messages };
+			},
+			getLastAssistantText: () => {
+				const sm = ctx?.sessionManager;
+				if (!sm) return undefined;
+				const entries = sm.getBranch();
+				for (let i = entries.length - 1; i >= 0; i--) {
+					const entry = entries[i] as { type?: string; message?: { role?: string; stopReason?: string; content?: unknown } };
+					if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+					if (entry.message.stopReason === "aborted" && !Array.isArray(entry.message.content)) continue;
+					if (entry.message.stopReason === "aborted" && (entry.message.content as unknown[]).length === 0) continue;
+					const text = (Array.isArray(entry.message.content) ? entry.message.content : [])
+						.filter((c) => (c as { type?: string }).type === "text")
+						.map((c) => (c as { text?: string }).text ?? "")
+						.join("");
+					const trimmed = text.trim();
+					return trimmed || undefined;
+				}
+				return undefined;
+			},
+			getSessionStats: () => {
+				const sm = ctx?.sessionManager;
+				const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+				const add = (usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost?: { total?: number } } | undefined) => {
+					if (!usage) return;
+					totals.input += usage.input ?? 0;
+					totals.output += usage.output ?? 0;
+					totals.cacheRead += usage.cacheRead ?? 0;
+					totals.cacheWrite += usage.cacheWrite ?? 0;
+					totals.cost += usage.cost?.total ?? 0;
+				};
+				const counts = { userMessages: 0, assistantMessages: 0, toolCalls: 0, toolResults: 0, totalMessages: 0 };
+				for (const entry of sm?.getEntries() ?? []) {
+					const e = entry as { type?: string; usage?: never; message?: { role?: string; usage?: never; content?: Array<{ type?: string }> } };
+					if ((e.type === "branch_summary" || e.type === "compaction") && e.usage) {
+						add(e.usage);
+					}
+					if (e.type !== "message") continue;
+					counts.totalMessages += 1;
+					const message = e.message;
+					if (message?.role === "user") counts.userMessages += 1;
+					else if (message?.role === "toolResult") {
+						counts.toolResults += 1;
+						add(message.usage);
+					} else if (message?.role === "assistant") {
+						counts.assistantMessages += 1;
+						counts.toolCalls += Array.isArray(message.content)
+							? message.content.filter((c) => c.type === "toolCall").length
+							: 0;
+						add(message.usage);
+					}
+				}
+				const usage = ctx?.getContextUsage();
+				return {
+					...counts,
+					tokens: {
+						input: totals.input,
+						output: totals.output,
+						cacheRead: totals.cacheRead,
+						cacheWrite: totals.cacheWrite,
+					},
+					cost: totals.cost,
+					contextUsage: usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow } : undefined,
+				};
+			},
+			getCommands: () => ({ commands: pi.getCommands() }),
+			newSession: async (parentSession) => {
+				if (!ctx) return { cancelled: true };
+				const result = await ctx.newSession(parentSession ? { parentSession } : undefined);
+				return { cancelled: result.cancelled };
+			},
+			switchSession: async (sessionPath) => {
+				if (!ctx) return { cancelled: true };
+				const result = await ctx.switchSession(sessionPath);
+				return { cancelled: result.cancelled };
+			},
+			fork: async (entryId) => {
+				if (!ctx) return { cancelled: true };
+				const result = await ctx.fork(entryId);
+				return { cancelled: result.cancelled };
+			},
+			setSessionName: (name) => {
+				pi.setSessionName(name);
+			},
+			exportHtml: async (outputPath) => {
+				if (!ctx) return undefined;
+				try {
+					const pkg = (await import("@earendil-works/pi-coding-agent")) as unknown as {
+						exportSessionToHtml?: (
+							sm: unknown,
+							state: unknown,
+							options?: { outputPath?: string }
+						) => Promise<string | undefined>;
+					};
+					if (!pkg.exportSessionToHtml) return undefined;
+					const path = await pkg.exportSessionToHtml(
+						ctx.sessionManager,
+						{},
+						outputPath ? { outputPath } : undefined
+					);
+					return typeof path === "string" ? path : undefined;
+				} catch {
+					return undefined;
+				}
+			},
+			compact: (customInstructions) => {
+				ctx?.compact(customInstructions ? { customInstructions } : undefined);
+			},
+			bash: async (command) => {
+				if (!ctx) return { stdout: "", stderr: "no session", exitCode: null, cancelled: false };
+				bashAbort = new AbortController();
+				try {
+					const result = await pi.exec("bash", ["-lc", command], {
+						cwd: ctx.cwd,
+						signal: bashAbort.signal,
+					});
+					const r = result as { stdout?: string; stderr?: string; exitCode?: number | null };
+					return {
+						stdout: r.stdout ?? "",
+						stderr: r.stderr ?? "",
+						exitCode: r.exitCode ?? null,
+						cancelled: false,
+					};
+				} catch (error) {
+					return {
+						stdout: "",
+						stderr: String(error),
+						exitCode: null,
+						cancelled: bashAbort.signal.aborted,
+					};
+				}
+			},
+			abortBash: () => {
+				const controller = bashAbort;
+				if (!controller) return false;
+				controller.abort();
+				return true;
+			},
 			leaseRequest: () => lease.requestRemote(),
 			leaseRelease: () => {
 				lease.release("client_release");
@@ -187,7 +387,7 @@ export default function (pi: ExtensionAPI) {
 		hub = createHub({
 			socketPath,
 			onConnect: (_clientId, reply) => {
-				reply({ type: "hello", v: 0, pid: process.pid, lease: lease.owner() });
+				reply({ type: "hello", v: 1, pid: process.pid, lease: lease.owner(), commands: COMMAND_TYPES });
 			},
 			onLine: (_clientId, value, reply) => {
 				const checked = validateCommand(value);
