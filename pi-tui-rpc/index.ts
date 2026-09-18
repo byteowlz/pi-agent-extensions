@@ -20,17 +20,43 @@
 import os from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type RpcDeps, dispatchCommand } from "./dispatch.js";
+
+type SessionActionResult = Promise<{ cancelled: boolean }>;
+
+/**
+ * Session replacement actions exist on ExtensionCommandContext only. The ctx
+ * we hold may be an event context, so resolve the action by name at runtime
+ * and return it bound, or undefined when this ctx cannot perform it.
+ */
+function sessionAction(
+	ctx: ExtensionContext | null,
+	name: "newSession" | "fork" | "switchSession"
+): ((...args: unknown[]) => SessionActionResult) | undefined {
+	if (!ctx) return undefined;
+	const fn = (ctx as unknown as Record<string, unknown>)[name];
+	if (typeof fn !== "function") return undefined;
+	return (...args: unknown[]) => (fn as (...a: unknown[]) => SessionActionResult).apply(ctx, args);
+}
+
+/** Narrow a pi model object (or anything model-shaped) to the wire summary. */
+function toModelSummary(m: unknown): ModelSummary {
+	const r = (m && typeof m === "object" ? m : {}) as Record<string, unknown>;
+	const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+	const num = (v: unknown) => (typeof v === "number" ? v : undefined);
+	return {
+		id: str(r.id) ?? "",
+		provider: str(r.provider) ?? "",
+		name: str(r.name),
+		api: str(r.api),
+		reasoning: typeof r.reasoning === "boolean" ? r.reasoning : undefined,
+		contextWindow: num(r.contextWindow),
+		maxTokens: num(r.maxTokens),
+	};
+}
+import { type ModelSummary, type RpcDeps, dispatchCommand } from "./dispatch.js";
 import { type Hub, createHub } from "./hub.js";
 import { createLease } from "./lease.js";
-import {
-	COMMAND_TYPES,
-	type ClientCommand,
-	type LeaseOwner,
-	eventFrame,
-	responseFrame,
-	validateCommand,
-} from "./protocol.js";
+import { COMMAND_TYPES, type ClientCommand, type LeaseOwner, eventFrame, responseFrame, validateCommand } from "./protocol.js";
 
 const STATUS_KEY = "pi_tui_rpc";
 
@@ -49,9 +75,11 @@ interface SessionSnapshot {
 	sessionFile: string | null;
 	sessionId: string | null;
 	sessionName: string | null;
-	model: string | null;
+	model: ModelSummary | null;
 	thinkingLevel: string | null;
 	isStreaming: boolean;
+	isCompacting: boolean;
+	messageCount: number;
 	lease: LeaseOwner;
 }
 
@@ -111,6 +139,8 @@ export default function (pi: ExtensionAPI) {
 				model: null,
 				thinkingLevel: null,
 				isStreaming: false,
+				isCompacting: false,
+				messageCount: 0,
 				lease: lease.owner(),
 			};
 		}
@@ -121,7 +151,7 @@ export default function (pi: ExtensionAPI) {
 			sessionId: ctx.sessionManager.getSessionId(),
 			sessionName: pi.getSessionName() ?? null,
 			// pi RPC shape: the full model object.
-			model: ctx.model ?? null,
+			model: ctx.model ? toModelSummary(ctx.model) : null,
 			thinkingLevel: pi.getThinkingLevel(),
 			isStreaming: !ctx.isIdle(),
 			isCompacting: false,
@@ -150,18 +180,8 @@ export default function (pi: ExtensionAPI) {
 				// Mirror the built-in picker: session-scoped models when configured,
 				// otherwise the whole available catalogue.
 				const scoped = ((ctx as unknown as { scopedModels?: Array<{ model: unknown }> }).scopedModels ?? []).map((s) => s.model);
-				const models = (scoped.length > 0 ? scoped : ctx.modelRegistry.getAvailable()) as Array<Record<string, unknown>>;
-				return {
-					models: models.map((m) => ({
-						id: m.id,
-						name: m.name,
-						provider: m.provider,
-						api: m.api,
-						reasoning: m.reasoning,
-						contextWindow: m.contextWindow,
-						maxTokens: m.maxTokens,
-					})),
-				};
+				const models: unknown[] = scoped.length > 0 ? scoped : ctx.modelRegistry.getAvailable();
+				return { models: models.map(toModelSummary) };
 			},
 			setModel: async (provider, modelId) => {
 				if (!ctx) return false;
@@ -185,7 +205,11 @@ export default function (pi: ExtensionAPI) {
 				const base = ["off", "minimal", "low", "medium", "high"];
 				const map = model.thinkingLevelMap as Record<string, string | null | undefined> | undefined;
 				const extended = ["xhigh", "max"].filter((l) => map?.[l] !== undefined);
-				const dropped = new Set(Object.entries(map ?? {}).filter(([, v]) => v === null).map(([k]) => k));
+				const dropped = new Set(
+					Object.entries(map ?? {})
+						.filter(([, v]) => v === null)
+						.map(([k]) => k)
+				);
 				return [...base.filter((l) => !dropped.has(l)), ...extended];
 			},
 			getEntries: (since) => {
@@ -247,7 +271,9 @@ export default function (pi: ExtensionAPI) {
 			getSessionStats: () => {
 				const sm = ctx?.sessionManager;
 				const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-				const add = (usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost?: { total?: number } } | undefined) => {
+				const add = (
+					usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost?: { total?: number } } | undefined
+				) => {
 					if (!usage) return;
 					totals.input += usage.input ?? 0;
 					totals.output += usage.output ?? 0;
@@ -257,7 +283,11 @@ export default function (pi: ExtensionAPI) {
 				};
 				const counts = { userMessages: 0, assistantMessages: 0, toolCalls: 0, toolResults: 0, totalMessages: 0 };
 				for (const entry of sm?.getEntries() ?? []) {
-					const e = entry as { type?: string; usage?: never; message?: { role?: string; usage?: never; content?: Array<{ type?: string }> } };
+					const e = entry as {
+						type?: string;
+						usage?: never;
+						message?: { role?: string; usage?: never; content?: Array<{ type?: string }> };
+					};
 					if ((e.type === "branch_summary" || e.type === "compaction") && e.usage) {
 						add(e.usage);
 					}
@@ -270,9 +300,7 @@ export default function (pi: ExtensionAPI) {
 						add(message.usage);
 					} else if (message?.role === "assistant") {
 						counts.assistantMessages += 1;
-						counts.toolCalls += Array.isArray(message.content)
-							? message.content.filter((c) => c.type === "toolCall").length
-							: 0;
+						counts.toolCalls += Array.isArray(message.content) ? message.content.filter((c) => c.type === "toolCall").length : 0;
 						add(message.usage);
 					}
 				}
@@ -290,19 +318,24 @@ export default function (pi: ExtensionAPI) {
 				};
 			},
 			getCommands: () => ({ commands: pi.getCommands() }),
+			// newSession/fork/switchSession live on ExtensionCommandContext; the
+			// captured ctx may come from an event, so probe at runtime.
 			newSession: async (parentSession) => {
-				if (!ctx) return { cancelled: true };
-				const result = await ctx.newSession(parentSession ? { parentSession } : undefined);
+				const fn = sessionAction(ctx, "newSession");
+				if (!fn) return { cancelled: true };
+				const result = await fn(parentSession ? { parentSession } : undefined);
 				return { cancelled: result.cancelled };
 			},
 			switchSession: async (sessionPath) => {
-				if (!ctx) return { cancelled: true };
-				const result = await ctx.switchSession(sessionPath);
+				const fn = sessionAction(ctx, "switchSession");
+				if (!fn) return { cancelled: true };
+				const result = await fn(sessionPath);
 				return { cancelled: result.cancelled };
 			},
 			fork: async (entryId) => {
-				if (!ctx) return { cancelled: true };
-				const result = await ctx.fork(entryId);
+				const fn = sessionAction(ctx, "fork");
+				if (!fn) return { cancelled: true };
+				const result = await fn(entryId);
 				return { cancelled: result.cancelled };
 			},
 			setSessionName: (name) => {
@@ -312,18 +345,10 @@ export default function (pi: ExtensionAPI) {
 				if (!ctx) return undefined;
 				try {
 					const pkg = (await import("@earendil-works/pi-coding-agent")) as unknown as {
-						exportSessionToHtml?: (
-							sm: unknown,
-							state: unknown,
-							options?: { outputPath?: string }
-						) => Promise<string | undefined>;
+						exportSessionToHtml?: (sm: unknown, state: unknown, options?: { outputPath?: string }) => Promise<string | undefined>;
 					};
 					if (!pkg.exportSessionToHtml) return undefined;
-					const path = await pkg.exportSessionToHtml(
-						ctx.sessionManager,
-						{},
-						outputPath ? { outputPath } : undefined
-					);
+					const path = await pkg.exportSessionToHtml(ctx.sessionManager, {}, outputPath ? { outputPath } : undefined);
 					return typeof path === "string" ? path : undefined;
 				} catch {
 					return undefined;
