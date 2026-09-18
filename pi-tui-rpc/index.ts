@@ -177,11 +177,20 @@ export default function (pi: ExtensionAPI) {
 			getMessages: () => (ctx ? ctx.sessionManager.getBranch() : []),
 			getAvailableModels: () => {
 				if (!ctx) return { models: [] };
-				// Mirror the built-in picker: session-scoped models when configured,
-				// otherwise the whole available catalogue.
+				// Always the whole catalogue: an RPC client drives its own picker and
+				// cannot widen a narrowed list, whereas it can rank or filter a wide
+				// one. Session-scoped models come first so they stay prominent.
 				const scoped = ((ctx as unknown as { scopedModels?: Array<{ model: unknown }> }).scopedModels ?? []).map((s) => s.model);
-				const models: unknown[] = scoped.length > 0 ? scoped : ctx.modelRegistry.getAvailable();
-				return { models: models.map(toModelSummary) };
+				const seen = new Set<string>();
+				const models: ModelSummary[] = [];
+				for (const m of [...scoped, ...ctx.modelRegistry.getAvailable()]) {
+					const summary = toModelSummary(m);
+					const key = `${summary.provider}/${summary.id}`;
+					if (seen.has(key)) continue;
+					seen.add(key);
+					models.push(summary);
+				}
+				return { models };
 			},
 			setModel: async (provider, modelId) => {
 				if (!ctx) return false;
