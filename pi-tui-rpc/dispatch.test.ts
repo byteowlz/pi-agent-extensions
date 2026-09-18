@@ -150,7 +150,15 @@ describe("pi-tui-rpc dispatch", () => {
 describe("pi-tui-rpc rpc parity", () => {
 	test("commands pi cannot back answer unsupported deterministically", async () => {
 		const deps = createDeps();
-		for (const type of ["clear_queue", "set_steering_mode", "set_follow_up_mode", "set_auto_compaction", "set_auto_retry", "abort_retry", "extension_ui_response"] as const) {
+		for (const type of [
+			"clear_queue",
+			"set_steering_mode",
+			"set_follow_up_mode",
+			"set_auto_compaction",
+			"set_auto_retry",
+			"abort_retry",
+			"extension_ui_response",
+		] as const) {
 			const command = { type } as unknown as ClientCommand;
 			const result = await dispatchCommand(command, deps);
 			expect(result.success).toBe(false);
