@@ -11,7 +11,7 @@
  *     "enabled": true,              // kill switch: false = model cannot spawn at all
  *     "requireConfirmation": true,  // always ask the user before spawning
  *     "allowedModels": [],          // glob patterns (e.g. "openai/*", "archvm/*"); [] = all allowed
- *     "maxSubagents": 3             // max concurrent subagents; 0 = unlimited
+ *     "maxSubagents": 3             // max concurrent subagents per session (finished ones do not count); 0 = unlimited
  *   }
  *
  * Commands:
@@ -140,11 +140,39 @@ function modelAllowed(config: SubagentConfig, model: string): boolean {
 	});
 }
 
-/** Count currently-live subagents we spawned (by name prefix). */
+/**
+ * Names of the subagents spawned by THIS pi session (this extension instance).
+ * The allowance is per session: agents spawned by other sessions, or by an
+ * earlier process of this session, never count against it. Names are pruned
+ * once herdr no longer lists them.
+ */
+const spawnedBySession = new Set<string>();
+
+/**
+ * Count subagents this session spawned that are still alive and not finished.
+ * An agent whose status is `done` has completed its task and no longer
+ * occupies the concurrency allowance, even though its tab may still exist.
+ */
 async function countSubagents(): Promise<number> {
+	if (spawnedBySession.size === 0) return 0;
 	const res = await herdr(["agent", "list"]);
-	const agents = res?.result?.agents ?? [];
-	return agents.filter((a: any) => typeof a.name === "string" && a.name.startsWith(NAME_PREFIX)).length;
+	const agents: unknown[] = Array.isArray(res?.result?.agents) ? res.result.agents : [];
+	const listed = new Map<string, string>();
+	for (const a of agents) {
+		if (!a || typeof a !== "object") continue;
+		const { name, agent_status } = a as { name?: unknown; agent_status?: unknown };
+		if (typeof name === "string") listed.set(name, typeof agent_status === "string" ? agent_status : "");
+	}
+	let active = 0;
+	for (const name of [...spawnedBySession]) {
+		const status = listed.get(name);
+		if (status === undefined) {
+			spawnedBySession.delete(name);
+			continue;
+		}
+		if (status !== "done") active += 1;
+	}
+	return active;
 }
 
 function randomName(): string {
@@ -660,6 +688,8 @@ export default function herdrTools(pi: ExtensionAPI) {
 					details: { spawned: false },
 				};
 			}
+
+			spawnedBySession.add(name);
 
 			// 3. submit the task asynchronously (no --wait)
 			const promptRes = await herdr(["agent", "prompt", name, params.task]);
