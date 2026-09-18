@@ -177,20 +177,12 @@ export default function (pi: ExtensionAPI) {
 			getMessages: () => (ctx ? ctx.sessionManager.getBranch() : []),
 			getAvailableModels: () => {
 				if (!ctx) return { models: [] };
-				// Always the whole catalogue: an RPC client drives its own picker and
-				// cannot widen a narrowed list, whereas it can rank or filter a wide
-				// one. Session-scoped models come first so they stay prominent.
-				const scoped = ((ctx as unknown as { scopedModels?: Array<{ model: unknown }> }).scopedModels ?? []).map((s) => s.model);
-				const seen = new Set<string>();
-				const models: ModelSummary[] = [];
-				for (const m of [...scoped, ...ctx.modelRegistry.getAvailable()]) {
-					const summary = toModelSummary(m);
-					const key = `${summary.provider}/${summary.id}`;
-					if (seen.has(key)) continue;
-					seen.add(key);
-					models.push(summary);
-				}
-				return { models };
+				// Return both lists: the session-scoped models (what this session is
+				// allowed to use) and the full registry. Scoped is always a subset.
+				const scopedModels = (ctx as unknown as { scopedModels?: Array<{ model: unknown }> }).scopedModels ?? [];
+				const scoped = scopedModels.map((s) => toModelSummary(s.model));
+				const models = ctx.modelRegistry.getAvailable().map(toModelSummary);
+				return { scoped, models };
 			},
 			setModel: async (provider, modelId) => {
 				if (!ctx) return false;
