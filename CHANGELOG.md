@@ -4,6 +4,39 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-herdr-tools: per-session subagents, completion notifications, close/reset, timed allow, model picker
+
+- **Per-session allowance (fix).** The subagent cap is now scoped to one pi
+  session via a persistent state file
+  (`~/.pi/agent/subagent-state/<sessionId>.json`). The allowance counts only
+  subagents that session spawned that are still live and not `done`, so it is
+  never polluted by another session's/workspace's agents, and it survives a
+  resume/reload (the old in-memory `spawnedBySession` set was lost on reload,
+  letting the cap reset). `/subagent max <n>` sets the session's allowance;
+  `/subagent max default` falls back to the global config value.
+- **Completion notification.** A background monitor polls tracked subagents and
+  injects a user message into **this** session when one finishes (`done`), so
+  the sending agent is told and can collect the result. Works across a reload.
+- **Close/reset.** `/subagent close <name>` closes a subagent's tab;
+  `/subagent reset <name> [task]` interrupts the running task (Ctrl+C), returns
+  it to idle, and optionally re-prompts it.
+- **Per-session allow mode.** `/subagent mode <auto|confirm|timeout>` sets how
+  a spawn is approved: auto-allow, always-confirm, or a **timed prompt** that
+  auto-decides (`/subagent decide <allow|deny>`) after `/subagent timeout <ms>`.
+  The mode/decision/timeout are stored per session.
+- **Interactive model picker + loadouts.** `/subagent models` opens a
+  provider/model picker (Space to toggle a row or a whole provider, ↑↓
+  navigate, type to filter, Enter saves the allowlist). Loadouts (named
+  presets) are managed via `/subagent models loadout save|load|delete|list`.
+- **Dual-scope loadouts + per-session model controls.** Loadouts exist in two
+  scopes: **global** (`~/.pi/agent/subagent-config.json`) and **local**
+  (per-session state file), e.g. `loadout save <name> [local|global]` /
+  `loadout load <name>` (local first, then global if allowed). A session can
+  toggle global loadouts (`allow-global <on|off>`) and pin itself to a loadout
+  (`force <name>` / `force off`). The effective allowlist is resolved:
+  force → session allowlist → global default, and the delegate/model check now
+  uses that effective list.
+
 ### pi-oqto-todos: preserve todos across context compaction
 
 - New `session_compact` (after-compaction) handler: after pi compacts the
