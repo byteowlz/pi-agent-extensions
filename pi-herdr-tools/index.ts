@@ -3,28 +3,52 @@
  * in a fresh herdr tab, and fork the current session into its own named tab.
  *
  * The current agent calls the `delegate_subagent` tool; the user stays in
- * control through a config file (kill switch, model allowlist, allowance):
+ * control through a config file (kill switch, model allowlist, allowance) plus
+ * per-session settings (allow mode, auto decision, timeout, allowance):
  *
  *   ~/.pi/agent/subagent-config.json
  *
  *   {
  *     "enabled": true,              // kill switch: false = model cannot spawn at all
- *     "requireConfirmation": true,  // always ask the user before spawning
+ *     "requireConfirmation": true,  // legacy: true = confirm (mapped to allowMode confirm)
  *     "allowedModels": [],          // glob patterns (e.g. "openai/*", "archvm/*"); [] = all allowed
- *     "maxSubagents": 3             // max concurrent subagents per session (finished ones do not count); 0 = unlimited
+ *     "maxSubagents": 3             // default max concurrent subagents per session; 0 = unlimited
+ *     "allowMode": "confirm",       // per-session default: "confirm" | "auto" | "timeout"
+ *     "autoDecision": "deny",       // when allowMode=timeout and nobody answers: "allow" | "deny"
+ *     "confirmTimeoutMs": 60000,    // how long the timed prompt waits before auto-deciding
+ *     "loadouts": {}                // named model-presets: { "cheap": ["archvm/*"] }
  *   }
  *
+ * Per-session settings (allow mode, auto decision, timeout, allowance and the
+ * list of spawned subagents) live in a state file keyed by the pi session id:
+ *
+ *   ~/.pi/agent/subagent-state/<sessionId>.json
+ *
+ * A session's allowlist / subagent allowance is scoped to that session only:
+ * other sessions never count against it, and settings survive a resume/reload.
+ *
  * Commands:
- *   /subagent status              show config + active subagents
- *   /subagent on|off              enable/disable model-initiated spawning
- *   /subagent confirm|noconfirm   require (or skip) user confirmation
- *   /subagent models add <glob>   allow a model pattern (repeatable)
- *   /subagent models remove <glob>
- *   /subagent models list         show allowlist
- *   /subagent max <n>             set concurrent allowance (0 = unlimited)
- *   /side [label] [--model M] txt Fork the CURRENT session into a new named
- *                                 tab (like Claude /btw or Codex /side, own tab)
- *   /btw ...                      alias for /side
+ *   /subagent status                  show config + per-session state + active subagents
+ *   /subagent on|off                  enable/disable model-initiated spawning
+ *   /subagent mode <auto|confirm|timeout>   set this session's allow mode
+ *   /subagent decide <allow|deny>     set what a timed prompt does when it times out
+ *   /subagent timeout <ms>            set the timed prompt's auto-decide delay
+ *   /subagent max <n>                 set this session's concurrent allowance (0 = unlimited)
+ *   /subagent list                    list subagents this session spawned + status
+ *   /subagent close <name>            close a subagent's tab (kills it)
+ *   /subagent reset <name> [task]     interrupt a subagent and (optionally) re-prompt it
+ *   /subagent models                  open the interactive provider/model picker
+ *   /subagent models add <glob>       allow a model pattern (repeatable)
+ *   /subagent models remove <glob>    remove an allowlisted pattern
+ *   /subagent models list             show allowlist + loadouts
+ *   /subagent models clear            empty the allowlist (allow all)
+ *   /subagent models loadout save <name>   save current allowlist as a named loadout
+ *   /subagent models loadout load <name>   apply a loadout to the allowlist
+ *   /subagent models loadout delete <name>
+ *   /subagent models loadout list
+ *   /side [label] [--model M] txt     Fork the CURRENT session into a new named
+ *                                     tab (like Claude /btw or Codex /side, own tab)
+ *   /btw ...                          alias for /side
  *
  * Session semantics: pi is single-writer per session file (loaded once at
  * startup; appended to; no reload/lock). Two TUIs on the SAME file do NOT
@@ -58,13 +82,22 @@ import { Type } from "typebox";
 const execFileAsync = promisify(execFile);
 
 const CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "subagent-config.json");
+const STATE_DIR = path.join(os.homedir(), ".pi", "agent", "subagent-state");
 const NAME_PREFIX = "sub-"; // agent names must match [a-z][a-z0-9_-]{0,31}
+const POLL_INTERVAL_MS = 4000;
+
+type AllowMode = "confirm" | "auto" | "timeout";
+type AutoDecision = "allow" | "deny";
 
 interface SubagentConfig {
 	enabled: boolean;
 	requireConfirmation: boolean;
 	allowedModels: string[];
 	maxSubagents: number;
+	allowMode: AllowMode;
+	autoDecision: AutoDecision;
+	confirmTimeoutMs: number;
+	loadouts: Record<string, string[]>;
 }
 
 const DEFAULT_CONFIG: SubagentConfig = {
@@ -72,17 +105,40 @@ const DEFAULT_CONFIG: SubagentConfig = {
 	requireConfirmation: true,
 	allowedModels: [],
 	maxSubagents: 3,
+	allowMode: "confirm",
+	autoDecision: "deny",
+	confirmTimeoutMs: 60_000,
+	loadouts: {},
 };
+
+function asAllowMode(v: unknown): AllowMode | undefined {
+	return v === "confirm" || v === "auto" || v === "timeout" ? v : undefined;
+}
+
+function asAutoDecision(v: unknown): AutoDecision | undefined {
+	return v === "allow" || v === "deny" ? v : undefined;
+}
 
 function loadConfig(): SubagentConfig {
 	try {
 		if (fs.existsSync(CONFIG_PATH)) {
 			const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) as Partial<SubagentConfig>;
+			const allowMode = asAllowMode(raw.allowMode) ?? (raw.requireConfirmation === false ? "auto" : "confirm");
+			const loadouts: Record<string, string[]> = {};
+			if (raw.loadouts && typeof raw.loadouts === "object") {
+				for (const [k, v] of Object.entries(raw.loadouts)) {
+					if (Array.isArray(v)) loadouts[k] = v.filter((p) => typeof p === "string");
+				}
+			}
 			return {
 				enabled: raw.enabled ?? DEFAULT_CONFIG.enabled,
 				requireConfirmation: raw.requireConfirmation ?? DEFAULT_CONFIG.requireConfirmation,
-				allowedModels: Array.isArray(raw.allowedModels) ? raw.allowedModels : [],
+				allowedModels: Array.isArray(raw.allowedModels) ? raw.allowedModels.filter((p) => typeof p === "string") : [],
 				maxSubagents: typeof raw.maxSubagents === "number" ? raw.maxSubagents : DEFAULT_CONFIG.maxSubagents,
+				allowMode,
+				autoDecision: asAutoDecision(raw.autoDecision) ?? DEFAULT_CONFIG.autoDecision,
+				confirmTimeoutMs: typeof raw.confirmTimeoutMs === "number" ? raw.confirmTimeoutMs : DEFAULT_CONFIG.confirmTimeoutMs,
+				loadouts,
 			};
 		}
 	} catch {
@@ -98,6 +154,113 @@ function saveConfig(config: SubagentConfig): void {
 	} catch {
 		// non-fatal: config still applies for this process
 	}
+}
+
+// --- Per-session state ------------------------------------------------
+
+interface TrackedSubagent {
+	name: string;
+	paneId: string;
+	tabId: string;
+	model: string;
+	label: string;
+	cwd: string;
+	spawnedAt: number;
+	status?: string; // last observed herdr status (idle/working/blocked/done/unknown)
+	done?: boolean; // observed done; completion notification sent
+	notified?: boolean; // completion notification dispatched
+	gone?: boolean; // tab closed / agent no longer listed
+}
+
+interface SessionState {
+	sessionId: string;
+	allowMode?: AllowMode;
+	autoDecision?: AutoDecision;
+	confirmTimeoutMs?: number;
+	maxSubagents?: number;
+	subagents: Record<string, TrackedSubagent>;
+	/** This session's active model allowlist (overrides the global default while set). */
+	allowlist?: string[];
+	/** Local (per-session) named loadouts. */
+	loadouts?: Record<string, string[]>;
+	/** Whether this session may use global loadouts. Default true. */
+	allowGlobalLoadouts?: boolean;
+	/** Loadout name this session is pinned to (resolved local-first, then global if allowed). */
+	forceLoadout?: string;
+}
+
+let currentSessionId: string | null = null;
+let currentState: SessionState | null = null;
+let notifyTimer: ReturnType<typeof setInterval> | null = null;
+
+function sessionIdOf(ctx: ExtensionContext): string | null {
+	try {
+		return ctx.sessionManager.getSessionId() ?? null;
+	} catch {
+		return null;
+	}
+}
+
+function stateFilePath(sessionId: string): string {
+	const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, "-");
+	return path.join(STATE_DIR, `${safe}.json`);
+}
+
+function loadSessionState(ctx: ExtensionContext): void {
+	const id = sessionIdOf(ctx);
+	currentSessionId = id;
+	if (!id) {
+		currentState = { sessionId: "ephemeral", subagents: {} };
+		return;
+	}
+	try {
+		if (fs.existsSync(stateFilePath(id))) {
+			const raw = JSON.parse(fs.readFileSync(stateFilePath(id), "utf8")) as Partial<SessionState>;
+			currentState = {
+				sessionId: id,
+				...(raw as object),
+				subagents: (raw.subagents as Record<string, TrackedSubagent>) ?? {},
+			};
+			return;
+		}
+	} catch {
+		// fall through
+	}
+	currentState = { sessionId: id, subagents: {} };
+}
+
+function persistState(): void {
+	if (!currentState || !currentSessionId) return; // ephemeral: in-memory only
+	try {
+		fs.mkdirSync(STATE_DIR, { recursive: true });
+		fs.writeFileSync(stateFilePath(currentSessionId), JSON.stringify(currentState, null, 2));
+	} catch {
+		// non-fatal
+	}
+}
+
+function ensureSessionState(ctx: ExtensionContext): void {
+	const id = sessionIdOf(ctx);
+	if (!currentState || currentSessionId !== id) loadSessionState(ctx);
+}
+
+function trackSubagent(ctx: ExtensionContext, t: TrackedSubagent): void {
+	ensureSessionState(ctx);
+	if (currentState) currentState.subagents[t.name] = t;
+	persistState();
+}
+
+function sessionAllowMode(config: SubagentConfig): AllowMode {
+	return currentState?.allowMode ?? config.allowMode;
+}
+function sessionAutoDecision(config: SubagentConfig): AutoDecision {
+	return currentState?.autoDecision ?? config.autoDecision;
+}
+function sessionConfirmTimeout(config: SubagentConfig): number {
+	return currentState?.confirmTimeoutMs ?? config.confirmTimeoutMs;
+}
+function sessionMaxSubagents(config: SubagentConfig): number {
+	return currentState?.maxSubagents ?? config.maxSubagents;
 }
 
 function isInHerdr(): boolean {
@@ -130,49 +293,169 @@ function globToRegExp(pattern: string): RegExp {
 	return new RegExp(`^${escaped}$`);
 }
 
-function modelAllowed(config: SubagentConfig, model: string): boolean {
-	if (config.allowedModels.length === 0) return true;
-	const full = model;
-	const bare = model.split("/").pop() ?? model;
-	return config.allowedModels.some((p) => {
+/** Does `full` (e.g. "openai/gpt-5") match any of the given patterns? Empty = all allowed. */
+function allowedBy(patterns: string[], full: string): boolean {
+	if (patterns.length === 0) return true;
+	const provider = full.split("/")[0] ?? "";
+	const bare = full.split("/").pop() ?? full;
+	return patterns.some((p) => {
 		const re = globToRegExp(p);
-		return re.test(full) || re.test(bare) || re.test(`${full.split("/")[0]}/*`);
+		return re.test(full) || re.test(bare) || re.test(`${provider}/*`);
 	});
 }
 
-/**
- * Names of the subagents spawned by THIS pi session (this extension instance).
- * The allowance is per session: agents spawned by other sessions, or by an
- * earlier process of this session, never count against it. Names are pruned
- * once herdr no longer lists them.
- */
-const spawnedBySession = new Set<string>();
+// --- Loadouts (global + per-session) & effective allowlist ------------
 
-/**
- * Count subagents this session spawned that are still alive and not finished.
- * An agent whose status is `done` has completed its task and no longer
- * occupies the concurrency allowance, even though its tab may still exist.
- */
-async function countSubagents(): Promise<number> {
-	if (spawnedBySession.size === 0) return 0;
+function sessionAllowGlobalLoadouts(): boolean {
+	return currentState?.allowGlobalLoadouts !== false;
+}
+
+/** Resolve a loadout name: local (per-session) first, then global if allowed. */
+function resolveLoadout(name: string, config: SubagentConfig): string[] | undefined {
+	const local = currentState?.loadouts?.[name];
+	if (local && local.length > 0) return local;
+	if (sessionAllowGlobalLoadouts() && config.loadouts?.[name] && config.loadouts[name].length > 0) {
+		return config.loadouts[name];
+	}
+	return undefined;
+}
+
+/** The effective allowlist this session uses for spawning, plus where it came from. */
+function effectiveAllowlist(config: SubagentConfig): { patterns: string[]; source: string } {
+	const force = currentState?.forceLoadout;
+	if (force) {
+		const pats = resolveLoadout(force, config);
+		if (pats) return { patterns: pats, source: `loadout:${force}` };
+	}
+	if (currentState?.allowlist !== undefined) return { patterns: currentState.allowlist, source: "session" };
+	return { patterns: config.allowedModels, source: "global" };
+}
+
+/** Drop any force pin so an explicit edit takes effect. */
+function clearForceLoadout(): void {
+	if (currentState) currentState.forceLoadout = undefined;
+}
+
+/** Return this session's mutable allowlist, initialised from the effective one if not set. */
+function ensureSessionAllowlist(config: SubagentConfig): string[] {
+	if (!currentState) currentState = { sessionId: "ephemeral", subagents: {} };
+	if (currentState.allowlist === undefined) {
+		currentState.allowlist = effectiveAllowlist(config).patterns;
+		currentState.forceLoadout = undefined;
+		persistState();
+	}
+	return currentState.allowlist;
+}
+
+// --- Subagent lifecycle (count, monitor, notify) -----------------------
+
+async function fetchAgentStatusMap(): Promise<Map<string, string>> {
 	const res = await herdr(["agent", "list"]);
 	const agents: unknown[] = Array.isArray(res?.result?.agents) ? res.result.agents : [];
-	const listed = new Map<string, string>();
+	const map = new Map<string, string>();
 	for (const a of agents) {
 		if (!a || typeof a !== "object") continue;
 		const { name, agent_status } = a as { name?: unknown; agent_status?: unknown };
-		if (typeof name === "string") listed.set(name, typeof agent_status === "string" ? agent_status : "");
+		if (typeof name === "string") map.set(name, typeof agent_status === "string" ? agent_status : "");
 	}
+	return map;
+}
+
+/**
+ * Count subagents THIS session spawned that are still live and not finished.
+ * Persisted per-session, so the allowance survives a resume/reload and is
+ * never polluted by subagents another session (or another workspace) spawned.
+ */
+async function countSubagents(): Promise<number> {
+	if (!currentState) return 0;
+	const names = Object.keys(currentState.subagents);
+	if (names.length === 0) return 0;
+	const statuses = await fetchAgentStatusMap();
 	let active = 0;
-	for (const name of [...spawnedBySession]) {
-		const status = listed.get(name);
-		if (status === undefined) {
-			spawnedBySession.delete(name);
-			continue;
-		}
+	for (const name of names) {
+		const t = currentState.subagents[name];
+		if (t.gone) continue;
+		const status = statuses.get(name);
+		if (status === undefined) continue; // not listed -> not occupying the cap
 		if (status !== "done") active += 1;
 	}
 	return active;
+}
+
+function hasPendingSubagents(): boolean {
+	if (!currentState) return false;
+	return Object.values(currentState.subagents).some((t) => !t.done && !t.gone);
+}
+
+function stopNotifyTimer(): void {
+	if (notifyTimer) {
+		clearInterval(notifyTimer);
+		notifyTimer = null;
+	}
+}
+
+function startNotifyTimer(pi: ExtensionAPI, ctx: ExtensionContext): void {
+	if (notifyTimer) return;
+	if (!hasPendingSubagents()) return;
+	notifyTimer = setInterval(() => {
+		void pollSubagents(pi, ctx);
+	}, POLL_INTERVAL_MS);
+}
+
+function notifyFinished(pi: ExtensionAPI, ctx: ExtensionContext, t: TrackedSubagent): void {
+	const detail = [
+		`Subagent ${t.name} (${t.label}) has FINISHED its task.`,
+		"",
+		`  model: ${t.model}`,
+		`  cwd:   ${t.cwd}`,
+		"",
+		`Read its output: herdr agent read ${t.name} --source recent-unwrapped --format text`,
+		`Or just ask for it: herdr agent read ${t.name} --source recent-unwrapped --format text`,
+	].join("\n");
+	try {
+		pi.sendUserMessage(detail);
+	} catch {
+		// no session to inject into (print/RPC mode)
+	}
+	try {
+		ctx.ui.notify(`Subagent ${t.name} finished its task.`, "info");
+	} catch {
+		// ignore
+	}
+}
+
+async function pollSubagents(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
+	if (!isInHerdr()) return;
+	if (!currentState) return;
+	let statuses: Map<string, string>;
+	try {
+		statuses = await fetchAgentStatusMap();
+	} catch {
+		return; // transient: herdr unavailable
+	}
+	let changed = false;
+	for (const name of Object.keys(currentState.subagents)) {
+		const t = currentState.subagents[name];
+		if (t.done || t.gone) continue;
+		const status = statuses.get(name);
+		if (status === undefined) {
+			t.gone = true;
+			changed = true;
+			continue;
+		}
+		if (status !== t.status) {
+			t.status = status;
+			changed = true;
+		}
+		if (status === "done") {
+			t.done = true;
+			t.notified = true;
+			changed = true;
+			notifyFinished(pi, ctx, t);
+		}
+	}
+	if (changed) persistState();
+	if (!hasPendingSubagents()) stopNotifyTimer();
 }
 
 function randomName(): string {
@@ -245,7 +528,325 @@ const DelegateParamsSchema = Type.Object({
 	cwd: Type.Optional(Type.String({ description: "Working directory for the subagent. Defaults to the current directory." })),
 });
 
-// --- Relay (send last output to another tab) ---
+// --- Confirmation with per-session allow mode -------------------------
+
+/**
+ * Timed confirmation modal: shows the spawn detail + a live countdown and
+ * auto-decides to `onTimeoutAllow` when the timeout elapses without input.
+ */
+function timedConfirm(ctx: ExtensionContext, detail: string, timeoutMs: number, onTimeoutAllow: boolean): Promise<boolean> {
+	return ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
+		let settled = false;
+		const start = Date.now();
+		let cachedLines: string[] | undefined;
+		let timer: ReturnType<typeof setInterval> | null = null;
+
+		function finish(v: boolean): void {
+			if (settled) return;
+			settled = true;
+			if (timer) clearInterval(timer);
+			done(v);
+		}
+
+		function refresh(): void {
+			cachedLines = undefined;
+			tui.requestRender();
+		}
+
+		timer = setInterval(() => {
+			if (settled) return;
+			if (Date.now() - start >= timeoutMs) {
+				finish(onTimeoutAllow);
+			} else {
+				refresh();
+			}
+		}, 500);
+
+		function handleInput(data: string): void {
+			if (matchesKey(data, Key.escape) || data === "n" || data === "N") {
+				finish(false);
+				return;
+			}
+			if (matchesKey(data, Key.enter) || data === "y" || data === "Y") {
+				finish(true);
+				return;
+			}
+		}
+
+		function render(width: number): string[] {
+			if (cachedLines) return cachedLines;
+			const rw = Math.max(1, width);
+			const rem = Math.max(0, Math.ceil((timeoutMs - (Date.now() - start)) / 1000));
+			const lines: string[] = [];
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			lines.push(
+				...wrapTextWithAnsi(theme.fg("accent", `Spawn subagent?  (auto-${onTimeoutAllow ? "allow" : "deny"} in ${rem}s)`), rw)
+			);
+			lines.push("");
+			lines.push(...wrapTextWithAnsi(theme.fg("muted", detail), rw));
+			lines.push("");
+			lines.push(...wrapTextWithAnsi(theme.fg("dim", "[y] allow • [n] deny • Esc deny • Enter allow"), rw));
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			cachedLines = lines;
+			return lines;
+		}
+
+		return { render, handleInput, invalidate: refresh };
+	});
+}
+
+/** Decide whether a spawn is allowed, honouring the session's allow mode. */
+async function approveSpawn(ctx: ExtensionContext, config: SubagentConfig, detail: string): Promise<boolean> {
+	if (!ctx.hasUI) return true; // print/RPC mode: cannot prompt, so allow
+	const mode = sessionAllowMode(config);
+	if (mode === "auto") return true;
+	if (mode === "confirm") return ctx.ui.confirm("Spawn subagent?", detail);
+	const timeout = sessionConfirmTimeout(config);
+	const decision = sessionAutoDecision(config);
+	return timedConfirm(ctx, detail, timeout, decision === "allow");
+}
+
+// --- Model / provider picker with loadouts ----------------------------
+
+interface ModelInfo {
+	provider: string;
+	id: string;
+	name: string;
+}
+
+function collectModels(ctx: ExtensionContext): ModelInfo[] {
+	const models = ctx.modelRegistry.getAvailable?.() ?? [];
+	const out: ModelInfo[] = [];
+	for (const m of models) {
+		const provider = String(m?.provider ?? "");
+		const id = String(m?.id ?? "");
+		if (!provider || !id) continue;
+		out.push({ provider, id, name: String(m?.name ?? id) });
+	}
+	out.sort((a, b) => (a.provider < b.provider ? -1 : a.provider > b.provider ? 1 : a.name < b.name ? -1 : 1));
+	return out;
+}
+
+interface PickerRow {
+	kind: "provider" | "model";
+	provider: string;
+	modelId?: string;
+	pattern: string;
+	label: string;
+}
+
+/** Interactive provider/model picker. Returns the new allowlist, or null on cancel. */
+function runModelPicker(ctx: ExtensionContext, models: ModelInfo[], initial: string[]): Promise<string[] | null> {
+	const providers = [...new Set(models.map((m) => m.provider))].sort();
+	const rows: PickerRow[] = [];
+	for (const p of providers) {
+		rows.push({ kind: "provider", provider: p, pattern: `${p}/*`, label: `${p} (provider)` });
+		for (const m of models.filter((x) => x.provider === p)) {
+			rows.push({ kind: "model", provider: p, modelId: m.id, pattern: `${p}/${m.id}`, label: m.name });
+		}
+	}
+
+	const sel = new Set(initial);
+	const providerModels = new Map<string, string[]>();
+	for (const m of models) {
+		if (!providerModels.has(m.provider)) providerModels.set(m.provider, []);
+		providerModels.get(m.provider)?.push(m.id);
+	}
+
+	const isModelAllowed = (provider: string, id: string): boolean => allowedBy([...sel], `${provider}/${id}`);
+	const providerAllSelected = (provider: string): boolean => {
+		const ids = providerModels.get(provider) ?? [];
+		return ids.length > 0 && ids.every((id) => isModelAllowed(provider, id));
+	};
+	const providerSelected = (provider: string): boolean => sel.has(`${provider}/*`) || providerAllSelected(provider);
+
+	function toggleProvider(provider: string): void {
+		const pattern = `${provider}/*`;
+		const ids = providerModels.get(provider) ?? [];
+		if (sel.has(pattern) || providerAllSelected(provider)) {
+			sel.delete(pattern);
+			for (const id of ids) sel.delete(`${provider}/${id}`);
+		} else {
+			for (const id of ids) sel.delete(`${provider}/${id}`);
+			sel.add(pattern);
+		}
+	}
+
+	function toggleModel(provider: string, id: string): void {
+		const full = `${provider}/${id}`;
+		const providerPattern = `${provider}/*`;
+		const ids = providerModels.get(provider) ?? [];
+		if (isModelAllowed(provider, id)) {
+			// turn this model off
+			if (sel.has(providerPattern)) {
+				sel.delete(providerPattern);
+				for (const other of ids) {
+					if (other !== id) sel.add(`${provider}/${other}`);
+				}
+			} else {
+				sel.delete(full);
+			}
+		} else {
+			sel.add(full);
+		}
+	}
+
+	return ctx.ui.custom<string[] | null>((tui, theme, _kb, done) => {
+		let filter = "";
+		let visible: PickerRow[] = rows;
+		let selected = 0;
+		const maxVisible = Math.max(1, Math.min(rows.length, 18));
+		let cachedLines: string[] | undefined;
+
+		function recompute(): void {
+			const q = filter.trim().toLowerCase();
+			visible = q ? rows.filter((r) => r.label.toLowerCase().includes(q) || r.pattern.toLowerCase().includes(q)) : rows;
+			if (selected >= visible.length) selected = Math.max(0, visible.length - 1);
+			if (selected < 0) selected = 0;
+		}
+
+		function refresh(): void {
+			cachedLines = undefined;
+			tui.requestRender();
+		}
+
+		function checkboxFor(row: PickerRow): string {
+			const on = row.kind === "provider" ? providerSelected(row.provider) : isModelAllowed(row.provider, row.modelId ?? "");
+			return on ? "☑" : "☐";
+		}
+
+		function handleNav(data: string): boolean {
+			if (visible.length === 0) return false;
+			if (matchesKey(data, Key.up)) {
+				selected = (selected - 1 + visible.length) % visible.length;
+				return true;
+			}
+			if (matchesKey(data, Key.down)) {
+				selected = (selected + 1) % visible.length;
+				return true;
+			}
+			if (matchesKey(data, Key.pageUp)) {
+				selected = Math.max(0, selected - maxVisible);
+				return true;
+			}
+			if (matchesKey(data, Key.pageDown)) {
+				selected = Math.min(visible.length - 1, selected + maxVisible);
+				return true;
+			}
+			return false;
+		}
+
+		function handleInput(data: string): void {
+			if (matchesKey(data, Key.escape)) {
+				done(null);
+				return;
+			}
+			if (matchesKey(data, Key.enter)) {
+				done([...sel]);
+				return;
+			}
+			if (matchesKey(data, "backspace") || data === "\u007f") {
+				filter = filter.slice(0, -1);
+				recompute();
+				refresh();
+				return;
+			}
+			if (data === " ") {
+				const row = visible[selected];
+				if (row) {
+					if (row.kind === "provider") toggleProvider(row.provider);
+					else toggleModel(row.provider, row.modelId ?? "");
+				}
+				refresh();
+				return;
+			}
+			if (handleNav(data)) {
+				refresh();
+				return;
+			}
+			const trimmed = data.length === 1 && data.charCodeAt(0) >= 32 ? data : "";
+			if (trimmed) {
+				filter += trimmed;
+				recompute();
+				refresh();
+			}
+		}
+
+		function renderRow(row: PickerRow, i: number, width: number): string {
+			const isSel = i === selected;
+			const prefix = isSel ? theme.fg("accent", "→ ") : "  ";
+			const box = theme.fg(isSel ? "accent" : "muted", checkboxFor(row));
+			const depth = row.kind === "provider" ? "" : "   ";
+			const label = `${depth}${row.label}`;
+			const meta = row.kind === "model" ? theme.fg("muted", ` (${row.provider})`) : theme.fg("dim", " ⌘");
+			const total = visibleWidth(prefix) + visibleWidth(box) + 2;
+			const labWidth = Math.max(1, width - total - visibleWidth(meta));
+			const trimmedLabel = truncateToWidth(label, labWidth, "…");
+			return `${prefix}${box} ${trimmedLabel}${meta}`;
+		}
+
+		function render(width: number): string[] {
+			if (cachedLines) return cachedLines;
+			const rw = Math.max(1, width);
+			const lines: string[] = [];
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			lines.push(
+				...wrapTextWithAnsi(
+					theme.fg("accent", `Allowed models for subagents  (${sel.size} pattern${sel.size === 1 ? "" : "s"} active)`),
+					rw
+				)
+			);
+			lines.push("");
+			lines.push(theme.fg("muted", `  search: ${filter || ""}`));
+			lines.push("");
+			if (visible.length === 0) {
+				lines.push(theme.fg("warning", "  No matching models"));
+			} else {
+				const start = Math.max(0, Math.min(selected - Math.floor(maxVisible / 2), visible.length - maxVisible));
+				const end = Math.min(start + maxVisible, visible.length);
+				for (let i = start; i < end; i++) lines.push(renderRow(visible[i], i, rw));
+				if (start > 0 || end < visible.length) lines.push(theme.fg("dim", `  (${selected + 1}/${visible.length})`));
+			}
+			lines.push("");
+			lines.push(
+				...wrapTextWithAnsi(theme.fg("dim", "Type to filter • Space toggle • ↑↓ navigate • Enter save • Esc cancel"), rw)
+			);
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			cachedLines = lines;
+			return lines;
+		}
+
+		return { render, handleInput, invalidate: refresh };
+	});
+}
+
+async function openModelPicker(ctx: ExtensionContext, config: SubagentConfig): Promise<boolean> {
+	const models = collectModels(ctx);
+	if (models.length === 0) {
+		ctx.ui.notify("No models found in the registry (ctx.modelRegistry.getAvailable()).", "warning");
+		return false;
+	}
+	const eff = effectiveAllowlist(config);
+	const result = await runModelPicker(ctx, models, eff.patterns);
+	if (!result) {
+		ctx.ui.notify("Model picker cancelled.", "info");
+		return false;
+	}
+	// Save into this session's own allowlist, clearing any force pin so the
+	// explicit selection takes effect.
+	ensureSessionState(ctx);
+	if (currentState) currentState.allowlist = result;
+	if (currentState) currentState.forceLoadout = undefined;
+	persistState();
+	const n = result.length;
+	ctx.ui.notify(
+		`Session allowlist updated${eff.source === "global" ? " (was using global default)" : ""}: ${n === 0 ? "all models allowed (set is empty)" : `${n} pattern(s): ${result.join(", ")}`}`,
+		"info"
+	);
+	return true;
+}
+
+// --- Relay (send last output to another tab) --------------------------
 
 interface SessionMessageLike {
 	type: string;
@@ -583,16 +1184,117 @@ async function injectResponseBack(ctx: ExtensionContext, pi: ExtensionAPI, targe
 	ctx.ui.notify(`Injected ${target.label}'s response into this session.`, "info");
 }
 
+// --- subagent close / reset helpers -----------------------------------
+
+function resolveTracked(token: string): TrackedSubagent | undefined {
+	if (!currentState) return undefined;
+	const t = currentState.subagents[token];
+	if (t) return t;
+	return Object.values(currentState.subagents).find((x) => x.name.endsWith(token));
+}
+
+async function closeSubagent(ctx: ExtensionContext, token: string): Promise<void> {
+	const t = resolveTracked(token);
+	if (!t) {
+		ctx.ui.notify(`No subagent "${token}" is tracked by this session. See /subagent list.`, "error");
+		return;
+	}
+	let tabId = t.tabId;
+	try {
+		if (!tabId) {
+			const res = await herdr(["agent", "get", t.name]);
+			tabId = res?.result?.tab_id ?? res?.tab_id ?? tabId;
+		}
+	} catch {
+		// fall through: tabId may still be tracked
+	}
+	if (!tabId) {
+		ctx.ui.notify(`Could not resolve a tab id for ${t.name} to close.`, "error");
+		return;
+	}
+	await herdr(["tab", "close", tabId]);
+	t.gone = true;
+	persistState();
+	try {
+		piNotify(ctx, `Subagent ${t.name} (${t.label}) was closed by the user.`);
+	} catch {
+		// ignore
+	}
+	ctx.ui.notify(`Closed subagent ${t.name} (tab ${tabId}).`, "info");
+	stopNotifyTimer();
+}
+
+async function resetSubagent(ctx: ExtensionContext, token: string, instruction?: string): Promise<void> {
+	const t = resolveTracked(token);
+	if (!t) {
+		ctx.ui.notify(`No subagent "${token}" is tracked by this session. See /subagent list.`, "error");
+		return;
+	}
+	try {
+		// interrupt current work if busy
+		const status = t.status ?? (await fetchAgentStatusMap()).get(t.name);
+		if (status === "working" || status === "blocked" || status === "unknown") {
+			await herdr(["agent", "send-keys", t.name, "ctrl+c"]);
+		}
+		await herdr(["agent", "wait", t.name, "--until", "idle", "--timeout", "120000"]);
+	} catch {
+		// ignore; still mark reset
+	}
+	t.status = "idle";
+	t.done = false;
+	t.notified = false;
+	t.gone = false;
+	persistState();
+	if (instruction) {
+		await herdr(["agent", "prompt", t.name, instruction]);
+		t.status = "working";
+		persistState();
+		startNotifyTimer(piRef, ctx);
+		ctx.ui.notify(`Reset ${t.name} and re-prompted it.`, "info");
+	} else {
+		ctx.ui.notify(`Reset ${t.name} to idle; it can take a new task.`, "info");
+	}
+}
+
+function piNotify(ctx: ExtensionContext, text: string): void {
+	// attempt to feed a user message so the agent knows what happened
+	try {
+		piRef.sendUserMessage(text);
+	} catch {
+		// print/RPC mode: nothing to inject into
+		ctx.ui.notify(text, "info");
+	}
+}
+
+let piRef: ExtensionAPI;
+
 export default function herdrTools(pi: ExtensionAPI) {
+	piRef = pi;
+
+	pi.on("session_start", async (_event, ctx) => {
+		stopNotifyTimer();
+		try {
+			loadSessionState(ctx);
+		} catch {
+			// ignore
+		}
+		startNotifyTimer(pi, ctx);
+	});
+
+	pi.on("session_shutdown", async () => {
+		stopNotifyTimer();
+	});
+
 	pi.registerTool({
 		name: "delegate_subagent",
 		label: "Delegate to subagent",
 		description:
-			"Delegate a task to a NEW pi subagent running in a fresh herdr tab with a chosen model. The user stays in control: spawning is gated by config (enabled/confirm/model-allowlist/max), and confirmation is shown before spawning unless disabled. Use for parallel or background work that needs an isolated context.",
+			"Delegate a task to a NEW pi subagent running in a fresh herdr tab with a chosen model. The user stays in control: spawning is gated by config (enabled/model-allowlist/max) and per-session settings (allow mode: auto / confirm / allow-or-deny-after-timeout). When the subagent finishes, this session is notified automatically. Use for parallel or background work that needs an isolated context.",
 		parameters: DelegateParamsSchema,
 		executionMode: "sequential",
 
 		async execute(_toolCallId, params: DelegateParams, _signal, _onUpdate, ctx) {
+			ensureSessionState(ctx);
 			if (!isInHerdr()) {
 				return {
 					content: [
@@ -616,25 +1318,27 @@ export default function herdrTools(pi: ExtensionAPI) {
 			}
 
 			const model = params.model ?? `${ctx.model?.provider ?? ""}/${ctx.model?.id ?? ""}`;
-			if (!modelAllowed(config, model)) {
+			const eff = effectiveAllowlist(config);
+			if (!allowedBy(eff.patterns, model)) {
 				return {
 					content: [
 						{
 							type: "text",
-							text: `Error: model "${model}" is not in the allowlist. Allowed: ${config.allowedModels.join(", ") || "(none)"}. Run /subagent models add <glob> to allow it.`,
+							text: `Error: model "${model}" is not in the allowlist (${eff.source}). Allowed: ${eff.patterns.join(", ") || "(none)"}. Run /subagent models to pick allowed models.`,
 						},
 					],
 					details: { spawned: false },
 				};
 			}
 
+			const maxN = sessionMaxSubagents(config);
 			const active = await countSubagents();
-			if (config.maxSubagents > 0 && active >= config.maxSubagents) {
+			if (maxN > 0 && active >= maxN) {
 				return {
 					content: [
 						{
 							type: "text",
-							text: `Error: subagent allowance reached (${active}/${config.maxSubagents}). Run /subagent max <n> to raise it.`,
+							text: `Error: subagent allowance reached (${active}/${maxN}). Run /subagent max <n> to raise it, or /subagent close <name> to free a slot.`,
 						},
 					],
 					details: { spawned: false },
@@ -644,17 +1348,13 @@ export default function herdrTools(pi: ExtensionAPI) {
 			const cwd = params.cwd ?? ctx.cwd;
 			const label = params.tabLabel ?? (params.task.replace(/\s+/g, " ").slice(0, 28).trim() || "subagent");
 
-			if (config.requireConfirmation && ctx.hasUI) {
-				const ok = await ctx.ui.confirm(
-					"Spawn subagent?",
-					`Tab: ${label}\nModel: ${model}\nCwd: ${cwd}\n\nTask:\n${params.task.slice(0, 400)}${params.task.length > 400 ? "\n…" : ""}`
-				);
-				if (!ok) {
-					return {
-						content: [{ type: "text", text: "Spawn cancelled by the user." }],
-						details: { spawned: false },
-					};
-				}
+			const detail = `Tab: ${label}\nModel: ${model}\nCwd: ${cwd}\n\nTask:\n${params.task.slice(0, 400)}${params.task.length > 400 ? "\n…" : ""}`;
+			const ok = await approveSpawn(ctx, config, detail);
+			if (!ok) {
+				return {
+					content: [{ type: "text", text: "Spawn cancelled by the user." }],
+					details: { spawned: false },
+				};
 			}
 
 			const name = randomName();
@@ -689,11 +1389,21 @@ export default function herdrTools(pi: ExtensionAPI) {
 				};
 			}
 
-			spawnedBySession.add(name);
+			trackSubagent(ctx, {
+				name,
+				paneId,
+				tabId,
+				model,
+				label,
+				cwd,
+				spawnedAt: Date.now(),
+				status: "idle",
+			});
 
 			// 3. submit the task asynchronously (no --wait)
 			const promptRes = await herdr(["agent", "prompt", name, params.task]);
 			const promptOk = !promptRes?.error;
+			startNotifyTimer(pi, ctx);
 			if (!promptOk) {
 				return {
 					content: [
@@ -710,7 +1420,7 @@ export default function herdrTools(pi: ExtensionAPI) {
 				content: [
 					{
 						type: "text",
-						text: `Subagent spawned and task submitted.\n\n  agent: ${name}\n  tab:  ${tabId}\n  pane: ${paneId}\n  model: ${model}\n  cwd:  ${cwd}\n\nMonitor: herdr agent read ${name} --source recent-unwrapped --format text\nWait:   herdr agent wait ${name} --until idle`,
+						text: `Subagent spawned and task submitted.\n\n  agent: ${name}\n  tab:  ${tabId}\n  pane: ${paneId}\n  model: ${model}\n  cwd:  ${cwd}\n\nYou will be notified here automatically when it finishes.\nMonitor: herdr agent read ${name} --source recent-unwrapped --format text\nWait:   herdr agent wait ${name} --until idle`,
 					},
 				],
 				details: { spawned: true, name, tabId, paneId, model },
@@ -718,10 +1428,12 @@ export default function herdrTools(pi: ExtensionAPI) {
 		},
 	});
 
-	// ---- /subagent command: config + status ----
+	// ---- /subagent command: config + per-session settings + status ----
 	pi.registerCommand("subagent", {
-		description: "Manage subagent delegation: on/off, confirm, model allowlist, allowance, status.",
+		description:
+			"Manage subagent delegation: on/off, per-session allow mode (auto/confirm/timeout), auto decision, allowance, close/reset, model picker + loadouts, status.",
 		handler: async (args, ctx) => {
+			ensureSessionState(ctx);
 			const argv = (args ?? "").trim().split(/\s+/).filter(Boolean);
 			const config = loadConfig();
 
@@ -737,57 +1449,275 @@ export default function herdrTools(pi: ExtensionAPI) {
 				ctx.ui.notify("Subagent spawning disabled.", "info");
 				return;
 			}
-			if (argv[0] === "confirm") {
-				config.requireConfirmation = true;
-				saveConfig(config);
-				ctx.ui.notify("User confirmation required before spawning.", "info");
+			if (argv[0] === "mode") {
+				const mode = asAllowMode(argv[1]);
+				if (!mode) {
+					ctx.ui.notify("Usage: /subagent mode <auto|confirm|timeout>", "error");
+					return;
+				}
+				if (currentState) currentState.allowMode = mode;
+				persistState();
+				ctx.ui.notify(`This session's allow mode: ${mode}`, "info");
 				return;
 			}
-			if (argv[0] === "noconfirm") {
-				config.requireConfirmation = false;
-				saveConfig(config);
-				ctx.ui.notify("User confirmation skipped (auto-spawn).", "info");
+			if (argv[0] === "confirm" || argv[0] === "noconfirm") {
+				const mode: AllowMode = argv[0] === "confirm" ? "confirm" : "auto";
+				if (currentState) currentState.allowMode = mode;
+				persistState();
+				ctx.ui.notify(`This session's allow mode: ${mode}`, "info");
 				return;
 			}
-			if (argv[0] === "models" && argv[1] === "add" && argv[2]) {
-				config.allowedModels.push(argv[2]);
-				saveConfig(config);
-				ctx.ui.notify(`Allowlisted model pattern: ${argv[2]}`, "info");
+			if (argv[0] === "decide") {
+				const d = asAutoDecision(argv[1]);
+				if (!d) {
+					ctx.ui.notify("Usage: /subagent decide <allow|deny>", "error");
+					return;
+				}
+				if (currentState) currentState.autoDecision = d;
+				persistState();
+				ctx.ui.notify(`On timeout, this session will auto-${d}.`, "info");
 				return;
 			}
-			if (argv[0] === "models" && argv[1] === "remove" && argv[2]) {
-				config.allowedModels = config.allowedModels.filter((p) => p !== argv[2]);
-				saveConfig(config);
-				ctx.ui.notify(`Removed allowlist pattern: ${argv[2]}`, "info");
-				return;
-			}
-			if (argv[0] === "models" && argv[1] === "list") {
-				ctx.ui.notify(
-					`Allowlist (empty = all allowed): ${config.allowedModels.length ? config.allowedModels.join(", ") : "(all)"}`,
-					"info"
-				);
+			if (argv[0] === "timeout") {
+				const ms = Number.parseInt(argv[1] ?? "", 10);
+				if (!Number.isFinite(ms) || ms <= 0) {
+					ctx.ui.notify("Usage: /subagent timeout <ms> (e.g. 30000)", "error");
+					return;
+				}
+				if (currentState) currentState.confirmTimeoutMs = ms;
+				persistState();
+				ctx.ui.notify(`Timed confirm waits ${ms}ms before auto-deciding.`, "info");
 				return;
 			}
 			if (argv[0] === "max") {
-				const n = Number.parseInt(argv[1] ?? "", 10);
-				if (!Number.isFinite(n) || n < 0) {
-					ctx.ui.notify("Usage: /subagent max <n> (0 = unlimited)", "error");
+				if (argv[1] === "default") {
+					if (currentState) currentState.maxSubagents = undefined;
+					persistState();
+					ctx.ui.notify(`This session falls back to the default allowance (${config.maxSubagents}).`, "info");
 					return;
 				}
-				config.maxSubagents = n;
-				saveConfig(config);
-				ctx.ui.notify(`Subagent allowance set to ${n}${n === 0 ? " (unlimited)" : ""}.`, "info");
+				const n = Number.parseInt(argv[1] ?? "", 10);
+				if (!Number.isFinite(n) || n < 0) {
+					ctx.ui.notify("Usage: /subagent max <n> (0 = unlimited) or /subagent max default", "error");
+					return;
+				}
+				if (currentState) currentState.maxSubagents = n;
+				persistState();
+				ctx.ui.notify(`This session's allowance: ${n}${n === 0 ? " (unlimited)" : ""}.`, "info");
+				return;
+			}
+			if (argv[0] === "list") {
+				await listSubagents(ctx);
+				return;
+			}
+			if (argv[0] === "close") {
+				if (!argv[1]) {
+					ctx.ui.notify("Usage: /subagent close <name>", "error");
+					return;
+				}
+				await closeSubagent(ctx, argv[1]);
+				return;
+			}
+			if (argv[0] === "reset") {
+				if (!argv[1]) {
+					ctx.ui.notify("Usage: /subagent reset <name> [task]", "error");
+					return;
+				}
+				await resetSubagent(ctx, argv[1], argv.slice(2).join(" ") || undefined);
+				return;
+			}
+			if (argv[0] === "models") {
+				await handleModelsCommand(ctx, config, argv.slice(1));
 				return;
 			}
 
 			// default: status
 			const active = await countSubagents();
+			const mode = sessionAllowMode(config);
+			const decision = sessionAutoDecision(config);
+			const timeout = sessionConfirmTimeout(config);
+			const maxN = sessionMaxSubagents(config);
+			const tracked = currentState ? Object.keys(currentState.subagents).length : 0;
+			const eff = effectiveAllowlist(config);
 			ctx.ui.notify(
-				`Subagent config: enabled=${config.enabled}, confirm=${config.requireConfirmation}, max=${config.maxSubagents}${config.maxSubagents === 0 ? " (unlimited)" : ""}, active=${active}\nAllowlist: ${config.allowedModels.length ? config.allowedModels.join(", ") : "(all)"}`,
+				[
+					`Subagent config: enabled=${config.enabled}`,
+					`allowMode=${mode}${mode === "timeout" ? ` (auto-${decision} after ${timeout}ms)` : ""}`,
+					`max=${maxN}${maxN === 0 ? " (unlimited)" : ""}`,
+					`active=${active}`,
+					`tracked=${tracked}`,
+					`Allowlist [${eff.source}]: ${eff.patterns.length ? eff.patterns.join(", ") : "(all)"}`,
+					`Loadouts: local=${Object.keys(currentState?.loadouts ?? {}).join(", ") || "(none)"} | global=${Object.keys(config.loadouts).join(", ") || "(none)"}${sessionAllowGlobalLoadouts() ? "" : " [global off]"}${currentState?.forceLoadout ? ` | force=${currentState.forceLoadout}` : ""}`,
+				].join("\n"),
 				"info"
 			);
 		},
 	});
+
+	// ---- model allowlist + loadouts ----
+	function handleModelsCommand(ctx: ExtensionContext, config: SubagentConfig, rest: string[]): Promise<void> {
+		return (async () => {
+			if (rest.length === 0 || rest[0] === "picker" || rest[0] === "select") {
+				await openModelPicker(ctx, config);
+				return;
+			}
+			if (rest[0] === "add" && rest[1]) {
+				const list = ensureSessionAllowlist(config);
+				list.push(rest[1]);
+				clearForceLoadout();
+				persistState();
+				ctx.ui.notify(`Session allowlist pattern added: ${rest[1]}`, "info");
+				return;
+			}
+			if (rest[0] === "remove" && rest[1]) {
+				const list = ensureSessionAllowlist(config);
+				if (currentState) currentState.allowlist = list.filter((p) => p !== rest[1]);
+				clearForceLoadout();
+				persistState();
+				ctx.ui.notify(`Removed session allowlist pattern: ${rest[1]}`, "info");
+				return;
+			}
+			if (rest[0] === "clear") {
+				if (currentState) currentState.allowlist = [];
+				clearForceLoadout();
+				persistState();
+				ctx.ui.notify("Session allowlist cleared (all models allowed).", "info");
+				return;
+			}
+			if (rest[0] === "allow-global") {
+				const v = rest[1];
+				if (v !== "on" && v !== "off") {
+					ctx.ui.notify("Usage: /subagent models allow-global <on|off>", "error");
+					return;
+				}
+				if (currentState) currentState.allowGlobalLoadouts = v === "on";
+				persistState();
+				ctx.ui.notify(`Global loadouts ${v === "on" ? "allowed" : "disallowed"} for this session.`, "info");
+				return;
+			}
+			if (rest[0] === "force") {
+				const name = rest[1];
+				if (!name || name === "off" || name === "none") {
+					clearForceLoadout();
+					persistState();
+					ctx.ui.notify("Force cleared; the session uses its own allowlist.", "info");
+					return;
+				}
+				const pats = resolveLoadout(name, config);
+				if (!pats) {
+					ctx.ui.notify(`Loadout "${name}" is not resolvable (local first, then global if allowed).`, "error");
+					return;
+				}
+				if (currentState) currentState.forceLoadout = name;
+				persistState();
+				ctx.ui.notify(
+					`This session is pinned to loadout "${name}" (${pats.length} pattern(s)). Open the picker to override.`,
+					"info"
+				);
+				return;
+			}
+			if (rest[0] === "list") {
+				const eff = effectiveAllowlist(config);
+				const local = currentState?.loadouts ?? {};
+				const global = config.loadouts ?? {};
+				const force = currentState?.forceLoadout;
+				const allowGlobal = sessionAllowGlobalLoadouts();
+				ctx.ui.notify(
+					[
+						`Effective allowlist [${eff.source}]${eff.source === `loadout:${force}` ? " (forced)" : ""}: ${eff.patterns.length ? eff.patterns.join(", ") : "(all)"}`,
+						`allow-global: ${allowGlobal ? "yes" : "no"}${force ? ` • force: ${force}` : ""}`,
+						`Local loadouts: ${Object.keys(local).length ? Object.keys(local).join(", ") : "(none)"}`,
+						`Global loadouts${allowGlobal ? "" : " [disabled]"}: ${Object.keys(global).length ? Object.keys(global).join(", ") : "(none)"}`,
+					].join("\n"),
+					"info"
+				);
+				return;
+			}
+			if (rest[0] === "loadout") {
+				const action = rest[1];
+				const name = rest[2];
+				const scope = rest[3] === "global" ? "global" : "local";
+				if (action === "save" && name) {
+					const pats = effectiveAllowlist(config).patterns;
+					if (scope === "global") {
+						config.loadouts[name] = [...pats];
+						saveConfig(config);
+						ctx.ui.notify(`Saved global loadout "${name}" (${pats.length} pattern(s)).`, "info");
+					} else {
+						if (!currentState) currentState = { sessionId: "ephemeral", subagents: {} };
+						if (!currentState.loadouts) currentState.loadouts = {};
+						currentState.loadouts[name] = [...pats];
+						persistState();
+						ctx.ui.notify(`Saved local loadout "${name}" (${pats.length} pattern(s)).`, "info");
+					}
+					return;
+				}
+				if (action === "load" && name) {
+					const pats = resolveLoadout(name, config);
+					if (!pats) {
+						ctx.ui.notify(
+							`No loadout named "${name}" (local first, then global if allowed). See /subagent models list.`,
+							"error"
+						);
+						return;
+					}
+					if (!currentState) currentState = { sessionId: "ephemeral", subagents: {} };
+					currentState.allowlist = [...pats];
+					clearForceLoadout();
+					persistState();
+					ctx.ui.notify(`Applied loadout "${name}" (${pats.length} pattern(s)) to this session.`, "info");
+					return;
+				}
+				if (action === "delete" && name) {
+					if (scope === "global") {
+						delete config.loadouts[name];
+						saveConfig(config);
+						ctx.ui.notify(`Deleted global loadout "${name}".`, "info");
+					} else {
+						if (currentState?.loadouts) delete currentState.loadouts[name];
+						persistState();
+						ctx.ui.notify(`Deleted local loadout "${name}".`, "info");
+					}
+					return;
+				}
+				if (action === "list") {
+					const local = currentState?.loadouts ?? {};
+					const global = config.loadouts ?? {};
+					const localStr = Object.keys(local).length
+						? Object.entries(local)
+								.map(([k, v]) => `  ${k}: ${v.join(", ")}`)
+								.join("\n")
+						: "  (none)";
+					const globalStr = Object.keys(global).length
+						? Object.entries(global)
+								.map(([k, v]) => `  ${k}: ${v.join(", ")}`)
+								.join("\n")
+						: "  (none)";
+					ctx.ui.notify(`Local loadouts:\n${localStr}\n\nGlobal loadouts\n${globalStr}`, "info");
+					return;
+				}
+				ctx.ui.notify("Usage: /subagent models loadout <save|load|delete|list> [name] [local|global]", "error");
+				return;
+			}
+			ctx.ui.notify(
+				"Usage: /subagent models [picker|add <glob>|remove <glob>|list|clear|allow-global <on|off>|force <name>|off|loadout <save|load|delete|list> [name] [local|global]]",
+				"error"
+			);
+		})();
+	}
+
+	async function listSubagents(ctx: ExtensionContext): Promise<void> {
+		const tracked = currentState ? Object.values(currentState.subagents) : [];
+		if (tracked.length === 0) {
+			ctx.ui.notify("This session has not spawned any subagents.", "info");
+			return;
+		}
+		const lines = tracked.map((t) => {
+			const state = t.gone ? "gone" : t.done ? "done" : (t.status ?? "unknown");
+			return `${t.name}  [${state}]  ${t.label}  (${t.model})`;
+		});
+		ctx.ui.notify(`Subagents spawned by this session:\n${lines.join("\n")}`, "info");
+	}
 
 	// ---- /side and /btw: open the current session in its own new tab ----
 	const registerSide = (name: string) => {

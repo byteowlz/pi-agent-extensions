@@ -46,17 +46,85 @@ The subagent is named `sub-<random>`, so it is counted and listed.
 
 ## Commands
 
-`/subagent` — config + status:
+`/subagent` — config + **per-session** settings + lifecycle:
 
 | command | effect |
 |---------|--------|
-| `/subagent status` | Show config + active subagents |
+| `/subagent status` | Show config + per-session state + active subagents |
 | `/subagent on` / `off` | Enable / disable **agent-initiated** spawning (kill switch) |
-| `/subagent confirm` / `noconfirm` | Require / skip the user-approval prompt before spawning |
+| `/subagent mode <auto\|confirm\|timeout>` | Set **this session's** allow mode |
+| `/subagent decide <allow\|deny>` | What a timed prompt does when it times out |
+| `/subagent timeout <ms>` | Timed prompt's auto-decide delay (default 60000) |
+| `/subagent max <n>` | Set **this session's** concurrent allowance (`0` = unlimited, `default` = fall back to config) |
+| `/subagent list` | List subagents this session spawned + their status |
+| `/subagent close <name>` | Close a subagent's tab (kills it) |
+| `/subagent reset <name> [task]` | Interrupt a subagent and (optionally) re-prompt it |
+| `/subagent models` | Open the **interactive provider/model picker** |
 | `/subagent models add <glob>` | Allow a model pattern (repeatable) |
 | `/subagent models remove <glob>` | Remove an allowlisted pattern |
-| `/subagent models list` | Show the allowlist |
-| `/subagent max <n>` | Set concurrent allowance (`0` = unlimited) |
+| `/subagent models list` | Show the allowlist + loadouts |
+| `/subagent models clear` | Empty the allowlist (allow all) |
+| `/subagent models loadout <save\|load\|delete\|list> [name] [local\|global]` | Manage named model presets (two scopes) |
+| `/subagent models allow-global <on\|off>` | Let this session use/hold global loadouts |
+| `/subagent models force <name\|off>` | Pin this session to a loadout |
+
+### Allow mode (per session)
+
+`/subagent mode` controls how a spawned subagent is approved:
+
+- **`auto`** — no prompt; spawn immediately.
+- **`confirm`** — always ask the user, wait indefinitely (the old behaviour).
+- **`timeout`** — ask the user, but if they don't answer within `confirmTimeoutMs`
+  the session **auto-decides** to `allow` or `deny` (set with `/subagent decide`).
+
+The mode, decision, timeout and allowance are stored **per session** (keyed by the
+pi session id), so each session gets its own policy and it survives a resume/reload.
+
+### Model picker + loadouts
+
+`/subagent models` opens an interactive picker: it lists every available
+provider and its models with checkboxes. **Space** toggles the highlighted row
+(model or whole provider), **↑↓** navigate, **type** to filter, **Enter** saves the
+session's allowlist, **Esc** cancels.
+
+Loadouts are named presets. There are **two scopes**: **global** (shared across
+sessions, stored in `~/.pi/agent/subagent-config.json`) and **local** (per
+session, stored in the session state file).
+
+```
+/subagent models loadout save  cheap            # save current allowlist as a LOCAL loadout
+/subagent models loadout save  cheap global     # save as a GLOBAL loadout
+/subagent models loadout load  cheap           # apply (local first, then global if allowed)
+/subagent models loadout delete cheap [local|global]
+/subagent models loadout list                  # show local and global loadouts
+```
+
+A session can opt in or out of global loadouts, and pin itself to a loadout:
+
+```
+/subagent models allow-global <on|off>    # this session may use global loadouts (default on)
+/subagent models force <name>             # pin this session to a loadout (local first, then global)
+/subagent models force off                # unpin (session uses its own allowlist)
+```
+
+The **effective allowlist** a session uses for spawning is resolved as:
+
+1. **force** — the loadout pinned by `/subagent models force <name>`
+   (resolved local-first, then global if allowed).
+2. **session** — the session's own allowlist (set by the picker / `add` / `remove` / `clear` / `load`).
+3. **global** — the default `allowedModels` in the global config file.
+
+### Completion notification
+
+When a subagent this session spawned finishes (`done`), a user message is
+injected into **this** session automatically, so the sending agent is told and
+can collect the result. This keeps working across a session resume/reload.
+
+### Close / reset
+
+- `/subagent close <name>` — close the subagent's tab (it is killed).
+- `/subagent reset <name>` — interrupt the running task (Ctrl+C) and return it to
+  idle; add an optional task to re-prompt it immediately.
 
 `/side` / `/btw` — open the **current session** in its own new named tab, forked
 so you can steer it another direction (like Claude `/btw` or Codex `/side`, own tab):
@@ -107,15 +175,41 @@ Your own pane is excluded from the target list (via `HERDR_PANE_ID`).
   "enabled": true,
   "requireConfirmation": true,
   "allowedModels": [],
-  "maxSubagents": 3
+  "maxSubagents": 3,
+  "allowMode": "confirm",
+  "autoDecision": "deny",
+  "confirmTimeoutMs": 60000,
+  "loadouts": {}
 }
 ```
 
 - `enabled` — kill switch for agent-initiated spawning. `false` ⇒ the tool refuses.
-- `requireConfirmation` — always ask the user before spawning (default `true`).
+- `requireConfirmation` — legacy flag still read; `true` maps to `allowMode: confirm`,
+  `false` to `allowMode: auto`.
 - `allowedModels` — glob patterns, e.g. `["openai/*", "archvm/*"]`. Empty = all allowed.
-- `maxSubagents` — max concurrent subagents named `sub-*` (counted via
-  `herdr agent list`). `0` = unlimited.
+- `maxSubagents` — **default** max concurrent subagents per session (`0` = unlimited).
+  A session overrides it with `/subagent max <n>` (stored in the session state file).
+- `allowMode` — default allow mode: `confirm` | `auto` | `timeout`.
+- `autoDecision` — when `allowMode` is `timeout` and nobody answers: `allow` | `deny`.
+- `confirmTimeoutMs` — how long the timed prompt waits before auto-deciding.
+- `loadouts` — named model-presets (globs), managed via `/subagent models loadout`.
+
+## Per-session state
+
+Settings and the set of spawned subagents are scoped to one pi **session**, stored under:
+
+```
+~/.pi/agent/subagent-state/<sessionId>.json
+```
+
+The allowance counts only subagents **this** session spawned that are still live
+and not finished, so it is never polluted by another session's (or workspace's)
+subagents; it also survives a resume/reload. If `getSessionId()` is unavailable
+(ephemeral `--no-session`), state stays in memory only.
+
+The session state file also holds the **local loadouts** and the per-session
+model controls: `allowlist`, `loadouts`, `allowGlobalLoadouts`, `forceLoadout`.
+(See "Model picker + loadouts" above for how the effective allowlist is resolved.)
 
 ## Socket, not magic
 
