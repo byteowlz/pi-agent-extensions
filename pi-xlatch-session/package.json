@@ -1,6 +1,6 @@
 {
   "name": "@byteowlz/pi-xlatch-session",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Share text, links and files from a phone into one specific running pi session via xlatch",
   "type": "module",
   "keywords": [
@@ -14,7 +14,8 @@
     "adapter.py",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "src"
   ],
   "pi": {
     "extensions": [

@@ -30,6 +30,8 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+import { SlotEndpoint, removeDeadSocket, socketLive } from "./src/slot.js";
+
 const execFileAsync = promisify(execFile);
 
 const ROOT = path.join(os.homedir(), ".pi", "agent", "xlatch-pi");
@@ -68,6 +70,7 @@ function errorMessage(err: unknown): string {
 }
 
 interface Claim {
+	token?: string;
 	sessionId: string;
 	pid: number;
 	cwd: string;
@@ -98,21 +101,6 @@ function manifestPath(slot: string): string {
 function adapterSha256(): string {
 	const { createHash } = require("node:crypto");
 	return createHash("sha256").update(fs.readFileSync(ADAPTER)).digest("hex");
-}
-
-/** True when some process is actually accepting on this socket. */
-async function socketLive(sock: string): Promise<boolean> {
-	if (!fs.existsSync(sock)) return false;
-	return new Promise((resolve) => {
-		const probe = net.connect(sock);
-		const done = (live: boolean) => {
-			probe.destroy();
-			resolve(live);
-		};
-		probe.on("connect", () => done(true));
-		probe.on("error", () => done(false));
-		setTimeout(() => done(false), 500).unref?.();
-	});
 }
 
 function buildManifest(slot: string) {
@@ -166,23 +154,13 @@ async function registerSlot(slot: string): Promise<{ id: string; revision?: stri
 	}
 }
 
-/** Drop claims whose owning session died without releasing (crash, SIGKILL). */
-async function pruneStaleClaims(keep?: string): Promise<string[]> {
-	const claims = readClaims();
-	const pruned: string[] = [];
-	for (const slot of Object.keys(claims)) {
-		if (slot === keep) continue;
-		if (await socketLive(slotSocket(slot))) continue;
-		try {
-			if (fs.existsSync(slotSocket(slot))) fs.unlinkSync(slotSocket(slot));
-		} catch {
-			/* ignore */
-		}
-		delete claims[slot];
-		pruned.push(slot);
+/** Reachability is diagnostic only: never prune another session after a timeout. */
+async function unavailableSlots(keep?: string): Promise<string[]> {
+	const unavailable: string[] = [];
+	for (const slot of Object.keys(readClaims())) {
+		if (slot !== keep && !(await socketLive(slotSocket(slot)))) unavailable.push(slot);
 	}
-	if (pruned.length) writeClaims(claims);
-	return pruned;
+	return unavailable;
 }
 
 /** The slot this session last held, from its own persisted state entries. */
@@ -213,15 +191,81 @@ async function staleRegistrations(): Promise<string[]> {
 	}
 }
 
+function createShareServer(handle: (payload: SharePayload) => unknown): net.Server {
+	return net.createServer((conn) => {
+		let buf = "";
+		let consumed = false;
+		conn.setEncoding("utf8");
+		const reply = (obj: unknown) => {
+			try {
+				conn.write(`${JSON.stringify(obj)}\n`);
+			} catch {
+				/* peer gone */
+			}
+			conn.end();
+		};
+		conn.on("data", (chunk) => {
+			if (consumed) return;
+			buf += chunk;
+			if (buf.length > 512 * 1024) return reply({ ok: false, error: "payload too large" });
+			const nl = buf.indexOf("\n");
+			if (nl === -1) return;
+			consumed = true;
+			let payload: SharePayload;
+			try {
+				payload = JSON.parse(buf.slice(0, nl));
+			} catch {
+				return reply({ ok: false, error: "malformed payload" });
+			}
+			reply(handle(payload));
+		});
+		conn.on("error", () => conn.destroy());
+		setTimeout(() => conn.destroy(), 20_000).unref?.();
+	});
+}
+
 export default function xlatchSession(pi: ExtensionAPI) {
 	let server: net.Server | undefined;
 	let boundSlot: string | undefined;
 	let ctxRef: ExtensionContext | undefined;
 	let received = 0;
+	let endpoint: SlotEndpoint | undefined;
+	let healthy = false;
+	let checking = false;
+	let generation = 0;
+	let connecting = false;
+	let healthTimer: ReturnType<typeof setInterval> | undefined;
 
 	const setStatus = () => {
-		ctxRef?.ui.setStatus("xlatch", boundSlot ? `xlatch:${boundSlot}${received ? ` (${received})` : ""}` : undefined);
+		ctxRef?.ui.setStatus(
+			"xlatch",
+			boundSlot ? `xlatch:${boundSlot}${healthy ? "" : " (offline)"}${received ? ` (${received})` : ""}` : undefined
+		);
 	};
+
+	async function checkHealth(): Promise<void> {
+		const current = endpoint;
+		const listener = server;
+		if (!current || !listener || checking) return;
+		checking = true;
+		try {
+			const reachable = await current.healthy(listener);
+			if (current !== endpoint) return;
+			if (healthy && !reachable)
+				ctxRef?.ui.notify("xlatch connection lost. Shares cannot reach this session; use /xlatch status.", "warning");
+			if (!healthy && reachable) ctxRef?.ui.notify("xlatch connection restored.", "info");
+			healthy = reachable;
+			setStatus();
+		} catch (error) {
+			if (current === endpoint) {
+				healthy = false;
+				setStatus();
+				ctxRef?.ui.notify(`xlatch health check failed: ${errorMessage(error)}`, "warning");
+			}
+		} finally {
+			checking = false;
+		}
+	}
 
 	function deliver(payload: SharePayload): { ok: boolean; text?: string; error?: string; delivery?: string } {
 		let label: string;
@@ -272,52 +316,56 @@ export default function xlatchSession(pi: ExtensionAPI) {
 		if (!SLOT_RE.test(slot)) {
 			throw new Error("Slot must be lowercase letters, digits, '-' or '_' (max 32 chars).");
 		}
-		if (boundSlot) {
+		if (boundSlot || connecting) {
 			throw new Error(`This session already holds slot "${boundSlot}". Disconnect first.`);
 		}
 
 		const sock = slotSocket(slot);
 		fs.mkdirSync(SLOT_DIR, { recursive: true, mode: 0o700 });
 
-		if (await socketLive(sock)) {
-			throw new Error(`Slot "${slot}" is already held by another live pi session.`);
-		}
-		if (fs.existsSync(sock)) fs.unlinkSync(sock); // stale
+		removeDeadSocket(sock, readClaims()[slot]?.pid);
+		const owned = new SlotEndpoint(sock);
+		const epoch = generation;
+		connecting = true;
+		const srv = createShareServer((payload) => {
+			if (generation !== epoch || endpoint !== owned || !owned.ownsAlias()) {
+				return { ok: false, error: "Session connection changed; retry the share." };
+			}
+			return { ...deliver(payload), session: ctx.sessionManager.getSessionName() ?? ctx.sessionManager.getSessionId() };
+		});
 
-		const srv = net.createServer((conn) => {
-			let buf = "";
-			conn.setEncoding("utf8");
-			const reply = (obj: unknown) => {
-				try {
-					conn.write(`${JSON.stringify(obj)}\n`);
-				} catch {
-					/* peer gone */
-				}
-				conn.end();
-			};
-			conn.on("data", (chunk) => {
-				buf += chunk;
-				if (buf.length > 512 * 1024) return reply({ ok: false, error: "payload too large" });
-				const nl = buf.indexOf("\n");
-				if (nl === -1) return;
-				let payload: SharePayload;
-				try {
-					payload = JSON.parse(buf.slice(0, nl));
-				} catch {
-					return reply({ ok: false, error: "malformed payload" });
-				}
-				const result = deliver(payload);
-				reply({ ...result, session: ctx.sessionManager.getSessionName() ?? ctx.sessionManager.getSessionId() });
+		try {
+			await new Promise<void>((resolve, reject) => {
+				srv.once("error", reject);
+				srv.listen(owned.socket, resolve);
 			});
-			conn.on("error", () => conn.destroy());
-			setTimeout(() => conn.destroy(), 20_000).unref?.();
+			if (epoch !== generation) throw new Error("Connection cancelled by a session change.");
+			fs.chmodSync(owned.socket, 0o600);
+			owned.publish();
+		} catch (error) {
+			owned.close(srv);
+			throw error;
+		} finally {
+			connecting = false;
+		}
+		endpoint = owned;
+		healthy = true;
+		healthTimer = setInterval(() => {
+			void checkHealth();
+		}, 3000);
+		healthTimer.unref?.();
+		srv.on("error", (error) => {
+			if (endpoint !== owned) return;
+			healthy = false;
+			setStatus();
+			ctxRef?.ui.notify(`xlatch listener failed: ${errorMessage(error)}`, "error");
 		});
-
-		await new Promise<void>((resolve, reject) => {
-			srv.once("error", reject);
-			srv.listen(sock, () => resolve());
+		srv.on("close", () => {
+			if (endpoint === owned) {
+				healthy = false;
+				setStatus();
+			}
 		});
-		fs.chmodSync(sock, 0o600);
 
 		server = srv;
 		boundSlot = slot;
@@ -325,6 +373,7 @@ export default function xlatchSession(pi: ExtensionAPI) {
 
 		const claims = readClaims();
 		claims[slot] = {
+			token: owned.token,
 			sessionId: ctx.sessionManager.getSessionId(),
 			pid: process.pid,
 			cwd: ctx.cwd,
@@ -334,7 +383,16 @@ export default function xlatchSession(pi: ExtensionAPI) {
 		pi.appendEntry(STATE_ENTRY, { slot });
 		setStatus();
 
-		const reg = await registerSlot(slot);
+		let reg: Awaited<ReturnType<typeof registerSlot>>;
+		try {
+			reg = await registerSlot(slot);
+		} catch (error) {
+			if (endpoint === owned) release();
+			throw error;
+		}
+		if (endpoint !== owned) throw new Error("Connection changed during registration.");
+		await checkHealth();
+		if (!healthy) throw new Error("The session socket is unavailable. Run /xlatch status.");
 		return [
 			`Connected this session to xlatch slot "${slot}".`,
 			`  action:   ${reg.id}`,
@@ -353,25 +411,24 @@ export default function xlatchSession(pi: ExtensionAPI) {
 	}
 
 	function release(explicit = false): string | undefined {
-		if (!boundSlot) return undefined;
+		generation += 1;
+		clearInterval(healthTimer);
+		healthTimer = undefined;
 		const slot = boundSlot;
-		try {
-			server?.close();
-		} catch {
-			/* ignore */
-		}
+		const owned = endpoint;
+		const listener = server;
+		endpoint = undefined;
 		server = undefined;
-		try {
-			if (fs.existsSync(slotSocket(slot))) fs.unlinkSync(slotSocket(slot));
-		} catch {
-			/* ignore */
-		}
-		const claims = readClaims();
-		delete claims[slot];
-		writeClaims(claims);
 		boundSlot = undefined;
-		// Only a deliberate disconnect clears the marker; a lifecycle release keeps
-		// it so /reload and resume can restore the link.
+		healthy = false;
+		if (owned && listener) owned.close(listener);
+		if (slot && owned) {
+			const claims = readClaims();
+			if (claims[slot]?.token === owned.token) {
+				delete claims[slot];
+				writeClaims(claims);
+			}
+		}
 		if (explicit) pi.appendEntry(STATE_ENTRY, { slot: null });
 		setStatus();
 		return slot;
@@ -384,26 +441,27 @@ export default function xlatchSession(pi: ExtensionAPI) {
 		// so the phone target does not silently disappear.
 		// A new or forked session must never inherit its parent's slot.
 		const mayRestore = event.reason === "reload" || event.reason === "startup" || event.reason === "resume";
+		const epoch = generation;
 		void (async () => {
-			await pruneStaleClaims(boundSlot);
-			if (boundSlot || !mayRestore) return;
+			if (boundSlot || !mayRestore || epoch !== generation) return;
 			const prior = lastClaimedSlot(ctx);
 			if (!prior) return;
 			// On /reload this handler can run while the previous instance still
 			// holds the socket, so poll briefly instead of bailing on first look.
 			for (let attempt = 0; attempt < 8; attempt++) {
-				if (boundSlot) return;
+				if (boundSlot || epoch !== generation) return;
 				if (!(await socketLive(slotSocket(prior)))) {
 					try {
 						await claim(prior, ctx);
 						ctx.ui.notify(`xlatch: reconnected slot "${prior}".`, "info");
-					} catch {
-						/* another session won the slot, or registration failed */
+					} catch (error) {
+						ctx.ui.notify(`xlatch could not reconnect "${prior}": ${errorMessage(error)}`, "warning");
 					}
 					return;
 				}
 				await new Promise((r) => setTimeout(r, 400));
 			}
+			if (epoch === generation) ctx.ui.notify(`xlatch slot "${prior}" is held by another session; not reconnected.`, "warning");
 		})();
 	});
 
@@ -424,13 +482,18 @@ export default function xlatchSession(pi: ExtensionAPI) {
 		ctx.ui.notify(was ? `Disconnected from xlatch slot "${was}".` : "This session is not connected.", "info");
 	}
 
-	async function showStatus(ctx: ExtensionCommandContext, pruned: string[]): Promise<void> {
+	async function showStatus(ctx: ExtensionCommandContext, unavailable: string[]): Promise<void> {
+		await checkHealth();
 		const others = Object.entries(readClaims()).filter(([s]) => s !== boundSlot);
 		const stale = await staleRegistrations();
 		const lines = [
-			boundSlot ? `This session: connected to "${boundSlot}" (${received} received)` : "This session: not connected",
-			others.length ? `Other live slots: ${others.map(([s, c]) => `${s} (pid ${c.pid})`).join(", ")}` : "Other live slots: none",
-			...(pruned.length ? [`Pruned dead slots: ${pruned.join(", ")}`] : []),
+			boundSlot
+				? `This session: ${healthy ? "connected" : "OFFLINE"} to "${boundSlot}" (${received} received)`
+				: "This session: not connected",
+			others.length
+				? `Other registered slots: ${others.map(([s, c]) => `${s} (pid ${c.pid})`).join(", ")}`
+				: "Other registered slots: none",
+			...(unavailable.length ? [`Unreachable slots: ${unavailable.join(", ")}`] : []),
 			...(stale.length
 				? [
 						"",
@@ -454,7 +517,7 @@ export default function xlatchSession(pi: ExtensionAPI) {
 			if (arg === "off" || arg === "disconnect") return disconnect(ctx);
 			if (arg && arg !== "status" && arg !== "connect") return connectTo(arg, ctx);
 
-			const pruned = await pruneStaleClaims(boundSlot);
+			const pruned = await unavailableSlots(boundSlot);
 			if (arg === "status") return showStatus(ctx, pruned);
 
 			const choice = await ctx.ui.select("xlatch", [
