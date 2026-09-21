@@ -4,6 +4,41 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-herdr-tools: durable subagent history + push close events
+
+- **Durable outcome history.** Every subagent now records a terminal `outcome`
+  (`done` / `closed`) plus an `endedAt` timestamp, written to an append-only
+  ledger at `~/.pi/agent/subagent-history.jsonl` and kept in the per-session
+  state. New `/subagent history` lists this session's finished/closed subagents;
+  `/subagent list` now shows `closed`/`done` outcomes with end time.
+- **Push close detection.** Subscribes to the herdr socket's `events.subscribe`
+  stream (`tab.closed` / `pane.closed` / `pane.exited`) over `HERDR_SOCKET_PATH`
+  (NDJSON framing), so a tab you close directly in herdr is recorded on the next
+  pushed event without a re-poll. The existing `herdr agent list` polling is kept
+  as a fallback for events missed while unsubscribed.
+- **fleet event emission.** `POST /events` to the gvnr fleet-intake audit log
+  (`gvnr-dpty` envelope) when `GVNR_EVENT_URL` (+ `GVNR_TOKEN`) are set, carrying
+  `AGENT_CTX_*` provenance — best-effort, never blocks the session.
+
+### pi-ssh-key: load an SSH private key into a session-scoped ssh-agent
+
+- `/ssh-key-load [path] [seconds]` picks a private key from `~/.ssh` (or a named
+  path) and adds it to an ssh-agent, prompting for the passphrase through pi's
+  masked UI when protected. An optional timeout (seconds) bounds the key's
+  lifetime in the agent.
+- Reuses the user's existing `SSH_AUTH_SOCK` when reachable; otherwise starts a
+  dedicated pi-owned `ssh-agent` and sets `SSH_AUTH_SOCK`/`SSH_AGENT_PID` for the
+  process, restoring them on unload/shutdown.
+- `/ssh-key-unload [path]` removes one key or tears down the agent + restores env;
+  `/ssh-key-timeout [seconds]` sets the loaded keys' lifetime; `/ssh-key-status`
+  reports agent + keys.
+- Optional `ssh-key.json` config (`keyDir`, `defaultTimeout`).
+- **oqto SSH proxy sessions.** When `OQTO_SSH_AGENT=proxy` is set (owned by
+  oqto-runner), `ssh-key-load` requests a grant via `OQTO_SSH_GRANT_CMD`
+  (JSON stdin/stdout contract) or prints host-load + `[ssh].allowed_keys`
+  guidance instead of `ssh-add`. The extension is a passive consumer of the
+  contract; the oqto-runner implements the grant side in a separate oqto trx.
+
 ### pi-herdr-tools: per-session subagents, completion notifications, close/reset, timed allow, model picker
 
 - **Per-session allowance (fix).** The subagent cap is now scoped to one pi

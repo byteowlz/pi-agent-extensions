@@ -62,6 +62,7 @@
 
 import { execFile } from "node:child_process";
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
@@ -83,8 +84,16 @@ const execFileAsync = promisify(execFile);
 
 const CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "subagent-config.json");
 const STATE_DIR = path.join(os.homedir(), ".pi", "agent", "subagent-state");
+const HISTORY_PATH = path.join(os.homedir(), ".pi", "agent", "subagent-history.jsonl"); // durable, append-only ledger
 const NAME_PREFIX = "sub-"; // agent names must match [a-z][a-z0-9_-]{0,31}
 const POLL_INTERVAL_MS = 4000;
+
+// gvnr event-log emission (best-effort, non-fatal). Set GVNR_EVENT_URL + GVNR_TOKEN
+// to forward closure/completion records to the gvnr fleet-intake audit log.
+const GVNR_EVENT_URL = process.env.GVNR_EVENT_URL ?? "";
+const GVNR_TOKEN = process.env.GVNR_TOKEN ?? "";
+
+type SubagentOutcome = "done" | "closed" | "error" | "unknown";
 
 type AllowMode = "confirm" | "auto" | "timeout";
 type AutoDecision = "allow" | "deny";
@@ -170,6 +179,23 @@ interface TrackedSubagent {
 	done?: boolean; // observed done; completion notification sent
 	notified?: boolean; // completion notification dispatched
 	gone?: boolean; // tab closed / agent no longer listed
+	endedAt?: number; // when the agent finished or was closed
+	outcome?: SubagentOutcome; // durable terminal state (done/closed/error/unknown)
+}
+
+interface SubagentHistoryEntry {
+	name: string;
+	label: string;
+	paneId?: string;
+	tabId?: string;
+	model: string;
+	cwd: string;
+	spawnedAt: number;
+	endedAt: number;
+	outcome: SubagentOutcome;
+	statusFinal?: string;
+	workspaceId?: string;
+	agentAddress?: string; // AGENT_CTX_AGENT_ADDRESS provenance
 }
 
 interface SessionState {
@@ -179,6 +205,8 @@ interface SessionState {
 	confirmTimeoutMs?: number;
 	maxSubagents?: number;
 	subagents: Record<string, TrackedSubagent>;
+	/** Durable append-only ledger of finished/closed subagents this session spawned. */
+	history?: SubagentHistoryEntry[];
 	/** This session's active model allowlist (overrides the global default while set). */
 	allowlist?: string[];
 	/** Local (per-session) named loadouts. */
@@ -441,6 +469,7 @@ async function pollSubagents(pi: ExtensionAPI, ctx: ExtensionContext): Promise<v
 		if (status === undefined) {
 			t.gone = true;
 			changed = true;
+			recordOutcome(t, "closed", { statusFinal: t.status });
 			continue;
 		}
 		if (status !== t.status) {
@@ -452,10 +481,217 @@ async function pollSubagents(pi: ExtensionAPI, ctx: ExtensionContext): Promise<v
 			t.notified = true;
 			changed = true;
 			notifyFinished(pi, ctx, t);
+			recordOutcome(t, "done", { statusFinal: status });
 		}
 	}
 	if (changed) persistState();
 	if (!hasPendingSubagents()) stopNotifyTimer();
+}
+
+// --- Durable subagent outcome: record, retain, emit -------------------
+
+/** Best-effort provenance from the AGENT_CTX / herdr environment. */
+function provenance(): { agentAddress?: string; machine?: string } {
+	const agentAddress = process.env.AGENT_CTX_AGENT_ADDRESS ?? process.env.HERDR_AGENT_ADDRESS;
+	const machine = process.env.AGENT_CTX_MACHINE_ID ?? process.env.HOSTNAME;
+	return { agentAddress, machine };
+}
+
+function ensureSessionHistory(): SubagentHistoryEntry[] {
+	if (!currentState) currentState = { sessionId: "ephemeral", subagents: {} };
+	if (!currentState.history) currentState.history = [];
+	return currentState.history;
+}
+
+/** Append one closure/completion entry to the node-local durable ledger. */
+function appendDurableHistory(entry: SubagentHistoryEntry): void {
+	try {
+		fs.mkdirSync(path.dirname(HISTORY_PATH), { recursive: true });
+		fs.appendFileSync(HISTORY_PATH, `${JSON.stringify(entry)}\n`, "utf8");
+	} catch {
+		// non-fatal: per-session history still holds the record
+	}
+}
+
+/** Best-effort POST to the gvnr fleet-intake audit log (never blocks the session). */
+async function emitGvnrEvent(entry: SubagentHistoryEntry): Promise<void> {
+	if (!GVNR_EVENT_URL) return; // not wired up: durable ledger + session history still apply
+	const causation = provenance();
+	const body = {
+		proto: "gvnr-dpty",
+		version: "0.1.0",
+		kind: "event",
+		causation: {
+			origin: causation.agentAddress ?? "pi-herdr-tools",
+			machine: causation.machine ?? "",
+			purpose: "subagent-closure",
+		},
+		payload: {
+			ts: new Date(entry.endedAt).toISOString(),
+			type: "subagent.closed",
+			runner_id: entry.name,
+			payload: {
+				outcome: entry.outcome,
+				label: entry.label,
+				model: entry.model,
+				cwd: entry.cwd,
+				statusFinal: entry.statusFinal,
+			},
+		},
+	};
+	try {
+		await fetch(`${GVNR_EVENT_URL.replace(/\/$/, "")}/events`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				...(GVNR_TOKEN ? { authorization: `Bearer ${GVNR_TOKEN}` } : {}),
+			},
+			body: JSON.stringify(body),
+			signal: AbortSignal.timeout(5000),
+		});
+	} catch {
+		// best-effort: never fail the session over an event emit
+	}
+}
+
+/** Record a terminal outcome for a subagent exactly once: durable ledger + session history + gvnr. */
+function recordOutcome(
+	t: TrackedSubagent,
+	outcome: SubagentOutcome,
+	extra: { statusFinal?: string; workspaceId?: string } = {}
+): void {
+	if (t.endedAt) return; // already recorded
+	t.outcome = outcome;
+	t.endedAt = Date.now();
+	const entry: SubagentHistoryEntry = {
+		name: t.name,
+		label: t.label,
+		paneId: t.paneId,
+		tabId: t.tabId,
+		model: t.model,
+		cwd: t.cwd,
+		spawnedAt: t.spawnedAt,
+		endedAt: t.endedAt,
+		outcome,
+		statusFinal: extra.statusFinal ?? t.status,
+		workspaceId: extra.workspaceId,
+		agentAddress: provenance().agentAddress,
+	};
+	appendDurableHistory(entry);
+	const hist = ensureSessionHistory();
+	hist.push(entry);
+	persistState();
+	void emitGvnrEvent(entry);
+}
+
+// --- herdr socket event subscription (push close/exit detection) ------
+
+const EVENT_SUB_TYPES = ["tab.closed", "pane.closed", "pane.exited"];
+let eventSocket: net.Socket | null = null;
+let eventReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let eventBuf = "";
+
+function stopEventSubscriber(): void {
+	if (eventReconnectTimer) {
+		clearTimeout(eventReconnectTimer);
+		eventReconnectTimer = null;
+	}
+	if (eventSocket) {
+		try {
+			eventSocket.destroy();
+		} catch {
+			// ignore
+		}
+		eventSocket = null;
+	}
+}
+
+/** Correlate a herdr lifecycle event to a tracked subagent and record a closure. */
+function handleEventEnvelope(env: { event?: unknown; data?: unknown }): void {
+	if (!currentState) return;
+	const kind = env.event;
+	const data = (env.data ?? {}) as Record<string, unknown>;
+	const paneId = typeof data.pane_id === "string" ? data.pane_id : undefined;
+	const tabId = typeof data.tab_id === "string" ? data.tab_id : undefined;
+	const workspaceId = typeof data.workspace_id === "string" ? data.workspace_id : undefined;
+	const matched = Object.values(currentState.subagents).filter((t) => {
+		if (t.done || t.gone) return false;
+		if (kind === "tab_closed" && tabId && t.tabId === tabId) return true;
+		if ((kind === "pane_closed" || kind === "pane_exited") && paneId && t.paneId === paneId) return true;
+		return false;
+	});
+	for (const t of matched) {
+		t.gone = true;
+		recordOutcome(t, "closed", { workspaceId });
+	}
+	if (matched.length > 0) persistState();
+}
+
+function handleEventLine(line: string): void {
+	const trimmed = line.trim();
+	if (!trimmed) return;
+	let msg: unknown;
+	try {
+		msg = JSON.parse(trimmed);
+	} catch {
+		return;
+	}
+	if (!msg || typeof msg !== "object") return;
+	const m = msg as Record<string, unknown>;
+	// subscription confirmed
+	if (m.id && (m as { result?: unknown }).result && typeof (m as { result?: unknown }).result === "object") {
+		const r = (m as { result?: { type?: string } }).result;
+		void r; // subscription_started confirmation; nothing further to mark
+		return;
+	}
+	// pushed lifecycle event envelope
+	if (typeof m.event === "string" && m.data) handleEventEnvelope(m);
+}
+
+/** Open a best-effort NDJSON event subscription to herdr over HERDR_SOCKET_PATH. */
+function startEventSubscriber(pi: ExtensionAPI): void {
+	if (!isInHerdr()) return;
+	if (eventSocket) return; // already connected/reconnecting
+	const sockPath = process.env.HERDR_SOCKET_PATH;
+	if (!sockPath) return;
+	try {
+		eventSocket = net.createConnection(sockPath);
+	} catch {
+		eventSocket = null;
+		return;
+	}
+	const sock = eventSocket;
+	eventBuf = "";
+	sock.on("connect", () => {
+		sock.write(
+			`${JSON.stringify({
+				id: `sub-${Date.now()}`,
+				method: "events.subscribe",
+				params: { subscriptions: EVENT_SUB_TYPES.map((type) => ({ type })) },
+			})}\n`
+		);
+	});
+	sock.on("data", (chunk) => {
+		eventBuf += chunk.toString();
+		while (true) {
+			const idx = eventBuf.indexOf("\n");
+			if (idx < 0) break;
+			const line = eventBuf.slice(0, idx);
+			eventBuf = eventBuf.slice(idx + 1);
+			handleEventLine(line);
+		}
+	});
+	const teardown = () => {
+		if (eventSocket === sock) eventSocket = null;
+		if (!eventReconnectTimer) {
+			eventReconnectTimer = setTimeout(() => {
+				eventReconnectTimer = null;
+				startEventSubscriber(pi);
+			}, 5000);
+		}
+	};
+	sock.on("close", teardown);
+	sock.on("error", () => teardown());
 }
 
 function randomName(): string {
@@ -1214,6 +1450,7 @@ async function closeSubagent(ctx: ExtensionContext, token: string): Promise<void
 	}
 	await herdr(["tab", "close", tabId]);
 	t.gone = true;
+	recordOutcome(t, "closed");
 	persistState();
 	try {
 		piNotify(ctx, `Subagent ${t.name} (${t.label}) was closed by the user.`);
@@ -1279,10 +1516,12 @@ export default function herdrTools(pi: ExtensionAPI) {
 			// ignore
 		}
 		startNotifyTimer(pi, ctx);
+		startEventSubscriber(pi);
 	});
 
 	pi.on("session_shutdown", async () => {
 		stopNotifyTimer();
+		stopEventSubscriber();
 	});
 
 	pi.registerTool({
@@ -1510,6 +1749,10 @@ export default function herdrTools(pi: ExtensionAPI) {
 				await listSubagents(ctx);
 				return;
 			}
+			if (argv[0] === "history") {
+				await showSubagentHistory(ctx);
+				return;
+			}
 			if (argv[0] === "close") {
 				if (!argv[1]) {
 					ctx.ui.notify("Usage: /subagent close <name>", "error");
@@ -1713,10 +1956,25 @@ export default function herdrTools(pi: ExtensionAPI) {
 			return;
 		}
 		const lines = tracked.map((t) => {
-			const state = t.gone ? "gone" : t.done ? "done" : (t.status ?? "unknown");
-			return `${t.name}  [${state}]  ${t.label}  (${t.model})`;
+			const state = t.gone ? "closed" : t.done ? "done" : (t.status ?? "unknown");
+			const ended = t.endedAt ? ` · ended ${new Date(t.endedAt).toISOString().slice(0, 19).replace("T", " ")}` : "";
+			return `${t.name}  [${state}]  ${t.label}  (${t.model})${ended}`;
 		});
 		ctx.ui.notify(`Subagents spawned by this session:\n${lines.join("\n")}`, "info");
+	}
+
+	// ---- /subagent history: durable record of finished/closed subagents ----
+	async function showSubagentHistory(ctx: ExtensionContext): Promise<void> {
+		const hist = (currentState?.history ?? []).slice().sort((a, b) => b.endedAt - a.endedAt);
+		if (hist.length === 0) {
+			ctx.ui.notify("No finished/closed subagents recorded yet.", "info");
+			return;
+		}
+		const lines = hist.map((h) => {
+			const end = new Date(h.endedAt).toISOString().slice(0, 19).replace("T", " ");
+			return `${h.name}  [${h.outcome}]  ${h.label}  (${h.model})  ended ${end}`;
+		});
+		ctx.ui.notify(`Finished/closed subagents (${hist.length}):\n${lines.join("\n")}`, "info");
 	}
 
 	// ---- /side and /btw: open the current session in its own new tab ----

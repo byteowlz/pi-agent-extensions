@@ -56,7 +56,8 @@ The subagent is named `sub-<random>`, so it is counted and listed.
 | `/subagent decide <allow\|deny>` | What a timed prompt does when it times out |
 | `/subagent timeout <ms>` | Timed prompt's auto-decide delay (default 60000) |
 | `/subagent max <n>` | Set **this session's** concurrent allowance (`0` = unlimited, `default` = fall back to config) |
-| `/subagent list` | List subagents this session spawned + their status |
+| `/subagent list` | List subagents this session spawned + their status (incl. done/closed) |
+| `/subagent history` | Durable record of this session's finished/closed subagents (outcome + end time) |
 | `/subagent close <name>` | Close a subagent's tab (kills it) |
 | `/subagent reset <name> [task]` | Interrupt a subagent and (optionally) re-prompt it |
 | `/subagent models` | Open the **interactive provider/model picker** |
@@ -119,6 +120,37 @@ The **effective allowlist** a session uses for spawning is resolved as:
 When a subagent this session spawned finishes (`done`), a user message is
 injected into **this** session automatically, so the sending agent is told and
 can collect the result. This keeps working across a session resume/reload.
+
+### Durable history + push close events
+
+`herdr agent list` is a **live** registry: a finished/closed subagent drops out
+and vanishes from the fleet view. To never lose the fact that an agent ran and
+how it ended, this extension records a terminal **outcome** for every subagent:
+
+- **`done`** — observed finishing normally (via polling `agent_status`).
+- **`closed`** — the tab was closed (via `/subagent close`, or the user closed the
+  tab directly in herdr).
+- **`error` / `unknown`** — reserved for future signals.
+
+Every outcome is:
+
+1. Written to an **append-only ledger** at `~/.pi/agent/subagent-history.jsonl`
+   (node-local, survives anything).
+2. Kept in the per-session state (via `/subagent history`).
+3. **Emitted to the gvnr fleet-intake event log** if `GVNR_EVENT_URL` (and
+   `GVNR_TOKEN`) are set — so the fleet has a durable trail of "what ran and how
+   it ended", not a per-session file.
+
+**How closes are detected:** the extension subscribes to the herdr socket's
+`events.subscribe` stream for `tab.closed` / `pane.closed` / `pane.exited`
+(framed as newline-delimited JSON over `HERDR_SOCKET_PATH`), so a tab you close
+directly in herdr is recorded **on the next pushed event**, even without a re-poll.
+The existing `herdr agent list` polling is kept as a **fallback** for events missed
+while unsubscribed (e.g. the extension restarted before the agent closed).
+
+> gvnr emission is best-effort and never blocks the session; the durable
+> node-local ledger + `/subagent history` are always on. Set `GVNR_EVENT_URL`
+> + `GVNR_TOKEN` to enable the fleet-side audit record.
 
 ### Close / reset
 
