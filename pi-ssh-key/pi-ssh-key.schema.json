@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://byteowlz.com/pi-ssh-key/schema.json",
+  "title": "pi-ssh-key",
+  "description": "Configuration for the pi-ssh-key extension.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "keyDir": {
+      "description": "Directory scanned by the key picker.",
+      "type": "string",
+      "default": "~/.ssh"
+    },
+    "defaultTimeout": {
+      "description": "Default agent key lifetime in seconds applied to /ssh-key-load when no timeout is given. 0 means no expiry.",
+      "type": "number",
+      "minimum": 0,
+      "default": 0
+    }
+  }
+}
