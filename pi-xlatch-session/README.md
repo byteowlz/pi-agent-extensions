@@ -39,7 +39,7 @@ claims a slot with `/xlatch`. The manifest pins `--socket <abs path>` in its
 |-------|--------------------------|
 | `/xlatch off` | released; the marker is cleared so it stays disconnected |
 | clean exit (quit, SIGTERM) | `session_shutdown` releases the socket and drops the claim |
-| crash / SIGKILL | socket and claim survive as stale; pruned on the next session start or `/xlatch` status |
+| crash / SIGKILL | socket and claim survive as stale; reclaimed on connection only after the owner is confirmed dead |
 | `/reload` | released, then **automatically reclaimed** |
 | resume (`pi -c`, `-r`) | automatically reclaimed if the slot is free |
 | `/new`, `/fork`, `/side` | **never** inherits the parent's slot |
@@ -181,3 +181,5 @@ is not in the path and the feature works in a plain terminal.
 herdr is only useful *around* it: naming the tab that holds a slot, focusing that
 tab when content arrives, and starting a session to hold a slot in the first
 place. Delivery itself never touches herdr.
+
+Connection health is checked every three seconds. A missing route is restored only to its owning listener; a route held by another session is never replaced. The status shows `(offline)` when unreachable. After updating this extension, run `/reload` in existing sessions to load the fix.
