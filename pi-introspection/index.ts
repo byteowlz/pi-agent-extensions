@@ -7,6 +7,7 @@ import { Type } from "typebox";
 interface SessionManagerLike {
 	getMetadata?: () => { title?: string } | undefined;
 	getEntries?: () => { metadata?: { title?: string }; title?: string }[];
+	getSessionName?: () => string | undefined;
 	[key: string]: unknown;
 }
 
@@ -15,6 +16,11 @@ interface ExtensionAPIWithTitle extends ExtensionAPI {
 }
 
 function getSessionTitle(pi: ExtensionAPI, sessionManager: SessionManagerLike): string | null {
+	// Canonical source: the latest session_info.name, which is what auto-rename and
+	// setSessionName() write. Without this, auto-named sessions show as (untitled).
+	const sessionName = sessionManager.getSessionName?.();
+	if (sessionName) return sessionName;
+
 	const directTitle = (pi as ExtensionAPIWithTitle).getSessionTitle?.();
 	if (directTitle) return directTitle;
 
