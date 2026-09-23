@@ -224,7 +224,7 @@ function loadCatalogFile(p: string): ModelCatalog | null {
  * global catalogPath -> <cwd>/.pi/model-catalog.json -> <cwd>/model-catalog.json.
  * "models" merge by id; "loadouts"/"policy"/"providers" override by key.
  */
-function loadCatalog(cwd: string | undefined): ModelCatalog {
+export function loadCatalog(cwd: string | undefined, basePath?: string): ModelCatalog {
 	const merged: ModelCatalog = { version: 1, models: [], providers: {}, loadouts: {} };
 	const apply = (c: ModelCatalog | null) => {
 		if (!c) return;
@@ -239,7 +239,7 @@ function loadCatalog(cwd: string | undefined): ModelCatalog {
 		}
 	};
 
-	apply(loadCatalogFile(resolveCatalogPath(loadConfig().catalogPath)));
+	apply(loadCatalogFile(basePath ?? resolveCatalogPath(loadConfig().catalogPath)));
 	if (cwd) {
 		for (const name of CATALOG_LOCAL_NAMES) {
 			apply(loadCatalogFile(path.join(cwd, ".pi", name)));
@@ -250,7 +250,7 @@ function loadCatalog(cwd: string | undefined): ModelCatalog {
 }
 
 /** Resolve a loadout to the set of model ids it selects. */
-function resolveLoadoutModelIds(catalog: ModelCatalog, loadoutName: string): string[] {
+export function resolveLoadoutModelIds(catalog: ModelCatalog, loadoutName: string): string[] {
 	const loadout = catalog.loadouts?.[loadoutName];
 	if (!loadout) return [];
 	const tags = loadout.tags ?? [];
@@ -263,7 +263,7 @@ function resolveLoadoutModelIds(catalog: ModelCatalog, loadoutName: string): str
 }
 
 /** Return the spawn kinds a loadout allows (from its models' spawnKind). */
-function resolveLoadoutKinds(catalog: ModelCatalog, loadoutName: string): string[] {
+export function resolveLoadoutKinds(catalog: ModelCatalog, loadoutName: string): string[] {
 	const ids = new Set(resolveLoadoutModelIds(catalog, loadoutName));
 	const kinds = new Set<string>();
 	for (const m of catalog.models ?? []) {
@@ -273,7 +273,7 @@ function resolveLoadoutKinds(catalog: ModelCatalog, loadoutName: string): string
 }
 
 /** Build a compact, agent-facing compute/cost/privacy digest. */
-function buildCatalogDigest(catalog: ModelCatalog): string {
+export function buildCatalogDigest(catalog: ModelCatalog): string {
 	if (!catalog.models?.length) return "";
 	const lines: string[] = [];
 	const byResidency = new Map<string, CatalogModelEntry[]>();
