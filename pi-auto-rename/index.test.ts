@@ -16,6 +16,7 @@ function buildMockExtensionAPI(staleAfterSetCalls = Number.MAX_SAFE_INTEGER): {
 	fireSessionTree: (ctx?: ExtensionContext) => Promise<void>;
 	getSessionName: () => string;
 	getTool: (name: string) => ToolDefinition | undefined;
+	runCommand: (args: string, ctx: ExtensionContext) => Promise<void>;
 } {
 	const handlers = {
 		before_agent_start: [] as ((event: { prompt?: string }, ctx: ExtensionContext) => Promise<void>)[],
@@ -25,6 +26,7 @@ function buildMockExtensionAPI(staleAfterSetCalls = Number.MAX_SAFE_INTEGER): {
 	};
 
 	const tools: Record<string, ToolDefinition> = {};
+	let commandHandler: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
 	let sessionName = "";
 	let setCallCount = 0;
 
@@ -53,8 +55,8 @@ function buildMockExtensionAPI(staleAfterSetCalls = Number.MAX_SAFE_INTEGER): {
 				handlers.session_tree.push(handler as (ctx: ExtensionContext) => Promise<void>);
 			}
 		},
-		registerCommand: () => {
-			// no-op for test
+		registerCommand: (_name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
+			commandHandler = options.handler;
 		},
 	} as unknown as ExtensionAPI;
 
@@ -82,6 +84,10 @@ function buildMockExtensionAPI(staleAfterSetCalls = Number.MAX_SAFE_INTEGER): {
 		},
 		getSessionName: () => sessionName,
 		getTool: (name) => tools[name],
+		runCommand: async (args, ctx) => {
+			if (!commandHandler) throw new Error("No command registered");
+			await commandHandler(args, ctx);
+		},
 	};
 }
 
@@ -269,6 +275,25 @@ describe("pi-auto-rename fork readable-id regeneration", () => {
 		await fireSessionStart({ reason: "fork" }, newCtx);
 
 		expect(getSessionName()).toBe("Fix Auth Bug");
+	});
+});
+
+describe("pi-auto-rename /auto-rename readable id", () => {
+	test("keeps a readable id when renaming a session that already has one", async () => {
+		const { pi, fireSessionStart, getSessionName, runCommand } = buildMockExtensionAPI();
+		autoRename(pi);
+		await fireSessionStart();
+
+		const cwd = tmpCwd();
+		const ctx = buildMockCtx(cwd, "session-abc", { enabled: true, readableIdSuffix: true });
+		pi.setSessionName("Fix Auth Bug [brisk-sunflower-river]");
+
+		await runCommand("new title", ctx);
+
+		const name = getSessionName();
+		expect(name.startsWith("new title [")).toBe(true);
+		expect(READABLE_ID_RE.test(name)).toBe(true);
+		expect(name).not.toBe("new title");
 	});
 });
 

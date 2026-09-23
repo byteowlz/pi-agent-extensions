@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1
+
+- Fix `/auto-rename <name>` dropping the readable-id suffix: the manual-rename path now always re-attaches the canonical readable id when `readableIdSuffix` is enabled (regenerated from the session id, or preserving any id already in the current name), so the id is never lost.
+
 ## 1.1.0
 
 - Expose a `rename_session` tool so the agent can rename the session (title sans readable id); the readable-id suffix is generated automatically when `readableIdSuffix` is enabled.
