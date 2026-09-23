@@ -25,24 +25,56 @@ of it.)
 
 ## Tool
 
-### `delegate_subagent`
+### `subagent`
 
-The current agent calls this to spawn a subagent. Parameters:
+A single consolidated tool with an `action` enum, so it stays light in the
+agent's context. Default is `spawn`.
+
+| action | description |
+|--------|-------------|
+| `spawn` (default) | Delegate a task to a NEW subagent in a fresh herdr tab |
+| `list` | List the subagents this session spawned + status |
+| `info` | Return the compute / data-residency / cost catalog + loadouts |
+
+`spawn` parameters:
 
 | param | required | description |
 |-------|----------|-------------|
 | `task` | yes | What to delegate to the subagent |
-| `model` | no | pi model pattern (e.g. `openai/gpt-5`, `archvm/gemma-4-E4B-it`). Defaults to the current model |
-| `tabLabel` | no | Label for the new herdr tab. Defaults to a slug of the task |
+| `kind` | no | herdr agent kind, e.g. `pi` (default), `claude`, `codex` |
+| `model` | no | pi model id (for `kind=pi`). Defaults to the current model |
+| `loadout` | no | Named loadout that gates/chooses the model (see "Model catalog") |
+| `tabLabel` | no | Label for the new herdr tab |
 | `cwd` | no | Working directory. Defaults to the current directory |
 
-Flow (via the herdr CLI), documented automation path:
+`spawn` flow (via the herdr CLI):
 
 1. `herdr tab create --label <label> --cwd <cwd> --no-focus`
-2. `herdr agent start <name> --kind pi --pane <pane> -- --model <model>`
+2. `herdr agent start <name> --kind <kind> --pane <pane> [-- --model <model>]`
+   (`--model` is passed only when `kind=pi`)
 3. `herdr agent prompt <name> "<task>"` (async — no `--wait`)
 
 The subagent is named `sub-<random>`, so it is counted and listed.
+
+## Model catalog
+
+The extension reads a byteowlz **model catalog** (independent of eavs/pi) at
+`~/.pi/agent/model-catalog.json` (configurable via `catalogPath` in
+subagent-config.json). It carries per-provider/model metadata
+(`dataResidency`, `zdr`, `costType`, `spawnKind`, `tags`) + named `loadouts`
++ `policy`. It is layered, most-specific wins:
+
+1. global `catalogPath`
+2. `<cwd>/.pi/model-catalog.json`
+3. `<cwd>/model-catalog.json`
+
+Loadouts resolve to a set of allowed model ids + spawn kinds, which gates
+`subagent` spawning (e.g. `local`, `data-privacy`, `fixed-cost`,
+`per-token`). `subagent` with `action=info` surfaces the catalog to the agent.
+
+> Keys are never stored in the catalog — only references (`env:VAR` /
+> `keychain:<name>`), resolved against the system keychain by eavs or by the
+> extension when eavs is absent.
 
 ## Commands
 

@@ -2,7 +2,7 @@
  * pi-herdr-tools — herdr-flavored tools: delegate a task to a new pi subagent
  * in a fresh herdr tab, and fork the current session into its own named tab.
  *
- * The current agent calls the `delegate_subagent` tool; the user stays in
+ * The current agent calls the `subagent` tool (action=spawn); the user stays in
  * control through a config file (kill switch, model allowlist, allowance) plus
  * per-session settings (allow mode, auto decision, timeout, allowance):
  *
@@ -102,22 +102,27 @@ interface SubagentConfig {
 	enabled: boolean;
 	requireConfirmation: boolean;
 	allowedModels: string[];
+	allowedKinds: string[];
 	maxSubagents: number;
 	allowMode: AllowMode;
 	autoDecision: AutoDecision;
 	confirmTimeoutMs: number;
 	loadouts: Record<string, string[]>;
+	/** Path to the byteowlz model catalog (metadata + loadouts + policy). */
+	catalogPath?: string;
 }
 
 const DEFAULT_CONFIG: SubagentConfig = {
 	enabled: true,
 	requireConfirmation: true,
 	allowedModels: [],
+	allowedKinds: ["pi"],
 	maxSubagents: 3,
 	allowMode: "confirm",
 	autoDecision: "deny",
 	confirmTimeoutMs: 60_000,
 	loadouts: {},
+	catalogPath: path.join(os.homedir(), ".pi", "agent", "model-catalog.json"),
 };
 
 function asAllowMode(v: unknown): AllowMode | undefined {
@@ -143,11 +148,15 @@ function loadConfig(): SubagentConfig {
 				enabled: raw.enabled ?? DEFAULT_CONFIG.enabled,
 				requireConfirmation: raw.requireConfirmation ?? DEFAULT_CONFIG.requireConfirmation,
 				allowedModels: Array.isArray(raw.allowedModels) ? raw.allowedModels.filter((p) => typeof p === "string") : [],
+				allowedKinds: Array.isArray(raw.allowedKinds)
+					? raw.allowedKinds.filter((p) => typeof p === "string")
+					: DEFAULT_CONFIG.allowedKinds,
 				maxSubagents: typeof raw.maxSubagents === "number" ? raw.maxSubagents : DEFAULT_CONFIG.maxSubagents,
 				allowMode,
 				autoDecision: asAutoDecision(raw.autoDecision) ?? DEFAULT_CONFIG.autoDecision,
 				confirmTimeoutMs: typeof raw.confirmTimeoutMs === "number" ? raw.confirmTimeoutMs : DEFAULT_CONFIG.confirmTimeoutMs,
 				loadouts,
+				catalogPath: typeof raw.catalogPath === "string" ? raw.catalogPath : DEFAULT_CONFIG.catalogPath,
 			};
 		}
 	} catch {
@@ -165,6 +174,124 @@ function saveConfig(config: SubagentConfig): void {
 	}
 }
 
+// --- Model catalog (byteowlz metadata + loadouts + policy) ------------
+
+interface CatalogModelEntry {
+	id: string;
+	provider: string;
+	label?: string;
+	dataResidency?: "local" | "internal" | "azure" | "external";
+	zdr?: boolean;
+	costType?: "free" | "subscription" | "per-token";
+	spawnKind?: string;
+	tags: string[];
+}
+
+interface CatalogLoadout {
+	match?: "any" | "all";
+	tags: string[];
+	excludeTags?: string[];
+	description?: string;
+}
+
+interface ModelCatalog {
+	version?: number;
+	policy?: { defaultKind?: string; defaultLoadout?: string; defaultAllowMode?: string };
+	providers?: Record<string, { dataResidency?: string; note?: string }>;
+	models?: CatalogModelEntry[];
+	loadouts?: Record<string, CatalogLoadout>;
+}
+
+const CATALOG_LOCAL_NAMES = ["model-catalog.json"];
+
+function resolveCatalogPath(catalogPath: string | undefined): string {
+	if (!catalogPath) return DEFAULT_CONFIG.catalogPath!;
+	if (catalogPath.startsWith("~")) return path.join(os.homedir(), catalogPath.slice(1));
+	return catalogPath;
+}
+
+function loadCatalogFile(p: string): ModelCatalog | null {
+	try {
+		if (!p || !fs.existsSync(p)) return null;
+		return JSON.parse(fs.readFileSync(p, "utf8")) as ModelCatalog;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Load the model catalog with layering (most-specific wins):
+ * global catalogPath -> <cwd>/.pi/model-catalog.json -> <cwd>/model-catalog.json.
+ * "models" merge by id; "loadouts"/"policy"/"providers" override by key.
+ */
+function loadCatalog(cwd: string | undefined): ModelCatalog {
+	const merged: ModelCatalog = { version: 1, models: [], providers: {}, loadouts: {} };
+	const apply = (c: ModelCatalog | null) => {
+		if (!c) return;
+		merged.version = c.version ?? merged.version;
+		if (c.policy) merged.policy = { ...merged.policy, ...c.policy };
+		if (c.providers) merged.providers = { ...merged.providers, ...c.providers };
+		if (c.loadouts) merged.loadouts = { ...merged.loadouts, ...c.loadouts };
+		if (Array.isArray(c.models)) {
+			const byId = new Map((merged.models ?? []).map((m) => [m.id, m]));
+			for (const m of c.models) byId.set(m.id, m);
+			merged.models = [...byId.values()];
+		}
+	};
+
+	apply(loadCatalogFile(resolveCatalogPath(loadConfig().catalogPath)));
+	if (cwd) {
+		for (const name of CATALOG_LOCAL_NAMES) {
+			apply(loadCatalogFile(path.join(cwd, ".pi", name)));
+			apply(loadCatalogFile(path.join(cwd, name)));
+		}
+	}
+	return merged;
+}
+
+/** Resolve a loadout to the set of model ids it selects. */
+function resolveLoadoutModelIds(catalog: ModelCatalog, loadoutName: string): string[] {
+	const loadout = catalog.loadouts?.[loadoutName];
+	if (!loadout) return [];
+	const tags = loadout.tags ?? [];
+	const exclude = loadout.excludeTags ?? [];
+	const matchAll = loadout.match === "all";
+	return (catalog.models ?? [])
+		.filter((m) => (matchAll ? tags.every((t) => m.tags?.includes(t)) : tags.some((t) => m.tags?.includes(t))))
+		.filter((m) => !exclude.some((t) => m.tags?.includes(t)))
+		.map((m) => m.id);
+}
+
+/** Return the spawn kinds a loadout allows (from its models' spawnKind). */
+function resolveLoadoutKinds(catalog: ModelCatalog, loadoutName: string): string[] {
+	const ids = new Set(resolveLoadoutModelIds(catalog, loadoutName));
+	const kinds = new Set<string>();
+	for (const m of catalog.models ?? []) {
+		if (ids.has(m.id) && m.spawnKind) kinds.add(m.spawnKind);
+	}
+	return [...kinds];
+}
+
+/** Build a compact, agent-facing compute/cost/privacy digest. */
+function buildCatalogDigest(catalog: ModelCatalog): string {
+	if (!catalog.models?.length) return "";
+	const lines: string[] = [];
+	const byResidency = new Map<string, CatalogModelEntry[]>();
+	for (const m of catalog.models) {
+		const r = m.dataResidency ?? "unknown";
+		byResidency.set(r, [...(byResidency.get(r) ?? []), m]);
+	}
+	for (const [res, ms] of byResidency) {
+		const labels = ms.map((m) => m.label ?? m.id).join(", ");
+		lines.push(`- ${res}: ${labels}`);
+	}
+	if (catalog.loadouts) {
+		const lo = Object.keys(catalog.loadouts);
+		if (lo.length) lines.push(`Loadouts: ${lo.join(", ")}`);
+	}
+	return lines.join("\n");
+}
+
 // --- Per-session state ------------------------------------------------
 
 interface TrackedSubagent {
@@ -172,6 +299,7 @@ interface TrackedSubagent {
 	paneId: string;
 	tabId: string;
 	model: string;
+	kind?: string;
 	label: string;
 	cwd: string;
 	spawnedAt: number;
@@ -746,22 +874,37 @@ async function openSideTab(opts: {
 	return { name, tabId, paneId };
 }
 
-interface DelegateParams {
-	task: string;
+const SUBAGENT_ACTIONS = ["spawn", "list", "info"] as const;
+type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
+
+interface SubagentToolParams {
+	action?: SubagentAction;
+	task?: string;
 	model?: string;
+	kind?: string;
+	loadout?: string;
 	tabLabel?: string;
 	cwd?: string;
 }
 
-const DelegateParamsSchema = Type.Object({
-	task: Type.String({ description: "The task/instruction to delegate to the new subagent." }),
-	model: Type.Optional(
-		Type.String({
-			description: "pi model pattern, e.g. 'openai/gpt-5' or 'archvm/gemma-4-E4B-it'. Defaults to the current model.",
-		})
+const SubagentToolParamsSchema = Type.Object({
+	action: Type.Optional(
+		Type.Union(
+			SUBAGENT_ACTIONS.map((a) => Type.Literal(a)),
+			{
+				description:
+					"What to do: 'spawn' (default) delegate a task, 'list' this session's subagents, 'info' available compute/cost/privacy.",
+			}
+		)
 	),
-	tabLabel: Type.Optional(Type.String({ description: "Label for the new herdr tab. Defaults to a short slug of the task." })),
-	cwd: Type.Optional(Type.String({ description: "Working directory for the subagent. Defaults to the current directory." })),
+	task: Type.Optional(Type.String({ description: "Task to delegate to a new subagent (action=spawn)." })),
+	model: Type.Optional(Type.String({ description: "Model id to spawn (action=spawn). Defaults to the loadout/current model." })),
+	kind: Type.Optional(Type.String({ description: "herdr agent kind (action=spawn). Default 'pi'; e.g. 'claude', 'codex'." })),
+	loadout: Type.Optional(
+		Type.String({ description: "Named loadout to gate/choose the model (action=spawn), e.g. 'local', 'data-privacy'." })
+	),
+	tabLabel: Type.Optional(Type.String({ description: "Label for the new herdr tab (action=spawn)." })),
+	cwd: Type.Optional(Type.String({ description: "Working directory for the subagent (action=spawn)." })),
 });
 
 // --- Confirmation with per-session allow mode -------------------------
@@ -1525,15 +1668,48 @@ export default function herdrTools(pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
-		name: "delegate_subagent",
-		label: "Delegate to subagent",
+		name: "subagent",
+		label: "Subagent",
 		description:
-			"Delegate a task to a NEW pi subagent running in a fresh herdr tab with a chosen model. The user stays in control: spawning is gated by config (enabled/model-allowlist/max) and per-session settings (allow mode: auto / confirm / allow-or-deny-after-timeout). When the subagent finishes, this session is notified automatically. Use for parallel or background work that needs an isolated context.",
-		parameters: DelegateParamsSchema,
+			"Manage subagents. Default action 'spawn' delegates a task to a NEW subagent in a fresh herdr tab (kind + model + optional loadout). 'list' shows this session's subagents. 'info' returns the available compute/cost/privacy catalog. Spawning is gated by config (enabled/model/kind/allowance) and per-session settings (allow mode).",
+		promptSnippet: "subagent: spawn a subagent (default), list this session's subagents, or get available compute/cost/privacy.",
+		parameters: SubagentToolParamsSchema,
 		executionMode: "sequential",
 
-		async execute(_toolCallId, params: DelegateParams, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params: SubagentToolParams, _signal, _onUpdate, ctx) {
+			const action = params.action ?? "spawn";
 			ensureSessionState(ctx);
+			const config = loadConfig();
+			const catalog = loadCatalog(ctx.cwd);
+
+			if (action === "info") {
+				const digest = buildCatalogDigest(catalog);
+				const names = Object.keys(catalog.loadouts ?? {}).join(", ");
+				return {
+					content: [
+						{
+							type: "text",
+							text: digest
+								? `Available compute:\n${digest}${names ? `\n\nLoadouts: ${names}` : ""}`
+								: "No model catalog configured.",
+						},
+					],
+					details: { action },
+				};
+			}
+
+			if (action === "list") {
+				const subs = currentState ? Object.values(currentState.subagents) : [];
+				const lines = subs.length
+					? subs.map((t) => `  ${t.name} — ${t.status ?? "unknown"}${t.model ? ` (${t.model})` : ""}`).join("\n")
+					: "No subagents spawned by this session.";
+				return {
+					content: [{ type: "text", text: `Subagents (${subs.length}):\n${lines}` }],
+					details: { action, subagents: subs },
+				};
+			}
+
+			// ---- spawn ----
 			if (!isInHerdr()) {
 				return {
 					content: [
@@ -1542,8 +1718,6 @@ export default function herdrTools(pi: ExtensionAPI) {
 					details: { spawned: false },
 				};
 			}
-
-			const config = loadConfig();
 			if (!config.enabled) {
 				return {
 					content: [
@@ -1555,19 +1729,54 @@ export default function herdrTools(pi: ExtensionAPI) {
 					details: { spawned: false },
 				};
 			}
+			if (!params.task) {
+				return { content: [{ type: "text", text: "Error: 'task' is required to spawn." }], details: { spawned: false } };
+			}
 
-			const model = params.model ?? `${ctx.model?.provider ?? ""}/${ctx.model?.id ?? ""}`;
-			const eff = effectiveAllowlist(config);
-			if (!allowedBy(eff.patterns, model)) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Error: model "${model}" is not in the allowlist (${eff.source}). Allowed: ${eff.patterns.join(", ") || "(none)"}. Run /subagent models to pick allowed models.`,
-						},
-					],
-					details: { spawned: false },
-				};
+			const kind = params.kind ?? catalog.policy?.defaultKind ?? "pi";
+			let model = params.model;
+
+			if (params.loadout) {
+				const ids = new Set(resolveLoadoutModelIds(catalog, params.loadout));
+				const kinds = new Set(resolveLoadoutKinds(catalog, params.loadout));
+				if (!model) model = `${ctx.model?.provider ?? ""}/${ctx.model?.id ?? ""}`;
+				const allowed = kind === "pi" ? ids.has(model) : ids.size === 0 ? kinds.has(kind) : false;
+				if (!allowed) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Error: (model "${model}", kind "${kind}") not allowed by loadout "${params.loadout}". Allowed models: ${[...ids].join(", ") || "(none)"}; kinds: ${[...kinds].join(", ") || "(none)"}.`,
+							},
+						],
+						details: { spawned: false },
+					};
+				}
+			} else {
+				if (!model) model = `${ctx.model?.provider ?? ""}/${ctx.model?.id ?? ""}`;
+				const eff = effectiveAllowlist(config);
+				if (!allowedBy(eff.patterns, model)) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Error: model "${model}" is not in the allowlist (${eff.source}). Allowed: ${eff.patterns.join(", ") || "(none)"}.`,
+							},
+						],
+						details: { spawned: false },
+					};
+				}
+				if (kind !== "pi" && !config.allowedKinds.includes(kind)) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Error: kind "${kind}" is not allowed (allowedKinds: ${config.allowedKinds.join(", ")}). Add it to subagent-config.json or pick a loadout.`,
+							},
+						],
+						details: { spawned: false },
+					};
+				}
 			}
 
 			const maxN = sessionMaxSubagents(config);
@@ -1586,60 +1795,34 @@ export default function herdrTools(pi: ExtensionAPI) {
 
 			const cwd = params.cwd ?? ctx.cwd;
 			const label = params.tabLabel ?? (params.task.replace(/\s+/g, " ").slice(0, 28).trim() || "subagent");
-
-			const detail = `Tab: ${label}\nModel: ${model}\nCwd: ${cwd}\n\nTask:\n${params.task.slice(0, 400)}${params.task.length > 400 ? "\n…" : ""}`;
+			const detail = `Tab: ${label}\nKind: ${kind}\nModel: ${model}\nCwd: ${cwd}\n\nTask:\n${params.task.slice(0, 400)}${params.task.length > 400 ? "\n…" : ""}`;
 			const ok = await approveSpawn(ctx, config, detail);
-			if (!ok) {
-				return {
-					content: [{ type: "text", text: "Spawn cancelled by the user." }],
-					details: { spawned: false },
-				};
-			}
+			if (!ok) return { content: [{ type: "text", text: "Spawn cancelled by the user." }], details: { spawned: false } };
 
 			const name = randomName();
-
-			// 1. create the tab (no focus; keep the user's context)
 			const tabRes = await herdr(["tab", "create", "--label", label, "--cwd", cwd, "--no-focus"]);
 			const paneId = tabRes?.result?.root_pane?.pane_id;
 			const tabId = tabRes?.result?.tab?.tab_id;
 			if (!paneId) {
 				return {
-					content: [
-						{
-							type: "text",
-							text: `Error: herdr tab create failed. Response: ${JSON.stringify(tabRes).slice(0, 500)}`,
-						},
-					],
+					content: [{ type: "text", text: `Error: herdr tab create failed. Response: ${JSON.stringify(tabRes).slice(0, 500)}` }],
 					details: { spawned: false },
 				};
 			}
 
-			// 2. start the pi agent with the chosen model
-			const startRes = await herdr(["agent", "start", name, "--kind", "pi", "--pane", paneId, "--", "--model", model]);
+			const startArgs = kind === "pi" ? ["--", "--model", model] : [];
+			const startRes = await herdr(["agent", "start", name, "--kind", kind, "--pane", paneId, ...startArgs]);
 			if (startRes?.error || !startRes?.result?.agent?.name) {
 				return {
 					content: [
-						{
-							type: "text",
-							text: `Error: herdr agent start failed. Response: ${JSON.stringify(startRes).slice(0, 500)}`,
-						},
+						{ type: "text", text: `Error: herdr agent start failed. Response: ${JSON.stringify(startRes).slice(0, 500)}` },
 					],
 					details: { spawned: false },
 				};
 			}
 
-			trackSubagent(ctx, {
-				name,
-				paneId,
-				tabId,
-				model,
-				label,
-				cwd,
-				spawnedAt: Date.now(),
-				status: "idle",
-			});
+			trackSubagent(ctx, { name, paneId, tabId, model, kind, label, cwd, spawnedAt: Date.now(), status: "idle" });
 
-			// 3. submit the task asynchronously (no --wait)
 			const promptRes = await herdr(["agent", "prompt", name, params.task]);
 			const promptOk = !promptRes?.error;
 			startNotifyTimer(pi, ctx);
@@ -1651,7 +1834,7 @@ export default function herdrTools(pi: ExtensionAPI) {
 							text: `Subagent started but prompt submit reported an error (${JSON.stringify(promptRes).slice(0, 300)}). It may still be idle; read it via: herdr agent read ${name}`,
 						},
 					],
-					details: { spawned: true, name, tabId, paneId, model },
+					details: { spawned: true, name, tabId, paneId, kind, model },
 				};
 			}
 
@@ -1659,10 +1842,10 @@ export default function herdrTools(pi: ExtensionAPI) {
 				content: [
 					{
 						type: "text",
-						text: `Subagent spawned and task submitted.\n\n  agent: ${name}\n  tab:  ${tabId}\n  pane: ${paneId}\n  model: ${model}\n  cwd:  ${cwd}\n\nYou will be notified here automatically when it finishes.\nMonitor: herdr agent read ${name} --source recent-unwrapped --format text\nWait:   herdr agent wait ${name} --until idle`,
+						text: `Subagent spawned and task submitted.\n\n  agent: ${name}\n  kind: ${kind}\n  model: ${model}\n  tab:  ${tabId}\n  pane: ${paneId}\n  cwd:  ${cwd}\n\nYou will be notified here automatically when it finishes.\nMonitor: herdr agent read ${name} --format text\nWait:   herdr agent wait ${name} --until idle`,
 					},
 				],
-				details: { spawned: true, name, tabId, paneId, model },
+				details: { spawned: true, name, tabId, paneId, kind, model },
 			};
 		},
 	});
