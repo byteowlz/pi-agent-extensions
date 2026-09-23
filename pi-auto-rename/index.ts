@@ -1014,15 +1014,27 @@ function formatManualNamePreservingReadableId(
 	config: ResolvedConfig,
 	ctx: ExtensionCommandContext
 ): string {
-	if (!config.readableIdSuffix || extractReadableIdSuffix(name)) return name;
+	if (!config.readableIdSuffix) return name;
 
-	const currentSuffix = extractReadableIdSuffix(currentName);
-	if (currentSuffix && !name.includes(currentSuffix)) return formatFullName("", name, currentSuffix);
+	// Strip any readable-id suffix the user may have typed, then attach a canonical
+	// one for the current session. Regenerating (rather than only reading it back
+	// from the stored name) keeps the id present even when it came from an external
+	// or frontend source and isn't in the stored session name.
+	const base = stripReadableIdSuffix(name);
+	if (!base) return name;
 
 	const sessionId = getSessionId(ctx);
 	const wordlist = loadWordlist(config, ctx.cwd);
-	const suffix = resolveReadableIdSuffix(config, sessionId, wordlist, name, ctx);
-	return formatFullName("", name, suffix);
+	let suffix = resolveReadableIdSuffix(config, sessionId, wordlist, base, ctx);
+
+	// If the canonical suffix cannot be derived (e.g. wordlist/session id missing),
+	// preserve whatever readable id is already present in the current name so it is
+	// never silently dropped.
+	if (!suffix) {
+		suffix = extractReadableIdSuffix(currentName);
+	}
+
+	return formatFullName("", base, suffix);
 }
 
 // ============================================================================
