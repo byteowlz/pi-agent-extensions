@@ -41,6 +41,8 @@ import { Type } from "typebox";
 // ---------------------------------------------------------------------------
 
 interface SudoConfig {
+	/** Guard behaviour for interactive `sudo` in the bash tool. */
+	bashGuard: "block" | "warn" | "off";
 	/** Default command execution timeout in ms (per-call `timeout` overrides). */
 	defaultTimeoutMs: number;
 	/** Password prompt auto-cancel after this many ms without an answer (0 = wait forever). */
@@ -54,6 +56,7 @@ interface SudoConfig {
 }
 
 const DEFAULT_CONFIG: SudoConfig = {
+	bashGuard: "block",
 	defaultTimeoutMs: 120_000,
 	promptTimeoutMs: 120_000,
 	cacheTtlMs: 5 * 60 * 1000,
@@ -69,6 +72,8 @@ function loadSudoConfig(): SudoConfig {
 		if (!path || !existsSync(path)) continue;
 		try {
 			const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<SudoConfig>;
+			if (parsed.bashGuard === "block" || parsed.bashGuard === "warn" || parsed.bashGuard === "off")
+				cfg.bashGuard = parsed.bashGuard;
 			if (typeof parsed.defaultTimeoutMs === "number" && parsed.defaultTimeoutMs >= 1000)
 				cfg.defaultTimeoutMs = parsed.defaultTimeoutMs;
 			if (typeof parsed.promptTimeoutMs === "number" && parsed.promptTimeoutMs >= 0) cfg.promptTimeoutMs = parsed.promptTimeoutMs;
@@ -202,6 +207,84 @@ function parseSshArgs(raw: string | undefined): string[] {
 	// but shell metacharacters are rejected because we spawn ssh directly.
 	if (/[;&|`$<>\n\r]/.test(raw)) throw new Error("sshOptions contains shell metacharacters");
 	return raw.trim().split(/\s+/).filter(Boolean);
+}
+
+/**
+ * Reduce a bash command to the text that could actually run: command
+ * substitutions ($(…), `…`) are preserved because their content executes;
+ * quoted spans are data (not command position) and comments are inert, so they
+ * are stripped to avoid false positives on `sudo` appearing as plain text
+ * (commit messages, docs, grep patterns, …).
+ */
+export function guardRelevantText(cmd: string): string {
+	// Pull out command substitutions first: their content executes.
+	let residual = "";
+	let substitutions = "";
+	let i = 0;
+	while (i < cmd.length) {
+		const ch = cmd[i];
+		if (ch === "$" && cmd[i + 1] === "(") {
+			let depth = 1;
+			let j = i + 2;
+			while (j < cmd.length && depth > 0) {
+				if (cmd[j] === "(") depth++;
+				else if (cmd[j] === ")") depth--;
+				j++;
+			}
+			substitutions += cmd.slice(i + 2, j - 1);
+			residual += "$()";
+			i = j;
+			continue;
+		}
+		if (ch === "`") {
+			const end = cmd.indexOf("`", i + 1);
+			if (end === -1) {
+				residual += ch;
+				i++;
+				continue;
+			}
+			substitutions += cmd.slice(i + 1, end);
+			residual += "``";
+			i = end + 1;
+			continue;
+		}
+		residual += ch;
+		i++;
+	}
+	const noSingle = residual.replace(/'(?:[^'\\]|\\.)*'/g, "''");
+	const noDouble = noSingle.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+	const noComments = noDouble.replace(/(^|\s)#[^\n]*/g, "$1");
+	return `${noComments} ${substitutions}`;
+}
+
+export type GuardDecision = { block: boolean; remote: boolean; reason: string };
+
+/** Shell-comment token that bypasses the bash guard (for false positives). */
+export const GUARD_ALLOW_TOKEN = "pi-sudo:allow";
+
+/**
+ * Decide whether a bash command's interactive `sudo` usage should be blocked.
+ * A seatbelt against accidental naked sudo (pam_faillock lockouts), not a
+ * sandbox: the `# pi-sudo:allow` comment token is the explicit escape hatch
+ * for false positives (sudo appearing only as text).
+ */
+export function sudoGuardDecision(cmd: string): GuardDecision {
+	const relevant = guardRelevantText(cmd);
+	// `sudo -n` (non-interactive) is allowed: the local regex excludes it via
+	// lookahead, the remote branch checks for it on the raw command.
+	const hasInteractive = /(^|[\s;&|])sudo(\s+(?!-n\b)|$)/.test(relevant);
+	// Remote: quoted text after `ssh` is a remote command that executes, so the
+	// sudo check for the remote branch runs against the RAW command; `ssh` must
+	// itself be at command position in the stripped text (quoted `ssh` text is
+	// just data — e.g. a commit message mentioning it).
+	const sshAtCommandPos = /(^|[\s;&|])ssh\s/.test(relevant);
+	const hasRemoteInteractive = sshAtCommandPos && /\bsudo\b/.test(cmd) && !/\bsudo\s+-n\b/.test(cmd);
+	const hit = hasInteractive || hasRemoteInteractive;
+	const remote = hasRemoteInteractive;
+	const reason = remote
+		? "Direct remote `sudo` through `ssh` is disabled by pi-sudo. Use the `sudo_exec` tool with `host` so pi can prompt for and cache the remote machine's sudo password separately from the local password."
+		: "Direct `sudo` in the bash tool is disabled by pi-sudo. Use the `sudo_exec` tool instead - it handles password prompting through pi's UI and avoids locking out the user via pam_faillock. If `sudo` only appears as text in your command (docs, commit messages, grep patterns), append the shell comment `# pi-sudo:allow` to run it anyway.";
+	return { block: hit, remote, reason };
 }
 
 // ---------------------------------------------------------------------------
@@ -510,24 +593,33 @@ export default function pisudo(pi: ExtensionAPI): void {
 	});
 
 	// ---- Intercept naked `sudo` in the built-in bash tool --------------
-	pi.on("tool_call", async (event) => {
+	pi.on("tool_call", async (event, ctx) => {
 		if (!isToolCallEventType("bash", event)) return;
 		const cmd = event.input.command ?? "";
-		// Allow `sudo -n …` (non-interactive credential check) since it cannot
-		// hang. Block any other interactive sudo token locally or inside obvious
-		// ssh invocations; the latter needs a remote password cache, not the local one.
-		const hasNonInteractive = /(^|[\s;&|])sudo\s+-n\b/.test(cmd);
-		const hasInteractive = /(^|[\s;&|])sudo(\s+(?!-n\b)|$)/.test(cmd);
-		const hasRemoteInteractive = /(^|[\s;&|])ssh\s+[^\n;&|]+\s+['"]?[^'"\n;&|]*\bsudo\b(?!\s+-n\b)/.test(cmd);
-		if ((hasInteractive || hasRemoteInteractive) && !hasNonInteractive) {
-			return {
-				block: true,
-				reason: hasRemoteInteractive
-					? "Direct remote `sudo` through `ssh` is disabled by pi-sudo. Use the `sudo_exec` tool with `host` so pi can prompt for and cache the remote machine's sudo password separately from the local password."
-					: "Direct `sudo` in the bash tool is disabled by pi-sudo. Use the `sudo_exec` tool instead — it handles password prompting through pi's UI and avoids locking out the user via pam_faillock.",
-			};
+		const decision = sudoGuardDecision(cmd);
+		if (!decision.block) return undefined;
+		if (config.bashGuard === "off") return undefined;
+		// Explicit escape hatch for false positives (sudo appearing only as text).
+		if (cmd.includes(GUARD_ALLOW_TOKEN)) {
+			try {
+				ctx.ui.notify("pi-sudo: bash guard bypassed via # pi-sudo:allow token", "warning");
+			} catch {
+				// no UI: proceed silently
+			}
+			return undefined;
 		}
-		return undefined;
+		if (config.bashGuard === "warn") {
+			try {
+				ctx.ui.notify("pi-sudo: interactive sudo detected in bash command; allowed by bashGuard=warn", "warning");
+			} catch {
+				// no UI: proceed silently
+			}
+			return undefined;
+		}
+		return {
+			block: true,
+			reason: decision.reason,
+		};
 	});
 
 	// ---- Tool: sudo_exec (local + remote) --------------------------------
@@ -566,6 +658,7 @@ export default function pisudo(pi: ExtensionAPI): void {
 		"Use `sudo_exec` for any command that requires root, locally or on a remote machine. Never call `sudo` from the `bash` tool — it will be blocked.",
 		"Local root: omit `host`. Remote root: pass `host` (e.g. `user@example.com`) and only the remote root command in `command`; the remote password is cached separately from the local one.",
 		"Always pass a short human-readable `reason` explaining why root is needed. The reason is shown to the user in the password prompt.",
+		"If the bash guard blocks a command where `sudo` appears only as text (commit messages, docs, grep patterns), append the shell comment `# pi-sudo:allow` to that command line. Never use the token to actually run sudo via bash.",
 	];
 
 	function renderSudoCall(args: Record<string, unknown> | undefined, theme: Theme, label: string): Text {
