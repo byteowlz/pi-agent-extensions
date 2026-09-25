@@ -18,17 +18,20 @@
  *       call naked `sudo` and deadlock itself.
  *
  * Tools:
- *   sudo_exec({ command, reason?, timeout? })  — run a command under sudo.
+ *   sudo_exec({ command, host?, sshOptions?, reason?, timeout? })
+ *     — run a command under sudo, locally or (with `host`) on a remote
+ *       machine over ssh. `remote_sudo_exec` remains as a deprecated alias.
  *
  * Commands:
  *   /sudo-status   — show cache state (has password / TTL remaining).
+ *   /sudo-ttl      — set the session's cache policy (seconds + turns).
  *   /sudo-forget   — drop the cached password immediately.
  *   /sudo-test     — verify the cached password still works.
  */
 
 import { execFile, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { Key, Text, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -469,6 +472,7 @@ async function ensurePasswordAndRun(
 
 interface SudoExecDetails {
 	command: string;
+	host?: string;
 	reason?: string;
 	exitCode: number;
 	stdout: string;
@@ -480,16 +484,16 @@ interface SudoExecDetails {
 
 export type SudoExecInput = {
 	command: string;
+	/** SSH destination (e.g. `server`, `user@host`). Absent = run locally. */
+	host?: string;
+	sshOptions?: string;
 	reason?: string;
 	timeout?: number;
 };
 
-export type RemoteSudoExecInput = {
+/** Deprecated: kept for sessions that still reference the old tool name. */
+export type RemoteSudoExecInput = SudoExecInput & {
 	host: string;
-	command: string;
-	sshOptions?: string;
-	reason?: string;
-	timeout?: number;
 };
 
 export default function pisudo(pi: ExtensionAPI): void {
@@ -519,236 +523,197 @@ export default function pisudo(pi: ExtensionAPI): void {
 			return {
 				block: true,
 				reason: hasRemoteInteractive
-					? "Direct remote `sudo` through `ssh` is disabled by pi-sudo. Use the `remote_sudo_exec` tool so pi can prompt for and cache the remote machine's sudo password separately from the local password."
+					? "Direct remote `sudo` through `ssh` is disabled by pi-sudo. Use the `sudo_exec` tool with `host` so pi can prompt for and cache the remote machine's sudo password separately from the local password."
 					: "Direct `sudo` in the bash tool is disabled by pi-sudo. Use the `sudo_exec` tool instead — it handles password prompting through pi's UI and avoids locking out the user via pam_faillock.",
 			};
 		}
 		return undefined;
 	});
 
-	// ---- Tool: sudo_exec -------------------------------------------------
+	// ---- Tool: sudo_exec (local + remote) --------------------------------
+	const sudoParams = {
+		command: Type.String({
+			description:
+				"The shell command to run under sudo. Executed via `bash -lc` locally, or remotely via `sudo -S -p '' -- bash -lc <command>` when `host` is given.",
+		}),
+		host: Type.Optional(
+			Type.String({
+				description:
+					"SSH destination (e.g. `server`, `user@server`, or a Host alias from ~/.ssh/config). Omit to run locally. The remote machine's sudo password is cached separately from the local one.",
+			})
+		),
+		sshOptions: Type.Optional(
+			Type.String({
+				description:
+					"Optional simple ssh flags used with `host`, e.g. `-p 2222 -i ~/.ssh/key`. Shell metacharacters are rejected.",
+			})
+		),
+		reason: Type.Optional(
+			Type.String({
+				description: "Short human-readable explanation of why root is needed. Shown to the user in the password prompt.",
+			})
+		),
+		timeout: Type.Optional(
+			Type.Number({
+				description: "Timeout in milliseconds (default 120000 = 2 minutes).",
+				minimum: 1000,
+				maximum: 30 * 60 * 1000,
+			})
+		),
+	};
+
+	const sudoPromptGuidelines = [
+		"Use `sudo_exec` for any command that requires root, locally or on a remote machine. Never call `sudo` from the `bash` tool — it will be blocked.",
+		"Local root: omit `host`. Remote root: pass `host` (e.g. `user@example.com`) and only the remote root command in `command`; the remote password is cached separately from the local one.",
+		"Always pass a short human-readable `reason` explaining why root is needed. The reason is shown to the user in the password prompt.",
+	];
+
+	function renderSudoCall(args: Record<string, unknown> | undefined, theme: Theme, label: string): Text {
+		const host = typeof args?.host === "string" ? args.host : "";
+		const cmd = typeof args?.command === "string" ? args.command : "";
+		const reason = typeof args?.reason === "string" ? args.reason : undefined;
+		const target = host ? `${host}: ${truncateForDisplay(cmd, 100)}` : truncateForDisplay(cmd, 120);
+		const head = `${theme.fg("toolTitle", theme.bold(`${label} `))}${theme.fg("muted", target)}`;
+		return reason ? new Text(`${head}\n${theme.fg("dim", `  reason: ${reason}`)}`, 0, 0) : new Text(head, 0, 0);
+	}
+
+	function renderSudoResult(result: { details?: unknown }, theme: Theme): Text {
+		const details = result.details as SudoExecDetails | undefined;
+		if (!details) return new Text("", 0, 0);
+		if (details.errorMessage) {
+			return new Text(theme.fg("error", `✗ ${details.errorMessage}`), 0, 0);
+		}
+		if (details.cancelled) return new Text(theme.fg("warning", "Cancelled"), 0, 0);
+		if (details.timedOut) return new Text(theme.fg("error", "Timed out"), 0, 0);
+		const color = details.exitCode === 0 ? "success" : "error";
+		const mark = details.exitCode === 0 ? "✓" : "✗";
+		return new Text(theme.fg(color, `${mark} exit ${details.exitCode}`), 0, 0);
+	}
+
+	async function executeSudo(params: SudoExecInput, signal: AbortSignal | undefined, ctx: ExtensionContext) {
+		const command = params.command;
+		const reason = params.reason;
+		const host = params.host;
+		const timeoutMs = params.timeout ?? config.defaultTimeoutMs;
+
+		const baseDetails: SudoExecDetails = {
+			command,
+			host,
+			reason,
+			exitCode: -1,
+			stdout: "",
+			stderr: "",
+			cancelled: false,
+			timedOut: false,
+		};
+		const errorResult = (errorMessage: string) => ({
+			content: [{ type: "text" as const, text: errorMessage }],
+			details: { ...baseDetails, errorMessage },
+			isError: true,
+		});
+
+		if (!ctx.hasUI) {
+			return errorResult("sudo_exec requires an interactive UI to prompt for the password");
+		}
+
+		let sshArgs: string[] = [];
+		if (host) {
+			try {
+				sshArgs = parseSshArgs(params.sshOptions);
+			} catch (error) {
+				return errorResult(error instanceof Error ? error.message : "invalid sshOptions");
+			}
+		}
+
+		const scope = host ? `remote:${host}` : "local";
+		const outcome = await ensurePasswordAndRun(command, reason, timeoutMs, signal, ctx, scope, (pw) =>
+			host
+				? runPrivileged("ssh", [...sshArgs, host, `sudo -S -p '' -- bash -lc ${shellQuote(command)}`], pw, signal, timeoutMs)
+				: runPrivileged("sudo", ["-S", "-p", "", "--", "bash", "-lc", command], pw, signal, timeoutMs)
+		);
+
+		if ("error" in outcome) {
+			return errorResult(outcome.error);
+		}
+
+		const details: SudoExecDetails = {
+			...baseDetails,
+			exitCode: outcome.exitCode,
+			stdout: outcome.stdout,
+			stderr: outcome.stderr,
+			cancelled: outcome.cancelled,
+			timedOut: outcome.timedOut,
+		};
+
+		const where = host ? `remote sudo (${host})` : "sudo";
+		const header = outcome.cancelled
+			? `${where}: cancelled`
+			: outcome.timedOut
+				? `${where}: timed out after ${timeoutMs}ms`
+				: `${where}: exit ${outcome.exitCode}`;
+		const parts: string[] = [];
+		if (outcome.stdout) parts.push(`stdout:\n${outcome.stdout}`);
+		if (outcome.stderr) parts.push(`stderr:\n${outcome.stderr}`);
+		const body = parts.join("\n");
+		const text = body ? `${header}\n\n${body}` : header;
+
+		return {
+			content: [{ type: "text" as const, text }],
+			details,
+			isError: outcome.exitCode !== 0 || outcome.cancelled || outcome.timedOut,
+		};
+	}
+
 	pi.registerTool({
 		name: "sudo_exec",
 		label: "sudo",
 		description:
-			"Run a shell command with sudo. Prompts the user for their password through pi's UI on first use and caches it for the session's sudo timestamp window. Use this whenever you need elevated privileges instead of calling `sudo` directly from the bash tool.",
-		promptSnippet: "Run a shell command under sudo with interactive password prompting",
-		promptGuidelines: [
-			"Use `sudo_exec` for any command that requires root. Never call `sudo` from the `bash` tool — it will be blocked.",
-			"Always pass a short human-readable `reason` explaining why root is needed. The reason is shown to the user in the password prompt.",
-		],
-		parameters: Type.Object({
-			command: Type.String({
-				description: "The shell command to run under sudo. Executed via `bash -lc`, so pipes, redirects, and env vars work.",
-			}),
-			reason: Type.Optional(
-				Type.String({
-					description: "Short human-readable explanation of why root is needed. Shown to the user in the password prompt.",
-				})
-			),
-			timeout: Type.Optional(
-				Type.Number({
-					description: "Timeout in milliseconds (default 120000 = 2 minutes).",
-					minimum: 1000,
-					maximum: 30 * 60 * 1000,
-				})
-			),
-		}),
+			"Run a shell command with sudo — locally by default, or on a remote machine over SSH when `host` is given. Prompts the user for the password through pi's UI on first use and caches it per machine for the session's sudo timestamp window. Use this whenever you need elevated privileges instead of calling `sudo` directly from the bash tool.",
+		promptSnippet: "Run a shell command under sudo (local, or remote via `host`) with interactive password prompting",
+		promptGuidelines: sudoPromptGuidelines,
+		parameters: Type.Object(sudoParams),
 
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-			const command = params.command;
-			const reason = params.reason;
-			const timeoutMs = params.timeout ?? 120_000;
-
-			if (!ctx.hasUI) {
-				const details: SudoExecDetails = {
-					command,
-					reason,
-					exitCode: -1,
-					stdout: "",
-					stderr: "",
-					cancelled: false,
-					timedOut: false,
-					errorMessage: "sudo_exec requires an interactive UI to prompt for the password",
-				};
-				return {
-					content: [{ type: "text", text: details.errorMessage ?? "error" }],
-					details,
-					isError: true,
-				};
-			}
-
-			const outcome = await ensurePasswordAndRun(command, reason, timeoutMs, signal, ctx, "local", (pw) =>
-				runPrivileged("sudo", ["-S", "-p", "", "--", "bash", "-lc", command], pw, signal, timeoutMs)
-			);
-
-			if ("error" in outcome) {
-				const details: SudoExecDetails = {
-					command,
-					reason,
-					exitCode: -1,
-					stdout: "",
-					stderr: "",
-					cancelled: false,
-					timedOut: false,
-					errorMessage: outcome.error,
-				};
-				return {
-					content: [{ type: "text", text: outcome.error }],
-					details,
-					isError: true,
-				};
-			}
-
-			const details: SudoExecDetails = {
-				command,
-				reason,
-				exitCode: outcome.exitCode,
-				stdout: outcome.stdout,
-				stderr: outcome.stderr,
-				cancelled: outcome.cancelled,
-				timedOut: outcome.timedOut,
-			};
-
-			const header = outcome.cancelled
-				? "sudo: cancelled"
-				: outcome.timedOut
-					? `sudo: timed out after ${timeoutMs}ms`
-					: `sudo: exit ${outcome.exitCode}`;
-			const parts: string[] = [];
-			if (outcome.stdout) parts.push(`stdout:\n${outcome.stdout}`);
-			if (outcome.stderr) parts.push(`stderr:\n${outcome.stderr}`);
-			const body = parts.join("\n");
-			const text = body ? `${header}\n\n${body}` : header;
-
-			return {
-				content: [{ type: "text", text }],
-				details,
-				isError: outcome.exitCode !== 0 || outcome.cancelled || outcome.timedOut,
-			};
+			return executeSudo(params as SudoExecInput, signal, ctx);
 		},
 
 		renderCall(args, theme) {
-			const cmd = typeof args?.command === "string" ? args.command : "";
-			const reason = typeof args?.reason === "string" ? args.reason : undefined;
-			const head = `${theme.fg("toolTitle", theme.bold("sudo "))}${theme.fg("muted", truncateForDisplay(cmd, 120))}`;
-			const text = reason ? `${head}\n${theme.fg("dim", `  reason: ${reason}`)}` : head;
-			return new Text(text, 0, 0);
+			return renderSudoCall(args, theme, "sudo");
 		},
 
 		renderResult(result, _options, theme) {
-			const details = result.details as SudoExecDetails | undefined;
-			if (!details) return new Text("", 0, 0);
-			if (details.errorMessage) {
-				return new Text(theme.fg("error", `✗ ${details.errorMessage}`), 0, 0);
-			}
-			if (details.cancelled) return new Text(theme.fg("warning", "Cancelled"), 0, 0);
-			if (details.timedOut) return new Text(theme.fg("error", "Timed out"), 0, 0);
-			const color = details.exitCode === 0 ? "success" : "error";
-			const mark = details.exitCode === 0 ? "✓" : "✗";
-			return new Text(theme.fg(color, `${mark} exit ${details.exitCode}`), 0, 0);
+			return renderSudoResult(result, theme);
 		},
 	});
 
-	// ---- Tool: remote_sudo_exec -----------------------------------------
+	// ---- Tool: remote_sudo_exec (deprecated alias) -----------------------
+	let warnedRemoteAlias = false;
 	pi.registerTool({
 		name: "remote_sudo_exec",
 		label: "remote sudo",
 		description:
-			"Run a shell command with sudo on a remote machine over ssh. Use this for `ssh host sudo ...`; it prompts for and caches the remote sudo password separately from local sudo.",
-		promptSnippet: "Run a sudo command on a remote host over ssh with remote password prompting",
-		promptGuidelines: [
-			"Use `remote_sudo_exec` instead of `bash` commands like `ssh host sudo ...`.",
-			"Pass the SSH destination in `host` (for example `user@example.com`) and only the remote root command in `command`.",
-			"Always pass a short human-readable `reason` explaining why root is needed on the remote machine.",
-		],
+			"Deprecated alias of `sudo_exec` with `host`. Use `sudo_exec({ host, command })` instead. Runs a shell command with sudo on a remote machine over ssh; the remote sudo password is cached separately from local sudo.",
+		promptSnippet: "Deprecated: use sudo_exec with `host` instead",
+		promptGuidelines: ["Prefer `sudo_exec` with `host`. This alias exists only for backward compatibility."],
 		parameters: Type.Object({
+			...sudoParams,
 			host: Type.String({ description: "SSH destination, e.g. `server`, `user@server`, or a Host alias from ~/.ssh/config." }),
-			command: Type.String({
-				description: "Remote shell command to run under sudo. Executed remotely via `sudo -S -p '' -- bash -lc <command>`.",
-			}),
-			sshOptions: Type.Optional(
-				Type.String({
-					description: "Optional simple ssh flags, e.g. `-p 2222 -i ~/.ssh/key`. Shell metacharacters are rejected.",
-				})
-			),
-			reason: Type.Optional(Type.String({ description: "Short explanation shown in the password prompt." })),
-			timeout: Type.Optional(
-				Type.Number({
-					description: "Timeout in milliseconds (default 120000 = 2 minutes).",
-					minimum: 1000,
-					maximum: 30 * 60 * 1000,
-				})
-			),
 		}),
 
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-			const timeoutMs = params.timeout ?? 120_000;
-			if (!ctx.hasUI) {
-				return {
-					content: [{ type: "text", text: "remote_sudo_exec requires an interactive UI to prompt for the remote sudo password" }],
-					details: { host: params.host, command: params.command, errorMessage: "remote_sudo_exec requires an interactive UI" },
-					isError: true,
-				};
+			if (!warnedRemoteAlias) {
+				warnedRemoteAlias = true;
+				ctx.ui.notify("remote_sudo_exec is deprecated; use sudo_exec with `host` instead.", "info");
 			}
-
-			let sshArgs: string[];
-			try {
-				sshArgs = parseSshArgs(params.sshOptions);
-			} catch (error) {
-				const message = error instanceof Error ? error.message : "invalid sshOptions";
-				return {
-					content: [{ type: "text", text: message }],
-					details: { host: params.host, command: params.command, errorMessage: message },
-					isError: true,
-				};
-			}
-
-			const remote = `sudo -S -p '' -- bash -lc ${shellQuote(params.command)}`;
-			const scope = `remote:${params.host}`;
-			const outcome = await ensurePasswordAndRun(params.command, params.reason, timeoutMs, signal, ctx, scope, (pw) =>
-				runPrivileged("ssh", [...sshArgs, params.host, remote], pw, signal, timeoutMs)
-			);
-
-			if ("error" in outcome) {
-				return {
-					content: [{ type: "text", text: outcome.error }],
-					isError: true,
-					details: { host: params.host, command: params.command, errorMessage: outcome.error },
-				};
-			}
-
-			const header = outcome.cancelled
-				? "remote sudo: cancelled"
-				: outcome.timedOut
-					? `remote sudo: timed out after ${timeoutMs}ms`
-					: `remote sudo: exit ${outcome.exitCode}`;
-			const parts: string[] = [];
-			if (outcome.stdout) parts.push(`stdout:\n${outcome.stdout}`);
-			if (outcome.stderr) parts.push(`stderr:\n${outcome.stderr}`);
-			return {
-				content: [{ type: "text", text: parts.length > 0 ? `${header}\n\n${parts.join("\n")}` : header }],
-				details: {
-					host: params.host,
-					command: params.command,
-					exitCode: outcome.exitCode,
-					stdout: outcome.stdout,
-					stderr: outcome.stderr,
-					cancelled: outcome.cancelled,
-					timedOut: outcome.timedOut,
-				},
-				isError: outcome.exitCode !== 0 || outcome.cancelled || outcome.timedOut,
-			};
+			return executeSudo(params as SudoExecInput, signal, ctx);
 		},
 
 		renderCall(args, theme) {
-			const host = typeof args?.host === "string" ? args.host : "";
-			const cmd = typeof args?.command === "string" ? args.command : "";
-			return new Text(
-				`${theme.fg("toolTitle", theme.bold("remote sudo "))}${theme.fg("muted", `${host}: ${truncateForDisplay(cmd, 100)}`)}`,
-				0,
-				0
-			);
+			return renderSudoCall(args, theme, "remote sudo");
+		},
+
+		renderResult(result, _options, theme) {
+			return renderSudoResult(result, theme);
 		},
 	});
 

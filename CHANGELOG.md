@@ -4,6 +4,19 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-sudo: unify local and remote sudo under one sudo_exec tool
+
+- **One tool for root, local or remote.** `sudo_exec` gains optional `host`
+  and `sshOptions`: omit `host` to run locally, set it to run the command as
+  `sudo bash -lc` over the user's normal SSH setup. Passwords stay cached per
+  scope (`local` vs one entry per `remote:<host>`). The model no longer has to
+  choose between two tools — the failure mode that pushed it back toward
+  `bash ssh host sudo ...`.
+- **`remote_sudo_exec` is a deprecated alias** forwarding to `sudo_exec` with
+  `host` (one-time deprecation notice per session), so sessions loaded before
+  the change keep working; new sessions only see `sudo_exec`.
+- The bash-tool guard message now points at `sudo_exec({ host })`.
+
 ### pi-sudo: herdr blocked state, prompt timeout, configurable cache policy
 
 - **herdr blocked state.** While a sudo (local or remote) password prompt is

@@ -36,41 +36,36 @@ This extension removes the trigger by:
 
 ```ts
 sudo_exec({
-  command: string,    // shell command, run via `bash -lc`
+  command: string,    // shell command; local: bash -lc, remote: sudo bash -lc over ssh
+  host?: string,      // omit = local; set = run on this ssh destination
+  sshOptions?: string, // optional simple flags like "-p 2222 -i ~/.ssh/key" (with host)
   reason?: string,    // shown to the user in the password prompt
   timeout?: number,   // ms, default 120000, max 30min
 })
 ```
 
-On first use, pi shows a masked password prompt with the command and
-reason. The password is cached in-process for 5 minutes (matching sudo's
-default `timestamp_timeout`). Auth failures clear the cache immediately and
-retry up to three times, then return a hard error to the LLM.
+One tool for root, local or remote. Without `host` it runs locally; with
+`host` (a server, `user@server`, or `~/.ssh/config` Host alias) the command is
+executed as `sudo -S -p '' -- bash -lc <command>` over the user's normal SSH
+setup (agent, keys, config, known_hosts) — use it instead of `bash` commands
+like `ssh host sudo systemctl restart foo`.
 
-The LLM is instructed (via `promptGuidelines`) to use this tool whenever local
-root is needed. The built-in `bash` tool is guarded: any command starting with
-interactive `sudo …` is blocked with an error telling the LLM to use `sudo_exec`
-instead. `sudo -n …` (non-interactive credential check) is still allowed since it
-cannot hang.
+On first use per machine, pi shows a masked password prompt with the command
+and reason. Passwords are cached per scope — `local` and one per `remote:<host>`
+— so a remote password never mixes with the local one or with other hosts.
+Auth failures clear the scope's cache immediately and retry up to three times,
+then return a hard error to the LLM. The password is piped over stdin; it is
+never placed in argv, env, or files.
 
-### `remote_sudo_exec`
+The LLM is instructed (via `promptGuidelines`) to use this tool whenever root
+is needed. The built-in `bash` tool is guarded: interactive `sudo …` — locally
+or inside obvious `ssh … sudo` invocations — is blocked with an error pointing
+at `sudo_exec`. `sudo -n …` (non-interactive credential check) is still allowed
+since it cannot hang.
 
-```ts
-remote_sudo_exec({
-  host: string,        // ssh destination: server, user@server, or ~/.ssh/config Host
-  command: string,     // remote root command, run via sudo bash -lc
-  sshOptions?: string, // optional simple flags like "-p 2222 -i ~/.ssh/key"
-  reason?: string,     // shown to the user in the password prompt
-  timeout?: number,    // ms, default 120000, max 30min
-})
-```
-
-Use this instead of `bash` commands like `ssh host sudo systemctl restart foo`.
-The extension prompts for the remote machine's sudo password and caches it under
-`remote:<host>`, separately from the local password and from other hosts. SSH
-itself still uses the user's normal SSH setup (agent, keys, config, known_hosts).
-The sudo password is piped to the remote `sudo -S -p '' -- bash -lc <command>`
-over the SSH process stdin; it is never placed in argv, env, or files.
+`remote_sudo_exec` still exists as a deprecated alias (it forwards to
+`sudo_exec` with `host`) so sessions loaded before the unification keep
+working; new sessions only see `sudo_exec`.
 
 ## Commands
 
