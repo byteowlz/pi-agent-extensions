@@ -423,8 +423,8 @@ function isInHerdr(): boolean {
 	return process.env.HERDR_ENV === "1" && !!process.env.HERDR_SOCKET_PATH;
 }
 
-async function herdr(args: string[]): Promise<any> {
-	const { stdout } = await execFileAsync("herdr", args, { maxBuffer: 8 * 1024 * 1024 });
+async function herdr(args: string[], opts?: { timeout?: number }): Promise<any> {
+	const { stdout } = await execFileAsync("herdr", args, { maxBuffer: 8 * 1024 * 1024, ...opts });
 	const text = stdout.trim();
 	if (!text) return {};
 	try {
@@ -435,8 +435,8 @@ async function herdr(args: string[]): Promise<any> {
 }
 
 /** Run `herdr <args>` and return the raw stdout as a string, without JSON parsing. */
-async function herdrRaw(args: string[]): Promise<string> {
-	const { stdout } = await execFileAsync("herdr", args, { maxBuffer: 16 * 1024 * 1024 });
+async function herdrRaw(args: string[], opts?: { timeout?: number }): Promise<string> {
+	const { stdout } = await execFileAsync("herdr", args, { maxBuffer: 16 * 1024 * 1024, ...opts });
 	return stdout;
 }
 
@@ -909,18 +909,47 @@ const SubagentToolParamsSchema = Type.Object({
 
 // --- Confirmation with per-session allow mode -------------------------
 
+type SpawnDecision = { ok: boolean; model?: string };
+
 /**
- * Timed confirmation modal: shows the spawn detail + a live countdown and
- * auto-decides to `onTimeoutAllow` when the timeout elapses without input.
+ * Confirmation modal for subagent spawns (non-auto allow modes): shows the
+ * spawn detail, a live countdown (timeout mode only), and three actions —
+ * allow, deny, or change the subagent model via a fuzzy picker (when
+ * `modelEditable`; only the pi kind actually consumes the model).
+ * Pressing m opens the picker; Esc there returns to the confirmation with a
+ * fresh countdown. Auto-decide is suspended while the picker is open.
  */
-function timedConfirm(ctx: ExtensionContext, detail: string, timeoutMs: number, onTimeoutAllow: boolean): Promise<boolean> {
-	return ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
+function spawnConfirm(
+	ctx: ExtensionContext,
+	detail: string,
+	timeoutMs: number | null,
+	onTimeoutAllow: boolean,
+	modelEditable: boolean
+): Promise<SpawnDecision> {
+	return ctx.ui.custom<SpawnDecision>((tui, theme, _kb, done) => {
 		let settled = false;
-		const start = Date.now();
+		let deadline = timeoutMs !== null ? Date.now() + timeoutMs : null;
 		let cachedLines: string[] | undefined;
 		let timer: ReturnType<typeof setInterval> | null = null;
+		let picking = false;
 
-		function finish(v: boolean): void {
+		const search = new Input();
+		try {
+			search.focused = true;
+		} catch {
+			// focus is best-effort; input still works without it
+		}
+		interface ModelRow {
+			full: string;
+			label: string;
+			match: string;
+		}
+		let modelRows: ModelRow[] | null = null;
+		let visible: ModelRow[] = [];
+		let selected = 0;
+		const maxPickVisible = 10;
+
+		function finish(v: SpawnDecision): void {
 			if (settled) return;
 			settled = true;
 			if (timer) clearInterval(timer);
@@ -932,39 +961,161 @@ function timedConfirm(ctx: ExtensionContext, detail: string, timeoutMs: number, 
 			tui.requestRender();
 		}
 
-		timer = setInterval(() => {
-			if (settled) return;
-			if (Date.now() - start >= timeoutMs) {
-				finish(onTimeoutAllow);
-			} else {
-				refresh();
-			}
-		}, 500);
+		function armTimer(): void {
+			if (deadline === null) return;
+			if (timer) clearInterval(timer);
+			timer = setInterval(() => {
+				if (settled || picking) return;
+				if (deadline !== null && Date.now() >= deadline) {
+					finish({ ok: onTimeoutAllow });
+				} else {
+					refresh();
+				}
+			}, 500);
+		}
 
-		function handleInput(data: string): void {
+		function ensureModelRows(): void {
+			if (modelRows) return;
+			modelRows = collectModels(ctx).map((m) => {
+				const full = `${m.provider}/${m.id}`;
+				return { full, label: `${m.name}  (${full})`, match: `${m.name} ${full}` };
+			});
+			visible = modelRows;
+		}
+
+		function recomputePick(): void {
+			if (!modelRows) return;
+			const q = search.getValue().trim();
+			visible = q ? fuzzyFilter(modelRows, q, (r) => r.match) : modelRows;
+			if (selected >= visible.length) selected = Math.max(0, visible.length - 1);
+			if (selected < 0) selected = 0;
+		}
+
+		function openPicker(): void {
+			picking = true;
+			ensureModelRows();
+			search.setValue("");
+			selected = 0;
+			recomputePick();
+			refresh();
+		}
+
+		function closePicker(): void {
+			picking = false;
+			// fresh countdown: browsing the picker counts as input
+			deadline = timeoutMs !== null ? Date.now() + timeoutMs : null;
+			armTimer();
+			refresh();
+		}
+
+		armTimer();
+
+		function handleConfirmInput(data: string): boolean {
 			if (matchesKey(data, Key.escape) || data === "n" || data === "N") {
-				finish(false);
-				return;
+				finish({ ok: false });
+				return true;
 			}
 			if (matchesKey(data, Key.enter) || data === "y" || data === "Y") {
-				finish(true);
+				finish({ ok: true });
+				return true;
+			}
+			if (modelEditable && (data === "m" || data === "M")) {
+				openPicker();
+				return true;
+			}
+			return false;
+		}
+
+		function handlePickInput(data: string): void {
+			if (matchesKey(data, Key.escape)) {
+				closePicker();
 				return;
+			}
+			if (matchesKey(data, Key.up)) {
+				if (visible.length > 0) selected = (selected - 1 + visible.length) % visible.length;
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.down)) {
+				if (visible.length > 0) selected = (selected + 1) % visible.length;
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.pageUp)) {
+				selected = Math.max(0, selected - maxPickVisible);
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.pageDown)) {
+				selected = Math.min(visible.length - 1, selected + maxPickVisible);
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.enter)) {
+				const row = visible[selected];
+				if (row) finish({ ok: true, model: row.full });
+				return;
+			}
+			search.handleInput(data);
+			recomputePick();
+			refresh();
+		}
+
+		function handleInput(data: string): void {
+			if (picking) {
+				handlePickInput(data);
+			} else if (!handleConfirmInput(data)) {
+				refresh();
 			}
 		}
 
-		function render(width: number): string[] {
-			if (cachedLines) return cachedLines;
+		function renderPicker(width: number): string[] {
 			const rw = Math.max(1, width);
-			const rem = Math.max(0, Math.ceil((timeoutMs - (Date.now() - start)) / 1000));
 			const lines: string[] = [];
 			lines.push(theme.fg("accent", "─".repeat(rw)));
-			lines.push(
-				...wrapTextWithAnsi(theme.fg("accent", `Spawn subagent?  (auto-${onTimeoutAllow ? "allow" : "deny"} in ${rem}s)`), rw)
-			);
+			lines.push(...wrapTextWithAnsi(theme.fg("accent", "Change subagent model:"), rw));
+			lines.push("");
+			lines.push(...search.render(Math.max(1, rw - 2)).map((l) => ` ${l}`));
+			lines.push("");
+			if (visible.length === 0) {
+				lines.push(theme.fg("warning", "  No matching models"));
+			} else {
+				const start = Math.max(0, Math.min(selected - Math.floor(maxPickVisible / 2), visible.length - maxPickVisible));
+				const end = Math.min(start + maxPickVisible, visible.length);
+				for (let i = start; i < end; i++) {
+					const row = visible[i];
+					const isSelected = i === selected;
+					const prefix = isSelected ? theme.fg("accent", "→ ") : "  ";
+					const labelWidth = Math.max(1, rw - visibleWidth(prefix) - 2);
+					const label = truncateToWidth(row.label, labelWidth, "…");
+					lines.push(isSelected ? theme.fg("accent", `${prefix}${label}`) : prefix + label);
+				}
+				if (start > 0 || end < visible.length) lines.push(theme.fg("dim", `  (${selected + 1}/${visible.length})`));
+			}
+			lines.push("");
+			lines.push(...wrapTextWithAnsi(theme.fg("dim", "Type to fuzzy-filter • ↑↓ navigate • Enter select • Esc back"), rw));
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			return lines;
+		}
+
+		function render(width: number): string[] {
+			if (picking) return renderPicker(width);
+			if (cachedLines) return cachedLines;
+			const rw = Math.max(1, width);
+			const lines: string[] = [];
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			const countdown =
+				deadline !== null
+					? `  (auto-${onTimeoutAllow ? "allow" : "deny"} in ${Math.max(0, Math.ceil((deadline - Date.now()) / 1000))}s)`
+					: "";
+			lines.push(...wrapTextWithAnsi(theme.fg("accent", `Spawn subagent?${countdown}`), rw));
 			lines.push("");
 			lines.push(...wrapTextWithAnsi(theme.fg("muted", detail), rw));
 			lines.push("");
-			lines.push(...wrapTextWithAnsi(theme.fg("dim", "[y] allow • [n] deny • Esc deny • Enter allow"), rw));
+			const hints = ["[y] allow", "[n] deny"];
+			if (modelEditable) hints.push("[m] change model");
+			hints.push("Esc deny", "Enter allow");
+			lines.push(...wrapTextWithAnsi(theme.fg("dim", hints.join(" • ")), rw));
 			lines.push(theme.fg("accent", "─".repeat(rw)));
 			cachedLines = lines;
 			return lines;
@@ -975,14 +1126,19 @@ function timedConfirm(ctx: ExtensionContext, detail: string, timeoutMs: number, 
 }
 
 /** Decide whether a spawn is allowed, honouring the session's allow mode. */
-async function approveSpawn(ctx: ExtensionContext, config: SubagentConfig, detail: string): Promise<boolean> {
-	if (!ctx.hasUI) return true; // print/RPC mode: cannot prompt, so allow
+async function approveSpawn(
+	ctx: ExtensionContext,
+	config: SubagentConfig,
+	detail: string,
+	modelEditable: boolean
+): Promise<SpawnDecision> {
+	if (!ctx.hasUI) return { ok: true }; // print/RPC mode: cannot prompt, so allow
 	const mode = sessionAllowMode(config);
-	if (mode === "auto") return true;
-	if (mode === "confirm") return ctx.ui.confirm("Spawn subagent?", detail);
+	if (mode === "auto") return { ok: true };
+	if (mode === "confirm") return spawnConfirm(ctx, detail, null, false, modelEditable);
 	const timeout = sessionConfirmTimeout(config);
 	const decision = sessionAutoDecision(config);
-	return timedConfirm(ctx, detail, timeout, decision === "allow");
+	return spawnConfirm(ctx, detail, timeout, decision === "allow", modelEditable);
 }
 
 // --- Model / provider picker with loadouts ----------------------------
@@ -1232,9 +1388,30 @@ interface SessionMessageLike {
 	message?: { role?: string; content?: unknown };
 }
 
+/** A saved SSH machine (herdr >= 0.9.1) whose agents can be reached via `--machine`. */
+interface RelayMachine {
+	id: string;
+	label: string;
+}
+
 interface RelayTarget {
+	/** Stable unique key across local + remote targets (pane ids are scoped per server). */
+	key: string;
 	paneId: string;
 	label: string;
+	/** Set for agents living on a saved SSH machine; undefined = local server. */
+	machine?: RelayMachine;
+}
+
+interface AgentListEnvelope {
+	result?: { agents?: Array<{ pane_id?: unknown; terminal_title_stripped?: unknown; cwd?: unknown }> };
+}
+
+/** One profile from `herdr machine list --json`. */
+interface SavedMachineProfile {
+	id?: unknown;
+	label?: unknown;
+	enabled?: unknown;
 }
 
 function contentToText(content: unknown): string {
@@ -1271,25 +1448,82 @@ function getLastAgentOutput(ctx: ExtensionContext): string {
 	return "";
 }
 
-async function listRelayTargets(): Promise<RelayTarget[]> {
-	const res = (await herdr(["agent", "list"])) as
-		| { result?: { agents?: Array<{ pane_id?: unknown; terminal_title_stripped?: unknown; cwd?: unknown }> } }
-		| undefined;
-	const agents = res?.result?.agents ?? [];
-	const selfPane = process.env.HERDR_PANE_ID;
-	const seen = new Set<string>();
-	const targets: RelayTarget[] = [];
-	for (const a of agents) {
+/** Saved SSH machine profiles from `herdr machine list --json` (empty on failure/older herdr). */
+async function listSavedMachines(): Promise<SavedMachineProfile[]> {
+	let res: unknown;
+	try {
+		res = await herdr(["machine", "list", "--json"]);
+	} catch {
+		return [];
+	}
+	const wrapper = res as { endpoints?: unknown; machines?: unknown } | undefined;
+	const list: unknown = Array.isArray(res)
+		? res
+		: Array.isArray(wrapper?.endpoints)
+			? wrapper?.endpoints
+			: Array.isArray(wrapper?.machines)
+				? wrapper?.machines
+				: [];
+	return (list as unknown[]).filter((m): m is SavedMachineProfile => !!m && typeof m === "object");
+}
+
+/** herdr CLI prefix that routes commands at a relay target's machine (empty for local). */
+function relayMachineArgs(target: RelayTarget): string[] {
+	return target.machine ? ["--machine", target.machine.id] : [];
+}
+
+/** Append agents from one `agent list` envelope to the relay target list. */
+function addRelayAgents(
+	envelope: AgentListEnvelope | undefined,
+	targets: RelayTarget[],
+	seen: Set<string>,
+	labelSeen: Set<string>,
+	selfPane: string | undefined,
+	machine?: RelayMachine
+): void {
+	for (const a of envelope?.result?.agents ?? []) {
 		const paneId = a?.pane_id;
 		if (typeof paneId !== "string" || !paneId) continue;
-		if (selfPane && paneId === selfPane) continue;
+		if (!machine && selfPane && paneId === selfPane) continue;
+		const key = machine ? `${machine.id}\u241f${paneId}` : paneId;
+		if (seen.has(key)) continue;
+		seen.add(key);
 		const raw = a?.terminal_title_stripped || a?.cwd;
 		let label = typeof raw === "string" && raw.trim() ? raw.trim() : paneId;
-		if (seen.has(label)) label = `${label} (${paneId})`;
-		seen.add(label);
-		targets.push({ paneId, label });
+		if (machine) label = `${machine.label}: ${label}`;
+		if (labelSeen.has(label)) label = `${label} (${paneId})`;
+		labelSeen.add(label);
+		targets.push({ key, paneId, label, machine });
 	}
-	return targets;
+}
+
+async function listRelayTargets(): Promise<{ targets: RelayTarget[]; warnings: string[] }> {
+	const selfPane = process.env.HERDR_PANE_ID;
+	const seen = new Set<string>();
+	const labelSeen = new Set<string>();
+	const targets: RelayTarget[] = [];
+	const warnings: string[] = [];
+
+	try {
+		addRelayAgents((await herdr(["agent", "list"])) as AgentListEnvelope | undefined, targets, seen, labelSeen, selfPane);
+	} catch (err) {
+		warnings.push(`local agents: ${(err as Error)?.message ?? err}`);
+	}
+
+	// Remote agents: one `--machine agent list` per enabled saved SSH machine.
+	for (const m of await listSavedMachines()) {
+		const id = typeof m.id === "string" ? m.id : "";
+		if (!id || m.enabled === false) continue;
+		const label = typeof m.label === "string" && m.label.trim() ? m.label.trim() : id;
+		try {
+			const envelope = (await herdr(["--machine", id, "agent", "list"], { timeout: 30_000 })) as AgentListEnvelope | undefined;
+			addRelayAgents(envelope, targets, seen, labelSeen, selfPane, { id, label });
+		} catch (err) {
+			warnings.push(`${label}: ${(err as Error)?.message ?? err}`);
+		}
+	}
+
+	return { targets, warnings };
 }
 
 function composeRelayMessage(note: string, output: string): string {
@@ -1301,7 +1535,7 @@ function composeRelayMessage(note: string, output: string): string {
  * Fuzzy target picker: a search box + fuzzy-filtered list.
  * Search matches characters in order (case-insensitive) against the target's
  * terminal title and pane id, scored and ranked.
- * Returns the chosen pane id, or null on cancel.
+ * Returns the chosen target key, or null on cancel.
  */
 async function fuzzyTargetPicker(ctx: ExtensionContext, targets: RelayTarget[]): Promise<string | null> {
 	interface Row {
@@ -1309,7 +1543,7 @@ async function fuzzyTargetPicker(ctx: ExtensionContext, targets: RelayTarget[]):
 		label: string;
 		match: string;
 	}
-	const all: Row[] = targets.map((t) => ({ value: t.paneId, label: t.label, match: `${t.label} ${t.paneId}` }));
+	const all: Row[] = targets.map((t) => ({ value: t.key, label: t.label, match: `${t.label} ${t.paneId}` }));
 
 	return ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
 		const search = new Input();
@@ -1508,14 +1742,18 @@ async function runSend(ctx: ExtensionContext, pi: ExtensionAPI): Promise<void> {
 		ctx.ui.notify("No recent assistant output found to send.", "warning");
 		return;
 	}
-	const targets = await listRelayTargets();
+	const { targets, warnings } = await listRelayTargets();
 	if (targets.length === 0) {
-		ctx.ui.notify("No other herdr agents found to send to.", "warning");
+		const why = warnings.length ? ` (${warnings[0]})` : "";
+		ctx.ui.notify(`No other herdr agents found to send to.${why}`, "warning");
 		return;
+	}
+	if (warnings.length > 0) {
+		ctx.ui.notify(`Some targets skipped: ${warnings.join(" • ")}`.slice(0, 300), "warning");
 	}
 	const chosen = await fuzzyTargetPicker(ctx, targets);
 	if (!chosen) return;
-	const target = targets.find((t) => t.paneId === chosen);
+	const target = targets.find((t) => t.key === chosen);
 	if (!target) return;
 
 	const result = await relayModal(ctx, target, output);
@@ -1529,7 +1767,7 @@ async function runSend(ctx: ExtensionContext, pi: ExtensionAPI): Promise<void> {
 		if (result.inject) {
 			await injectResponseBack(ctx, pi, target, message);
 		} else {
-			await herdr(["agent", "prompt", target.paneId, message]);
+			await herdr([...relayMachineArgs(target), "agent", "prompt", target.paneId, message], { timeout: 120_000 });
 			ctx.ui.notify(`Sent to ${target.label}.`, "info");
 		}
 	} catch (err) {
@@ -1542,9 +1780,12 @@ async function runSend(ctx: ExtensionContext, pi: ExtensionAPI): Promise<void> {
  * and feed that response back into the *sending* session as a steer/follow-up.
  */
 async function injectResponseBack(ctx: ExtensionContext, pi: ExtensionAPI, target: RelayTarget, message: string): Promise<void> {
+	const machineArgs = relayMachineArgs(target);
 	ctx.ui.notify(`Sent to ${target.label}; waiting for its response…`, "info");
 	try {
-		await herdr(["agent", "prompt", target.paneId, message, "--wait", "--timeout", "600000"]);
+		await herdr([...machineArgs, "agent", "prompt", target.paneId, message, "--wait", "--timeout", "600000"], {
+			timeout: 660_000,
+		});
 	} catch (err) {
 		ctx.ui.notify(
 			`Prompt delivered to ${target.label} but waiting failed: ${(err as Error)?.message ?? err}. Still reading its output.`,
@@ -1552,7 +1793,10 @@ async function injectResponseBack(ctx: ExtensionContext, pi: ExtensionAPI, targe
 		);
 	}
 
-	const raw = await herdrRaw(["agent", "read", target.paneId, "--source", "recent", "--lines", "300", "--format", "text"]);
+	const raw = await herdrRaw(
+		[...machineArgs, "agent", "read", target.paneId, "--source", "recent", "--lines", "300", "--format", "text"],
+		{ timeout: 60_000 }
+	);
 	const response = raw.trim();
 	if (!response) {
 		ctx.ui.notify(`Could not read a response from ${target.label}.`, "warning");
@@ -1796,8 +2040,11 @@ export default function herdrTools(pi: ExtensionAPI) {
 			const cwd = params.cwd ?? ctx.cwd;
 			const label = params.tabLabel ?? (params.task.replace(/\s+/g, " ").slice(0, 28).trim() || "subagent");
 			const detail = `Tab: ${label}\nKind: ${kind}\nModel: ${model}\nCwd: ${cwd}\n\nTask:\n${params.task.slice(0, 400)}${params.task.length > 400 ? "\n…" : ""}`;
-			const ok = await approveSpawn(ctx, config, detail);
-			if (!ok) return { content: [{ type: "text", text: "Spawn cancelled by the user." }], details: { spawned: false } };
+			const approval = await approveSpawn(ctx, config, detail, kind === "pi");
+			if (!approval.ok) {
+				return { content: [{ type: "text", text: "Spawn cancelled by the user." }], details: { spawned: false } };
+			}
+			if (approval.model) model = approval.model;
 
 			const name = randomName();
 			const tabRes = await herdr(["tab", "create", "--label", label, "--cwd", cwd, "--no-focus"]);
