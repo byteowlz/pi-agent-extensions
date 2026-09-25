@@ -1399,13 +1399,34 @@ interface RelayTarget {
 	key: string;
 	paneId: string;
 	label: string;
+	/** Picker section: workspace/repo label (local) or machine + workspace (remote). */
+	group: string;
 	/** Set for agents living on a saved SSH machine; undefined = local server. */
 	machine?: RelayMachine;
 }
 
 interface AgentListEnvelope {
-	result?: { agents?: Array<{ pane_id?: unknown; terminal_title_stripped?: unknown; cwd?: unknown }> };
+	result?: {
+		agents?: Array<{
+			pane_id?: unknown;
+			tab_id?: unknown;
+			workspace_id?: unknown;
+			terminal_title_stripped?: unknown;
+			cwd?: unknown;
+		}>;
+	};
 }
+
+interface TabListEnvelope {
+	result?: { tabs?: Array<{ tab_id?: unknown; label?: unknown }> };
+}
+
+interface WorkspaceListEnvelope {
+	result?: { workspaces?: Array<{ workspace_id?: unknown; label?: unknown }> };
+}
+
+/** id → label map for tabs/workspaces, fetched fresh on every /send. */
+type LabelMap = Map<string, string>;
 
 /** One profile from `herdr machine list --json`. */
 interface SavedMachineProfile {
@@ -1472,6 +1493,38 @@ function relayMachineArgs(target: RelayTarget): string[] {
 	return target.machine ? ["--machine", target.machine.id] : [];
 }
 
+/** Tab id → tab label, fresh from `herdr tab list` (empty on failure; labels are best-effort). */
+async function fetchTabLabels(args: string[]): Promise<LabelMap> {
+	const out: LabelMap = new Map();
+	try {
+		const res = (await herdr([...args, "tab", "list"])) as TabListEnvelope | undefined;
+		for (const t of res?.result?.tabs ?? []) {
+			if (typeof t?.tab_id === "string" && typeof t?.label === "string" && t.label.trim()) {
+				out.set(t.tab_id, t.label.trim());
+			}
+		}
+	} catch {
+		// fall back to terminal titles
+	}
+	return out;
+}
+
+/** Workspace id → workspace label (usually the repo/dir name), fresh from `herdr workspace list`. */
+async function fetchWorkspaceLabels(args: string[]): Promise<LabelMap> {
+	const out: LabelMap = new Map();
+	try {
+		const res = (await herdr([...args, "workspace", "list"])) as WorkspaceListEnvelope | undefined;
+		for (const w of res?.result?.workspaces ?? []) {
+			if (typeof w?.workspace_id === "string" && typeof w?.label === "string" && w.label.trim()) {
+				out.set(w.workspace_id, w.label.trim());
+			}
+		}
+	} catch {
+		// fall back to the cwd basename
+	}
+	return out;
+}
+
 /** Append agents from one `agent list` envelope to the relay target list. */
 function addRelayAgents(
 	envelope: AgentListEnvelope | undefined,
@@ -1479,6 +1532,8 @@ function addRelayAgents(
 	seen: Set<string>,
 	labelSeen: Set<string>,
 	selfPane: string | undefined,
+	tabLabels: LabelMap,
+	wsLabels: LabelMap,
 	machine?: RelayMachine
 ): void {
 	for (const a of envelope?.result?.agents ?? []) {
@@ -1489,11 +1544,18 @@ function addRelayAgents(
 		if (seen.has(key)) continue;
 		seen.add(key);
 		const raw = a?.terminal_title_stripped || a?.cwd;
-		let label = typeof raw === "string" && raw.trim() ? raw.trim() : paneId;
+		const title = typeof raw === "string" && raw.trim() ? raw.trim() : paneId;
+		// The herdr tab label is the name the user actually set; terminal titles go stale.
+		const tabLabel = typeof a?.tab_id === "string" ? tabLabels.get(a.tab_id) : undefined;
+		let label = tabLabel && tabLabel !== title ? `${tabLabel} — ${title}` : title;
 		if (machine) label = `${machine.label}: ${label}`;
 		if (labelSeen.has(label)) label = `${label} (${paneId})`;
 		labelSeen.add(label);
-		targets.push({ key, paneId, label, machine });
+		const cwd = typeof a?.cwd === "string" ? a.cwd : "";
+		const cwdBase = cwd ? (cwd.split("/").pop() ?? cwd) : "";
+		const ws = typeof a?.workspace_id === "string" ? (wsLabels.get(a.workspace_id) ?? cwdBase) : cwdBase;
+		const group = machine ? `${machine.label}/${ws || "remote"}` : ws;
+		targets.push({ key, paneId, label, group, machine });
 	}
 }
 
@@ -1505,7 +1567,18 @@ async function listRelayTargets(): Promise<{ targets: RelayTarget[]; warnings: s
 	const warnings: string[] = [];
 
 	try {
-		addRelayAgents((await herdr(["agent", "list"])) as AgentListEnvelope | undefined, targets, seen, labelSeen, selfPane);
+		// Titles/labels are pulled fresh on every /send; terminal titles can go stale
+		// (agents only update them on certain events), so tab labels take precedence.
+		const [tabLabels, wsLabels] = await Promise.all([fetchTabLabels([]), fetchWorkspaceLabels([])]);
+		addRelayAgents(
+			(await herdr(["agent", "list"])) as AgentListEnvelope | undefined,
+			targets,
+			seen,
+			labelSeen,
+			selfPane,
+			tabLabels,
+			wsLabels
+		);
 	} catch (err) {
 		warnings.push(`local agents: ${(err as Error)?.message ?? err}`);
 	}
@@ -1516,8 +1589,10 @@ async function listRelayTargets(): Promise<{ targets: RelayTarget[]; warnings: s
 		if (!id || m.enabled === false) continue;
 		const label = typeof m.label === "string" && m.label.trim() ? m.label.trim() : id;
 		try {
-			const envelope = (await herdr(["--machine", id, "agent", "list"], { timeout: 30_000 })) as AgentListEnvelope | undefined;
-			addRelayAgents(envelope, targets, seen, labelSeen, selfPane, { id, label });
+			const mArgs = ["--machine", id];
+			const [mTabs, mWs] = await Promise.all([fetchTabLabels(mArgs), fetchWorkspaceLabels(mArgs)]);
+			const envelope = (await herdr([...mArgs, "agent", "list"], { timeout: 30_000 })) as AgentListEnvelope | undefined;
+			addRelayAgents(envelope, targets, seen, labelSeen, selfPane, mTabs, mWs, { id, label });
 		} catch (err) {
 			warnings.push(`${label}: ${(err as Error)?.message ?? err}`);
 		}
@@ -1540,10 +1615,33 @@ function composeRelayMessage(note: string, output: string): string {
 async function fuzzyTargetPicker(ctx: ExtensionContext, targets: RelayTarget[]): Promise<string | null> {
 	interface Row {
 		value: string;
+		pane: string;
 		label: string;
 		match: string;
+		group: string;
 	}
-	const all: Row[] = targets.map((t) => ({ value: t.key, label: t.label, match: `${t.label} ${t.paneId}` }));
+	const sorted = [...targets].sort((a, b) => a.group.localeCompare(b.group) || a.label.localeCompare(b.label));
+	const all: Row[] = sorted.map((t) => ({
+		value: t.key,
+		pane: t.paneId,
+		label: t.label,
+		match: `${t.label} ${t.paneId}`,
+		group: t.group,
+	}));
+	type Item = { kind: "header"; label: string } | { kind: "row"; row: Row };
+
+	function buildItems(rows: Row[]): Item[] {
+		const items: Item[] = [];
+		let last: string | null = null;
+		for (const r of rows) {
+			if (r.group !== last) {
+				items.push({ kind: "header", label: r.group });
+				last = r.group;
+			}
+			items.push({ kind: "row", row: r });
+		}
+		return items;
+	}
 
 	return ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
 		const search = new Input();
@@ -1554,7 +1652,7 @@ async function fuzzyTargetPicker(ctx: ExtensionContext, targets: RelayTarget[]):
 		}
 		let visible: Row[] = all;
 		let selected = 0;
-		const maxVisible = Math.max(1, Math.min(all.length, 16));
+		const maxListLines = Math.max(1, Math.min(all.length + Math.max(1, new Set(all.map((r) => r.group)).size), 22));
 		let cachedLines: string[] | undefined;
 
 		function recompute(query: string): void {
@@ -1579,11 +1677,11 @@ async function fuzzyTargetPicker(ctx: ExtensionContext, targets: RelayTarget[]):
 				return true;
 			}
 			if (matchesKey(data, Key.pageUp)) {
-				selected = Math.max(0, selected - maxVisible);
+				selected = Math.max(0, selected - maxListLines);
 				return true;
 			}
 			if (matchesKey(data, Key.pageDown)) {
-				selected = Math.min(visible.length - 1, selected + maxVisible);
+				selected = Math.min(visible.length - 1, selected + maxListLines);
 				return true;
 			}
 			if (matchesKey(data, Key.enter)) {
@@ -1612,10 +1710,39 @@ async function fuzzyTargetPicker(ctx: ExtensionContext, targets: RelayTarget[]):
 
 		function renderRow(row: Row, isSelected: boolean, width: number): string {
 			const prefix = isSelected ? theme.fg("accent", "→ ") : "  ";
-			const pane = theme.fg("muted", `  [${row.value}]`);
+			const pane = theme.fg("muted", `  [${row.pane}]`);
 			const labelWidth = Math.max(1, width - visibleWidth(prefix) - visibleWidth(pane));
 			const label = truncateToWidth(row.label, labelWidth, "…");
 			return isSelected ? theme.fg("accent", `${prefix}${label}`) + pane : prefix + label + pane;
+		}
+
+		function renderList(rw: number, lines: string[]): void {
+			if (visible.length === 0) {
+				lines.push(theme.fg("warning", "  No matching agents"));
+				return;
+			}
+			const items = buildItems(visible);
+			const selectedValue = visible[selected]?.value;
+			let selItem = 0;
+			for (let i = 0; i < items.length; i++) {
+				const item = items[i];
+				if (item.kind === "row" && item.row.value === selectedValue) {
+					selItem = i;
+					break;
+				}
+			}
+			let start = Math.max(0, Math.min(selItem - Math.floor(maxListLines / 2), items.length - maxListLines));
+			const end = Math.min(start + maxListLines, items.length);
+			start = Math.max(0, end - maxListLines);
+			for (let i = start; i < end; i++) {
+				const item = items[i];
+				if (item.kind === "header") {
+					lines.push(theme.fg("accent", `▾ ${item.label}`));
+				} else {
+					lines.push(renderRow(item.row, item.row.value === selectedValue, rw));
+				}
+			}
+			if (start > 0 || end < items.length) lines.push(theme.fg("dim", `  (${selected + 1}/${visible.length} targets)`));
 		}
 
 		function render(width: number): string[] {
@@ -1627,14 +1754,7 @@ async function fuzzyTargetPicker(ctx: ExtensionContext, targets: RelayTarget[]):
 			lines.push("");
 			lines.push(...search.render(Math.max(1, rw - 2)).map((l) => ` ${l}`));
 			lines.push("");
-			if (visible.length === 0) {
-				lines.push(theme.fg("warning", "  No matching agents"));
-			} else {
-				const start = Math.max(0, Math.min(selected - Math.floor(maxVisible / 2), visible.length - maxVisible));
-				const end = Math.min(start + maxVisible, visible.length);
-				for (let i = start; i < end; i++) lines.push(renderRow(visible[i], i === selected, rw));
-				if (start > 0 || end < visible.length) lines.push(theme.fg("dim", `  (${selected + 1}/${visible.length})`));
-			}
+			renderList(rw, lines);
 			lines.push("");
 			lines.push(
 				...wrapTextWithAnsi(

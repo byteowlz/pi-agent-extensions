@@ -29,6 +29,13 @@ All notable changes to pi-agent-extensions will be documented in this file.
   pane ids collide across machines. Requires herdr >= 0.9.1 locally and on the
   remote; machines that fail to answer are skipped with a warning instead of
   blocking the picker, and never fall back to Local.
+- **/send picker: workspace sections + real tab labels.** Targets are grouped
+  under `▾ workspace` headers (repo/dir label from `herdr workspace list`;
+  remote machines group as `machine/repo`), sorted by group. Rows are labelled
+  `tab label — terminal title` and everything (agents, tab labels, workspace
+  labels) is fetched fresh on every /send, so renamed tabs like
+  "kompressor model training" are findable even when the agent's terminal
+  title is stale. The viewport grew to ~22 lines with a visible target count.
 - **Change the subagent model at the spawn prompt.** In `confirm` and `timeout`
   allow modes, the spawn confirmation now offers a third action besides
   allow/deny: press `m` to fuzzy-pick a different model from all available

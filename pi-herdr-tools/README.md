@@ -221,8 +221,12 @@ pick up where this one left off:
 Flow:
 
 1. grabs the most recent assistant output from the current session
-2. opens a **fuzzy picker** (search box + fuzzy-filtered list) of the other live
-   herdr agents (identified by pane): type to filter, ↑↓ to navigate, Enter to pick
+2. gathers the other live herdr agents **fresh on every run** (agent, tab and
+   workspace lists) and opens a **fuzzy picker** grouped by workspace/repo
+   (`▾ kompressor`, `▾ govnr`, …; remote machines group as `machine/repo`),
+   type to filter, ↑↓ to navigate, PgUp/PgDn to page, Enter to pick. Rows are
+   labelled `tab label — terminal title` since terminal titles can go stale
+   while tab labels are what you actually named them
 3. shows a compose box with a preview of the output; type an optional note
 4. sends `note + output` to the target via `herdr agent prompt <pane> "…"`
 
