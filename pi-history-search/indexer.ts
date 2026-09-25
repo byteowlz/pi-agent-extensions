@@ -310,6 +310,35 @@ function tx(db: SqlDatabase, fn: () => void): void {
 	}
 }
 
+function tableExists(db: SqlDatabase, name: string): boolean {
+	try {
+		const row = db
+			.prepare("SELECT 1 AS x FROM sqlite_master WHERE type IN ('table','virtual') AND name = ?")
+			.get(name) as unknown as { x?: number } | undefined;
+		return !!row;
+	} catch {
+		return false;
+	}
+}
+
+/** Create the FTS5 virtual table, trying progressively simpler tokenizers. */
+function createFtsTable(db: SqlDatabase): boolean {
+	const variants = [
+		"content, session_path UNINDEXED, role UNINDEXED, msg_index UNINDEXED, tokenize='porter unicode61'",
+		"content, session_path UNINDEXED, role UNINDEXED, msg_index UNINDEXED, tokenize='unicode61'",
+		"content, session_path UNINDEXED, role UNINDEXED, msg_index UNINDEXED",
+	];
+	for (const cols of variants) {
+		try {
+			db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(${cols})`);
+			if (tableExists(db, "messages_fts")) return true;
+		} catch {
+			// try the next tokenizer variant
+		}
+	}
+	return false;
+}
+
 function initSchema(db: SqlDatabase): void {
 	db.exec("PRAGMA journal_mode = WAL");
 	db.exec("PRAGMA synchronous = NORMAL");
@@ -322,16 +351,9 @@ function initSchema(db: SqlDatabase): void {
 			mtime_ms INTEGER NOT NULL,
 			first_user_message TEXT
 		);
-		CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-			content,
-			session_path UNINDEXED,
-			role UNINDEXED,
-			msg_index UNINDEXED,
-			tokenize='porter unicode61'
-		);
 		CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 	`);
-	// Migration: add session_name column if missing (additive, safe on existing indexes).
+	createFtsTable(db);
 }
 
 /** Idempotent schema migrations. Safe to call repeatedly; cheap (a PRAGMA probe). */
@@ -362,13 +384,24 @@ function openDb(projDir: string, mode: "rw" | "ro"): SqlDatabase | null {
 			const db = opener(dbPath, false);
 			initSchema(db);
 			migrateSchema(db);
+			// A DB that lacks the FTS table (partial/broken earlier build) is unusable;
+			// fall back to a live scan rather than crash on a query.
+			if (!tableExists(db, "messages_fts")) {
+				try {
+					db.close();
+				} catch {
+					// ignore
+				}
+				return null;
+			}
 			openDbs.set(dbPath, { db, writable: true });
 			return db;
 		}
 		if (!fs.existsSync(dbPath)) return null;
 		const db = opener(dbPath, true);
-		if (!hasIndexSchema(db)) {
-			// Leftover/empty index file: querying it would only produce "no such table".
+		// Read-only handles must have the FTS table; otherwise treat as unavailable
+		// so callers fall back to a live scan instead of hitting "no such table".
+		if (!tableExists(db, "messages_fts")) {
 			try {
 				db.close();
 			} catch {
@@ -392,16 +425,6 @@ export function closeAll(): void {
 		}
 	}
 	openDbs.clear();
-}
-
-/** Does this database actually contain the index schema? (Rejects 0-byte/leftover files.) */
-function hasIndexSchema(db: SqlDatabase): boolean {
-	try {
-		const row = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'").get();
-		return !!row;
-	} catch {
-		return false;
-	}
 }
 
 // ── Incremental indexing (current project, read-write) ───────────────
@@ -705,7 +728,7 @@ export async function searchProject(
 		try {
 			return searchDb(ro, project, query, limit, config.snippetsPerSession, roleFilter, allowedSessionIds);
 		} catch {
-			// broken index: fall through to the live scan
+			// fall through to a live scan if the index is unusable
 		}
 	}
 	return scanProject(projDir, project, query, limit, config.snippetsPerSession, roleFilter, allowedSessionIds);
@@ -726,7 +749,13 @@ export function queryProject(
 	const project = prettyProject(path.basename(projDir));
 	// Prefer a writable handle so migrations run even on first query; fall back to RO.
 	const db = openDb(projDir, "rw") ?? openDb(projDir, "ro");
-	if (db) return searchDb(db, project, query, limit, config.snippetsPerSession, roleFilter);
+	if (db) {
+		try {
+			return searchDb(db, project, query, limit, config.snippetsPerSession, roleFilter);
+		} catch {
+			// fall through to a live scan if the index is unusable
+		}
+	}
 	return scanProject(projDir, project, query, limit, config.snippetsPerSession, roleFilter);
 }
 
