@@ -4,65 +4,42 @@ A Pi extension that provides todo management tools compatible with Oqto's fronte
 
 ## Overview
 
-This extension provides a drop-in replacement for OpenCode's `todowrite` and `todoread` tools. Todos created through these tools are automatically displayed in Oqto's right sidebar panel.
+This extension provides a single unified `Todo` tool for managing the task list, plus an interactive `/todo` command. Todos created through these are automatically displayed in Oqto's right sidebar panel.
 
 ## Tools
 
-### `todowrite`
+### `Todo`
 
-Write/replace the entire todo list. This is the primary tool for task planning.
+One tool for the whole todo lifecycle. `action` selects the operation:
 
-```json
-{
-  "todos": [
-    {
-      "content": "Implement authentication",
-      "status": "in_progress",
-      "priority": "high"
-    },
-    {
-      "content": "Write unit tests",
-      "status": "pending",
-      "priority": "medium"
-    }
-  ]
-}
-```
-
-### `todoread`
-
-Read the current todo list with optional filtering.
+- **write** - Replace the entire list at once
+- **read** - List todos (optionally filtered by status/priority)
+- **add** - Add a new todo
+- **update** - Modify an existing todo by id
+- **remove** - Delete a todo by id
+- **clear** - Empty the list
 
 ```json
-{
-  "filter": {
-    "status": "pending",
-    "priority": "high"
-  }
-}
-```
+// Replace the whole list (write)
+{ "action": "write", "todos": [
+  { "content": "Implement authentication", "status": "in_progress", "priority": "high" },
+  { "content": "Write unit tests", "status": "pending", "priority": "medium" }
+] }
 
-### `todo`
+// Read, optionally filtered
+{ "action": "read", "filter": { "status": "pending", "priority": "high" } }
 
-Unified tool for incremental todo operations:
-
-- **add**: Add a new todo
-- **update**: Update an existing todo by ID
-- **remove**: Remove a todo by ID
-- **list**: List all todos
-
-```json
 // Add
 { "action": "add", "content": "New task", "priority": "high" }
 
-// Update
+// Update by id
 { "action": "update", "id": "abc123", "status": "completed" }
 
-// Remove
+// Remove by id
 { "action": "remove", "id": "abc123" }
 
-// List
-{ "action": "list" }
+// Clear
+{ "action": "clear" }
 ```
 
 ## Todo Structure
@@ -78,12 +55,13 @@ interface TodoItem {
 
 ## Frontend Integration
 
-The Oqto frontend automatically parses `todowrite` tool calls and displays todos in the right sidebar panel. The frontend looks for tool calls with:
-- Name containing "todo" or exactly "todowrite"/"todoread"
+The Oqto frontend automatically parses `Todo` tool calls and displays todos in the right sidebar panel. The frontend looks for tool calls with:
+- Name containing "todo"
 - Input containing a `todos` array with the expected structure
 
 ## Commands
 
+- `/todo` - Interactive menu to add, start, complete, cancel, edit, delete, or clear todos
 - `/todos` - Display current todos in the notification area
 
 ## Configuration
@@ -140,9 +118,8 @@ Todos are stored as JSON files in `.pi/todos/`:
 
 ## Compatibility
 
-This extension is designed to be compatible with:
-- OpenCode's `todowrite` and `todoread` tools
+This extension is compatible with:
 - Oqto's frontend todo panel
 - Pi's extension system
 
-The output format matches exactly what Oqto's frontend expects, ensuring seamless integration.
+The `Todo` tool output format matches exactly what Oqto's frontend expects, ensuring seamless integration.

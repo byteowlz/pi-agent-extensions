@@ -1,8 +1,9 @@
 /**
  * Oqto Todos Extension for Pi
  *
- * Provides a todowrite tool that integrates with Oqto's frontend todo panel.
- * This is a drop-in replacement for OpenCode's todowrite/todoread tools.
+ * Provides a single unified `Todo` tool that integrates with Oqto's frontend
+ * todo panel. It supports write/read/add/update/remove/clear actions so the
+ * whole todo lifecycle lives under one tool.
  *
  * The tool outputs todos in a format that Oqto's frontend parses and displays
  * in the right sidebar panel, matching the expected TodoItem structure.
@@ -76,31 +77,40 @@ const TODO_PRIORITIES = ["high", "medium", "low"] as const;
 // Tool Parameters
 // ============================================================================
 
-const TodoWriteParams = Type.Object({
-	todos: Type.Array(
-		Type.Object({
-			id: Type.Optional(Type.String({ description: "Unique identifier (auto-generated if not provided)" })),
-			content: Type.String({ description: "Task description" }),
-			status: StringEnum(TODO_STATUSES, { description: "Task status" }),
-			priority: Type.Optional(StringEnum(TODO_PRIORITIES, { description: "Task priority (default: medium)" })),
-		}),
-		{ description: "List of todos to write (replaces existing list)" }
-	),
-});
+const TodoParams = Type.Object({
+	action: StringEnum(["write", "read", "add", "update", "remove", "clear"] as const),
 
-const TodoReadParams = Type.Object({
+	// write: complete list replacement
+	todos: Type.Optional(
+		Type.Array(
+			Type.Object({
+				id: Type.Optional(Type.String({ description: "Unique identifier (auto-generated if not provided)" })),
+				content: Type.String({ description: "Task description" }),
+				status: Type.Optional(StringEnum(TODO_STATUSES, { description: "Task status (default: pending)" })),
+				priority: Type.Optional(StringEnum(TODO_PRIORITIES, { description: "Task priority (default: medium)" })),
+			}),
+			{ description: "Complete list of todos (replaces existing list, for action 'write')" }
+		)
+	),
+
+	// read: optional filtering
 	filter: Type.Optional(
 		Type.Object({
 			status: Type.Optional(StringEnum(TODO_STATUSES, { description: "Filter by status" })),
 			priority: Type.Optional(StringEnum(TODO_PRIORITIES, { description: "Filter by priority" })),
 		})
 	),
-});
 
-// Unused but kept for reference:
-// const TodoUpdateParams = Type.Object({ ... });
-// const TodoAddParams = Type.Object({ ... });
-// const TodoRemoveParams = Type.Object({ ... });
+	// add: new todo content
+	content: Type.Optional(Type.String({ description: "Task description (for add)" })),
+
+	// add/update
+	status: Type.Optional(StringEnum(TODO_STATUSES)),
+	priority: Type.Optional(StringEnum(TODO_PRIORITIES)),
+
+	// update/remove
+	id: Type.Optional(Type.String({ description: "Todo ID (for update/remove)" })),
+});
 
 // ============================================================================
 // Config Loading
@@ -477,7 +487,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 			if (store.todos.length === 0) return;
 
 			const todosText = formatTodosForSummary(store.todos);
-			const content = `## Active To-Do List\n${todosText}\n\nKeep using the TodoWrite / TodoRead / Todo tools to track and update this list as you work.`;
+			const content = `## Active To-Do List\n${todosText}\n\nKeep using the Todo tool to track and update this list as you work.`;
 
 			// triggerTurn: false appends the message to the session and the LLM
 			// context without starting a new turn.
@@ -495,175 +505,125 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 	});
 
 	// ==========================================================================
-	// TodoWrite - Main tool for writing todos (matches OpenCode format)
-	// ==========================================================================
-	pi.registerTool({
-		name: "TodoWrite",
-		label: "Todo Write",
-		description:
-			"Write a list of todos that will be displayed in the Oqto frontend panel. " +
-			"This replaces the entire todo list. Use for task planning and tracking. " +
-			"Todos have: content (task description), status (pending/in_progress/completed/cancelled), " +
-			"priority (high/medium/low). The frontend displays these in a dedicated panel.\n\n" +
-			"IMPORTANT: Keep the todo list current throughout the session. When you complete a task, " +
-			"immediately rewrite the full list with that task's status set to 'completed'. " +
-			"When you start working on a task, set it to 'in_progress'. " +
-			"The user watches this panel to track your progress in real time.",
-		parameters: TodoWriteParams,
-
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const config = loadConfig(ctx.cwd);
-			if (!config.enabled) {
-				return {
-					content: [{ type: "text", text: "Todos extension is disabled" }],
-					details: { action: "write", error: "disabled" },
-				};
-			}
-
-			const sessionId = getSessionId(ctx);
-
-			// Normalize all todos
-			const normalizedTodos = params.todos.map((t) => normalizeTodo(t));
-
-			// Save to storage
-			saveTodos(ctx.cwd, config, normalizedTodos, sessionId);
-			_currentTodos = normalizedTodos;
-			updateWidget(ctx);
-
-			// Return in format that Oqto frontend expects
-			return {
-				content: [
-					{
-						type: "text",
-						text: JSON.stringify({ todos: normalizedTodos }, null, 2),
-					},
-				],
-				details: { action: "write", todos: normalizedTodos },
-			};
-		},
-
-		renderCall(args, theme) {
-			try {
-				const todos = (args.todos as Array<{ content?: string }>) || [];
-				const count = todos.length;
-				return new Text(theme.fg("toolTitle", theme.bold("TodoWrite ")) + theme.fg("muted", `(${count} items)`), 0, 0);
-			} catch {
-				return new Text("TodoWrite", 0, 0);
-			}
-		},
-
-		renderResult(result, { expanded }, theme) {
-			try {
-				const details = result.details as { todos?: TodoItem[]; error?: string } | undefined;
-
-				if (details?.error) {
-					return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
-				}
-
-				const todos = details?.todos || [];
-				return new Text(renderTodoList(todos, theme, expanded), 0, 0);
-			} catch {
-				return new Text("(render error)", 0, 0);
-			}
-		},
-	});
-
-	// ==========================================================================
-	// TodoRead - Read current todos
-	// ==========================================================================
-	pi.registerTool({
-		name: "TodoRead",
-		label: "Todo Read",
-		description: "Read the current list of todos with optional filtering by status or priority.",
-		parameters: TodoReadParams,
-
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const config = loadConfig(ctx.cwd);
-			if (!config.enabled) {
-				return {
-					content: [{ type: "text", text: "Todos extension is disabled" }],
-					details: { action: "read", error: "disabled" },
-				};
-			}
-
-			const sessionId = getSessionId(ctx);
-			const store = loadTodos(ctx.cwd, config, sessionId);
-			let todos = store.todos;
-
-			// Apply filters
-			if (params.filter) {
-				if (params.filter.status) {
-					todos = todos.filter((t) => t.status === params.filter?.status);
-				}
-				if (params.filter.priority) {
-					todos = todos.filter((t) => t.priority === params.filter?.priority);
-				}
-			}
-
-			_currentTodos = todos;
-			updateWidget(ctx);
-
-			return {
-				content: [
-					{
-						type: "text",
-						text: JSON.stringify({ todos }, null, 2),
-					},
-				],
-				details: { action: "read", todos },
-			};
-		},
-
-		renderCall(args, theme) {
-			try {
-				const filter = args.filter as { status?: string; priority?: string } | undefined;
-				let filterStr = "";
-				if (filter?.status) filterStr += ` status=${filter.status}`;
-				if (filter?.priority) filterStr += ` priority=${filter.priority}`;
-				return new Text(theme.fg("toolTitle", theme.bold("TodoRead")) + (filterStr ? theme.fg("muted", filterStr) : ""), 0, 0);
-			} catch {
-				return new Text("TodoRead", 0, 0);
-			}
-		},
-
-		renderResult(result, { expanded }, theme) {
-			try {
-				const details = result.details as { todos?: TodoItem[]; error?: string } | undefined;
-
-				if (details?.error) {
-					return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
-				}
-
-				const todos = details?.todos || [];
-				return new Text(renderTodoList(todos, theme, expanded), 0, 0);
-			} catch {
-				return new Text("(render error)", 0, 0);
-			}
-		},
-	});
-
-	// ==========================================================================
 	// Todo - Unified tool for all todo operations
 	// ==========================================================================
+	//
+	// Per-action helpers are extracted to keep the execute switch small and under
+	// the repo's cognitive-complexity limit.
+	// ==========================================================================
+
+	function todoError(action: string, message: string) {
+		return {
+			content: [{ type: "text" as const, text: `Error: ${message}` }],
+			details: { action, error: message },
+		};
+	}
+
+	function todoSaveAndReturn(
+		todos: TodoItem[],
+		action: string,
+		extra: { added?: TodoItem; updated?: TodoItem; removed?: TodoItem },
+		config: OqtoTodosConfig,
+		sessionId: string | undefined,
+		ctx: ExtensionContext
+	) {
+		saveTodos(ctx.cwd, config, todos, sessionId);
+		_currentTodos = todos;
+		updateWidget(ctx);
+		return {
+			content: [{ type: "text" as const, text: JSON.stringify({ todos }, null, 2) }],
+			details: { action, todos, ...extra },
+		};
+	}
+
+	function todoActionWrite(
+		params: Array<{ id?: string; content: string; status?: TodoStatus; priority?: TodoPriority }> | undefined,
+		config: OqtoTodosConfig,
+		sessionId: string | undefined,
+		ctx: ExtensionContext
+	) {
+		const next = (params || []).map((t) => normalizeTodo(t));
+		return todoSaveAndReturn(next, "write", {}, config, sessionId, ctx);
+	}
+
+	function todoActionAdd(
+		todos: TodoItem[],
+		params: { content?: string; status?: TodoStatus; priority?: TodoPriority },
+		config: OqtoTodosConfig,
+		sessionId: string | undefined,
+		ctx: ExtensionContext
+	) {
+		if (!params.content) return todoError("add", "content required");
+		const newTodo = normalizeTodo({ content: params.content, status: params.status, priority: params.priority });
+		return todoSaveAndReturn([...todos, newTodo], "add", { added: newTodo }, config, sessionId, ctx);
+	}
+
+	function todoActionUpdate(
+		todos: TodoItem[],
+		params: { id?: string; content?: string; status?: TodoStatus; priority?: TodoPriority },
+		config: OqtoTodosConfig,
+		sessionId: string | undefined,
+		ctx: ExtensionContext
+	) {
+		if (!params.id) return todoError("update", "id required");
+		const index = todos.findIndex((t) => t.id === params.id);
+		if (index === -1) return todoError("update", `todo ${params.id} not found`);
+		const updated: TodoItem = {
+			...todos[index],
+			...(params.content !== undefined && { content: params.content }),
+			...(params.status !== undefined && { status: params.status }),
+			...(params.priority !== undefined && { priority: params.priority }),
+		};
+		const next = [...todos];
+		next[index] = updated;
+		return todoSaveAndReturn(next, "update", { updated }, config, sessionId, ctx);
+	}
+
+	function todoActionRemove(
+		todos: TodoItem[],
+		params: { id?: string },
+		config: OqtoTodosConfig,
+		sessionId: string | undefined,
+		ctx: ExtensionContext
+	) {
+		if (!params.id) return todoError("remove", "id required");
+		const index = todos.findIndex((t) => t.id === params.id);
+		if (index === -1) return todoError("remove", `todo ${params.id} not found`);
+		const next = [...todos];
+		const removed = next.splice(index, 1)[0];
+		return todoSaveAndReturn(next, "remove", { removed }, config, sessionId, ctx);
+	}
+
+	function todoActionClear(config: OqtoTodosConfig, sessionId: string | undefined, ctx: ExtensionContext) {
+		return todoSaveAndReturn([], "clear", {}, config, sessionId, ctx);
+	}
+
+	function todoActionRead(
+		todos: TodoItem[],
+		params: { filter?: { status?: TodoStatus; priority?: TodoPriority } },
+		config: OqtoTodosConfig,
+		sessionId: string | undefined,
+		ctx: ExtensionContext
+	) {
+		let next = todos;
+		if (params.filter) {
+			if (params.filter.status) next = next.filter((t) => t.status === params.filter?.status);
+			if (params.filter.priority) next = next.filter((t) => t.priority === params.filter?.priority);
+		}
+		return todoSaveAndReturn(next, "read", {}, config, sessionId, ctx);
+	}
+
 	pi.registerTool({
 		name: "Todo",
 		label: "Todo",
 		description:
-			"Unified todo management: add, update, remove, or list todos. " +
-			"Actions: add (new todo), update (modify existing), remove (delete), list (show all). " +
-			"Todos are displayed in the Oqto frontend panel.\n\n" +
+			"Unified todo management: write, read, add, update, remove, or clear todos. " +
+			"Actions: write (replace the entire list), read (list, optionally filtered), " +
+			"add (new todo), update (modify an existing todo by id), remove (delete by id), " +
+			"clear (empty the list). Todos are displayed in the Oqto frontend panel.\n\n" +
 			"IMPORTANT: Always update todo status as you work. Set tasks to 'in_progress' when starting " +
 			"and 'completed' when done. The user relies on this panel to see your progress.",
-		parameters: Type.Object({
-			action: StringEnum(["add", "update", "remove", "list"] as const),
-			// For add
-			content: Type.Optional(Type.String({ description: "Task description (for add)" })),
-			// For add/update
-			status: Type.Optional(StringEnum(TODO_STATUSES)),
-			priority: Type.Optional(StringEnum(TODO_PRIORITIES)),
-			// For update/remove
-			id: Type.Optional(Type.String({ description: "Todo ID (for update/remove)" })),
-		}),
+		parameters: TodoParams,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const config = loadConfig(ctx.cwd);
@@ -679,97 +639,24 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 			const todos = [...store.todos];
 
 			switch (params.action) {
-				case "add": {
-					if (!params.content) {
-						return {
-							content: [{ type: "text", text: "Error: content required for add" }],
-							details: { action: "add", error: "content required" },
-						};
-					}
-					const newTodo = normalizeTodo({
-						content: params.content,
-						status: params.status,
-						priority: params.priority,
-					});
-					todos.push(newTodo);
-					saveTodos(ctx.cwd, config, todos, sessionId);
-					_currentTodos = todos;
-					updateWidget(ctx);
-					return {
-						content: [{ type: "text", text: JSON.stringify({ todos }, null, 2) }],
-						details: { action: "add", todos, added: newTodo },
-					};
-				}
-
-				case "update": {
-					if (!params.id) {
-						return {
-							content: [{ type: "text", text: "Error: id required for update" }],
-							details: { action: "update", error: "id required" },
-						};
-					}
-					const index = todos.findIndex((t) => t.id === params.id);
-					if (index === -1) {
-						return {
-							content: [{ type: "text", text: `Error: todo ${params.id} not found` }],
-							details: { action: "update", error: "not found" },
-						};
-					}
-					const existing = todos[index];
-					const updated: TodoItem = {
-						...existing,
-						...(params.content !== undefined && { content: params.content }),
-						...(params.status !== undefined && { status: params.status }),
-						...(params.priority !== undefined && { priority: params.priority }),
-					};
-					todos[index] = updated;
-					saveTodos(ctx.cwd, config, todos, sessionId);
-					_currentTodos = todos;
-					updateWidget(ctx);
-					return {
-						content: [{ type: "text", text: JSON.stringify({ todos }, null, 2) }],
-						details: { action: "update", todos, updated },
-					};
-				}
-
-				case "remove": {
-					if (!params.id) {
-						return {
-							content: [{ type: "text", text: "Error: id required for remove" }],
-							details: { action: "remove", error: "id required" },
-						};
-					}
-					const removeIndex = todos.findIndex((t) => t.id === params.id);
-					if (removeIndex === -1) {
-						return {
-							content: [{ type: "text", text: `Error: todo ${params.id} not found` }],
-							details: { action: "remove", error: "not found" },
-						};
-					}
-					const removed = todos.splice(removeIndex, 1)[0];
-					saveTodos(ctx.cwd, config, todos, sessionId);
-					_currentTodos = todos;
-					updateWidget(ctx);
-					return {
-						content: [{ type: "text", text: JSON.stringify({ todos }, null, 2) }],
-						details: { action: "remove", todos, removed },
-					};
-				}
-
-				default: {
-					_currentTodos = todos;
-					updateWidget(ctx);
-					return {
-						content: [{ type: "text", text: JSON.stringify({ todos }, null, 2) }],
-						details: { action: "list", todos },
-					};
-				}
+				case "write":
+					return todoActionWrite(params.todos, config, sessionId, ctx);
+				case "add":
+					return todoActionAdd(todos, params, config, sessionId, ctx);
+				case "update":
+					return todoActionUpdate(todos, params, config, sessionId, ctx);
+				case "remove":
+					return todoActionRemove(todos, params, config, sessionId, ctx);
+				case "clear":
+					return todoActionClear(config, sessionId, ctx);
+				default:
+					return todoActionRead(todos, params, config, sessionId, ctx);
 			}
 		},
 
 		renderCall(args, theme) {
 			try {
-				const action = (args.action as string) || "list";
+				const action = (args.action as string) || "read";
 				const id = args.id as string | undefined;
 				const content = args.content as string | undefined;
 
@@ -809,6 +696,10 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 					prefix = `${theme.fg("success", "OK Updated: ")}${theme.fg("text", details.updated.content)}\n\n`;
 				} else if (details?.action === "remove" && details.removed) {
 					prefix = `${theme.fg("success", "OK Removed: ")}${theme.fg("dim", details.removed.content)}\n\n`;
+				} else if (details?.action === "clear") {
+					prefix = `${theme.fg("success", "OK Cleared todo list")}\n\n`;
+				} else if (details?.action === "write") {
+					prefix = `${theme.fg("success", `OK Wrote ${todos.length} todos`)}\n\n`;
 				}
 
 				return new Text(prefix + renderTodoList(todos, theme, expanded), 0, 0);
@@ -817,7 +708,6 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 			}
 		},
 	});
-
 	// ==========================================================================
 	// /todos command - Show todos in UI
 	// ==========================================================================
@@ -852,6 +742,143 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 				);
 			} catch (e) {
 				console.error("[oqto-todos] /todos command error:", e);
+			}
+		},
+	});
+
+	// ==========================================================================
+	// /todo command - Interactive todo manipulation
+	// ==========================================================================
+	pi.registerCommand("todo", {
+		description: "Interactively list, add, start, complete, cancel, edit, delete, or clear todos",
+		handler: async (_args, ctx) => {
+			try {
+				const config = loadConfig(ctx.cwd);
+				const sessionId = getSessionId(ctx);
+				const ui = ctx.ui;
+
+				if (!ctx.hasUI) {
+					const store = loadTodos(ctx.cwd, config, sessionId);
+					console.log(JSON.stringify(store.todos, null, 2));
+					return;
+				}
+
+				const refresh = (): TodoItem[] => loadTodos(ctx.cwd, config, sessionId).todos;
+
+				const commit = (next: TodoItem[]): void => {
+					saveTodos(ctx.cwd, config, next, sessionId);
+					_currentTodos = next;
+					updateWidget(ctx);
+				};
+
+				const pickTodo = async (list: TodoItem[], title: string): Promise<number> => {
+					if (list.length === 0) {
+						ui.notify("No todos yet", "warning");
+						return -1;
+					}
+					const options = list.map(
+						(t, i) =>
+							`${i + 1}. ${getStatusIcon(t.status)} ${t.content}${getPriorityLabel(t.priority) ? `[${getPriorityLabel(t.priority)}]` : ""}`
+					);
+					const choice = await ui.select(title, options);
+					if (!choice) return -1;
+					const n = Number.parseInt(choice.split(".")[0], 10);
+					return Number.isNaN(n) ? -1 : n - 1;
+				};
+
+				const actionAdd = async (): Promise<void> => {
+					const content = await ui.input("New todo", "e.g. Write the README");
+					if (!content) return;
+					const priority = (await ui.select("Priority", ["medium", "high", "low"])) as TodoPriority | undefined;
+					const t = normalizeTodo({ content, status: "pending", priority: priority || "medium" });
+					commit([...refresh(), t]);
+					ui.notify(`Added: ${t.content}`, "info");
+				};
+
+				const actionStart = async (): Promise<void> => {
+					const list = refresh();
+					const i = await pickTodo(list, "Start which todo?");
+					if (i < 0) return;
+					commit(list.map((t, idx) => (idx === i ? { ...t, status: "in_progress" } : t)));
+					ui.notify(`Started: ${list[i].content}`, "info");
+				};
+
+				const actionComplete = async (): Promise<void> => {
+					const list = refresh();
+					const i = await pickTodo(list, "Complete which todo?");
+					if (i < 0) return;
+					commit(list.map((t, idx) => (idx === i ? { ...t, status: "completed" } : t)));
+					ui.notify(`Completed: ${list[i].content}`, "info");
+				};
+
+				const actionCancel = async (): Promise<void> => {
+					const list = refresh();
+					const i = await pickTodo(list, "Cancel which todo?");
+					if (i < 0) return;
+					commit(list.map((t, idx) => (idx === i ? { ...t, status: "cancelled" } : t)));
+					ui.notify(`Cancelled: ${list[i].content}`, "info");
+				};
+
+				const actionEdit = async (): Promise<void> => {
+					const list = refresh();
+					const i = await pickTodo(list, "Edit which todo?");
+					if (i < 0) return;
+					const content = await ui.input("New content", list[i].content);
+					if (content === undefined) return;
+					commit(list.map((t, idx) => (idx === i ? { ...t, content } : t)));
+					ui.notify(`Updated: ${content}`, "info");
+				};
+
+				const actionDelete = async (): Promise<void> => {
+					const list = refresh();
+					const i = await pickTodo(list, "Delete which todo?");
+					if (i < 0) return;
+					const ok = await ui.confirm("Delete todo", `Delete \"${list[i].content}\"?`);
+					if (!ok) return;
+					commit(list.filter((_, idx) => idx !== i));
+					ui.notify(`Deleted: ${list[i].content}`, "info");
+				};
+
+				const actionClear = async (): Promise<void> => {
+					const count = refresh().length;
+					if (count === 0) {
+						ui.notify("No todos to clear", "warning");
+						return;
+					}
+					const ok = await ui.confirm("Clear all", `Delete all ${count} todos?`);
+					if (!ok) return;
+					commit([]);
+					ui.notify("Cleared all todos", "info");
+				};
+
+				const dispatch = async (action: string): Promise<void> => {
+					switch (action) {
+						case "Add":
+							return actionAdd();
+						case "Start":
+							return actionStart();
+						case "Complete":
+							return actionComplete();
+						case "Cancel":
+							return actionCancel();
+						case "Edit":
+							return actionEdit();
+						case "Delete":
+							return actionDelete();
+						case "Clear":
+							return actionClear();
+						default:
+							return;
+					}
+				};
+
+				while (true) {
+					const choice = await ui.select("Todo", ["Add", "Start", "Complete", "Cancel", "Edit", "Delete", "Clear", "Done"]);
+					if (!choice || choice === "Done") return;
+					await dispatch(choice);
+				}
+			} catch (e) {
+				console.error("[oqto-todos] /todo command error:", e);
 			}
 		},
 	});
