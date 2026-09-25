@@ -63,6 +63,14 @@ or inside obvious `ssh … sudo` invocations — is blocked with an error pointi
 at `sudo_exec`. `sudo -n …` (non-interactive credential check) is still allowed
 since it cannot hang.
 
+To avoid false positives, the guard matches `sudo` only where it could
+actually run: quoted spans and comments are stripped first, while command
+substitutions (`$(…)`, backticks) are kept because their content executes.
+When `sudo` appears only as text (commit messages, docs, grep patterns), the
+command author can append the shell comment `# pi-sudo:allow` to bypass the
+guard — the user sees a notification when that happens. The guard's behaviour
+is configurable via `bashGuard` (`block` | `warn` | `off`).
+
 `remote_sudo_exec` still exists as a deprecated alias (it forwards to
 `sudo_exec` with `host`) so sessions loaded before the unification keep
 working; new sessions only see `sudo_exec`.
@@ -81,8 +89,10 @@ working; new sessions only see `sudo_exec`.
 `pi-sudo.json` — searched in `./`, `./.pi/`, then `~/.pi/agent/` (first match
 wins; see `pi-sudo.schema.json` / `pi-sudo.example.json`):
 
-- `defaultTimeoutMs` — default command execution timeout (per-call `timeout`
-  parameter overrides); default 120000.
+- `bashGuard` — how to handle interactive `sudo` detected in a bash tool
+  command: `block` (default), `warn` (allow with a user notification), or
+  `off`. The `# pi-sudo:allow` comment token bypasses the guard for false
+  positives regardless of this setting.
 - `promptTimeoutMs` — auto-cancel the password prompt after this many ms
   without an answer, so an unattended agent is not blocked forever; default
   120000, `0` waits indefinitely. The prompt shows a live countdown.

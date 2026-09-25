@@ -4,6 +4,23 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-sudo: bash guard false-positive fixes, escape hatch, configurable guard
+
+- **Fewer false positives.** The bash guard now strips quoted spans and
+  comments before matching, so `sudo` appearing only as text — commit
+  messages, docs, grep patterns, the exact papercut that blocked git commits
+  about this extension — no longer triggers it. Command substitutions
+  (`$(…)`, backticks) are preserved because their content executes.
+- **Escape hatch.** Appending the shell comment `# pi-sudo:allow` to a blocked
+  command runs it anyway, with a user notification for transparency; the
+  block reason and prompt guidelines now explain the token.
+- **Configurable guard.** New `bashGuard` config key (`block` | `warn` | `off`,
+  default `block`): `warn` allows the command with a notification, `off`
+  disables the guard entirely.
+- Remote ssh sudo detection hardened: `ssh host 'sudo …'` stays blocked even
+  though its sudo is quoted (quoted remote commands execute remotely), while
+  quoted mentions of ssh/sudo in local-only commands no longer match.
+
 ### pi-sudo: unify local and remote sudo under one sudo_exec tool
 
 - **One tool for root, local or remote.** `sudo_exec` gains optional `host`

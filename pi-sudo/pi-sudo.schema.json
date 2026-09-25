@@ -6,6 +6,11 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "bashGuard": {
+      "description": "Behaviour when interactive `sudo` is detected in a bash tool command. `block` rejects it (default), `warn` allows it with a user notification, `off` disables the guard. The `# pi-sudo:allow` comment token bypasses the guard for false positives regardless of this setting.",
+      "enum": ["block", "warn", "off"],
+      "default": "block"
+    },
     "defaultTimeoutMs": {
       "description": "Default command execution timeout in milliseconds. The per-call `timeout` tool parameter overrides this.",
       "type": "number",

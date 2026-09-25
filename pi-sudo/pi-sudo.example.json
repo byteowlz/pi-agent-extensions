@@ -1,5 +1,6 @@
 {
   "$schema": "./pi-sudo.schema.json",
+  "bashGuard": "block",
   "defaultTimeoutMs": 120000,
   "promptTimeoutMs": 120000,
   "cacheTtlMs": 300000,
