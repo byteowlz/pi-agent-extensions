@@ -373,7 +373,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 		);
 	}
 
-	pi.registerShortcut("ctrl+shift+f", {
+	pi.registerShortcut("ctrl+shift+h", {
 		description: "Search session history (view-only; use /history to open sessions)",
 		handler: (ctx) => openOverlay(ctx as ExtensionContext),
 	});
