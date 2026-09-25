@@ -1,0 +1,8 @@
+{
+  "$schema": "./pi-sudo.schema.json",
+  "defaultTimeoutMs": 120000,
+  "promptTimeoutMs": 120000,
+  "cacheTtlMs": 300000,
+  "cacheTurns": 0,
+  "maxPromptAttempts": 3
+}

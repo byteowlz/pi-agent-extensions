@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://byteowlz.com/pi-sudo/schema.json",
+  "title": "pi-sudo",
+  "description": "Configuration for the pi-sudo extension.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "defaultTimeoutMs": {
+      "description": "Default command execution timeout in milliseconds. The per-call `timeout` tool parameter overrides this.",
+      "type": "number",
+      "minimum": 1000,
+      "default": 120000
+    },
+    "promptTimeoutMs": {
+      "description": "Auto-cancel the password prompt after this many milliseconds without an answer, so a blocked agent does not wait forever. 0 waits indefinitely.",
+      "type": "number",
+      "minimum": 0,
+      "default": 120000
+    },
+    "cacheTtlMs": {
+      "description": "How long a cached sudo password stays valid, in milliseconds. 0 disables time-based expiry (turns and manual /sudo-forget still apply).",
+      "type": "number",
+      "minimum": 0,
+      "default": 300000
+    },
+    "cacheTurns": {
+      "description": "How many completed agent turns a cached sudo password stays valid for. 0 means unlimited turns.",
+      "type": "number",
+      "minimum": 0,
+      "default": 0
+    },
+    "maxPromptAttempts": {
+      "description": "Password prompt attempts before the tool gives up after repeated wrong passwords.",
+      "type": "number",
+      "minimum": 1,
+      "default": 3
+    }
+  }
+}

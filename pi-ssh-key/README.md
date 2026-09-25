@@ -25,13 +25,19 @@ picked up if `SSH_AUTH_SOCK` already points at an agent holding it.
 This extension gives the agent a real, session-scoped agent and a one-command
 way to populate it:
 
-- **Load** — `ssh-keygen`-verified key discovery in `~/.ssh`, a filter/list
-  picker (protected keys are marked 🔒), and a masked passphrase prompt that
-  reaches `ssh-add` through `SSH_ASKPASS` (never a GUI askpass, never a TTY).
+- **Load** — `ssh-keygen`-verified key discovery in `~/.ssh`, a fuzzy-search
+  multi-select picker (type to filter, `space` selects, `a` selects all,
+  `Enter` loads the selection — protected keys are marked `[locked]`), and a
+  masked passphrase prompt that reaches `ssh-add` through `SSH_ASKPASS`
+  (never a GUI askpass, never a TTY). Multiple selected keys are loaded one
+  at a time, so passphrase prompts appear sequentially, one per key.
 - **Scope** — the agent either reuses your already-running agent (so your other
   identities stay intact) or, if none is reachable, starts a dedicated
   `ssh-agent -a <private socket>` and points `SSH_AUTH_SOCK` / `SSH_AGENT_PID`
   at it for this process. Unload restores the environment exactly.
+- **herdr-aware** — while a passphrase prompt is open, the pane is reported to
+  herdr as `blocked` (source `pi-ssh-key`) so herdr's sidebar shows it
+  correctly; state authority is handed back to herdr's detection afterwards.
 - **Lifetime** — a key can be bound to an agent lifetime (`ssh-add -t`), so it
   forgets itself after a timeout.
 
@@ -39,7 +45,7 @@ way to populate it:
 
 | Command                        | Description |
 |--------------------------------|-------------|
-| `/ssh-key-load [path] [seconds]` | Pick (or name) a private key and add it to the agent. Optional `seconds` bounds its lifetime in the agent (default: no expiry). |
+| `/ssh-key-load [path] [seconds]` | Pick (fuzzy search, multi-select) or name one or more private keys and add them to the agent. Optional `seconds` bounds their lifetime in the agent (default: no expiry). |
 | `/ssh-key-unload [path]`       | Remove one key, or with no argument remove all loaded keys and tear down the pi-owned agent + restore the env. |
 | `/ssh-key-timeout [seconds]`   | Set the lifetime of the currently loaded key(s) (`0` = no expiry) and remember it as the default for future loads. With no argument, shows the current default. |
 | `/ssh-key-status`              | Show the agent socket, whether pi owns it, and the loaded keys (with fingerprints). |
@@ -47,7 +53,7 @@ way to populate it:
 ## Examples
 
 ```text
-/ssh-key-load                  # open the picker
+/ssh-key-load                  # open the fuzzy multi-select picker
 /ssh-key-load ~/.ssh/github   # load a named key
 /ssh-key-load ~/.ssh/prod 1800 # load it, expire from the agent after 30 min
 /ssh-key-timeout 3600          # give the loaded key a 1-hour lifetime

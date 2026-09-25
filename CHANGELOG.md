@@ -4,7 +4,58 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-sudo: herdr blocked state, prompt timeout, configurable cache policy
+
+- **herdr blocked state.** While a sudo (local or remote) password prompt is
+  open, the pane is reported to herdr as `blocked` (source `pi-sudo`), since
+  herdr's screen detection cannot classify the custom prompt UI; `working` +
+  authority release is reported once the prompt resolves, so herdr's own
+  detection takes over again.
+- **Prompt timeout.** The password prompt now auto-cancels after
+  `promptTimeoutMs` (default 120s, `0` = wait forever) with a live countdown,
+  so an unattended agent is not blocked indefinitely; the tool then fails with
+  a clear "prompt timed out" error instead of hanging.
+- **Cache policy: time + turns.** The cached password's validity is now
+  configurable via `pi-sudo.json` (`cacheTtlMs`, `cacheTurns` — both limits
+  apply when set; `0` disables the respective limit) and at runtime via the
+  new `/sudo-ttl <seconds> [turns]` command. `/sudo-status` shows remaining
+  TTL and turns per scope plus the active policy.
+- **Config file.** New `pi-sudo.json` (searched `./`, `./.pi/`,
+  `~/.pi/agent/`; schema + example included) with `defaultTimeoutMs`,
+  `promptTimeoutMs`, `cacheTtlMs`, `cacheTurns`, `maxPromptAttempts`.
+
+### pi-ssh-key: fuzzy multi-select picker + herdr blocked state
+
+- **Fuzzy multi-select picker.** `/ssh-key-load` opens a type-to-filter picker
+  (name/comment/path matching) with checkbox multi-select (`space` toggle,
+  `a` select all); `Enter` loads the selection, or the highlighted key when
+  nothing is selected. Selected keys load one at a time so passphrase prompts
+  appear sequentially, and per-key failures don't abort the rest.
+- **herdr blocked state.** Same blocked/working + release reporting around the
+  passphrase prompt as pi-sudo (source `pi-ssh-key`).
+
 ### pi-history-search: fix "no such table: messages_fts" under Node
+
+- **Root cause.** The node:sqlite opener passed `undefined` options explicitly
+  (`new DatabaseSync(path, undefined)`), which Node validates as a TypeError —
+  so every read-write index open failed silently, indexing never ran, and
+  searches fell back to read-only opens of leftover 0-byte `index.db` files
+  whose queries then crashed with `no such table: messages_fts` instead of
+  degrading to the live scan. Only manifests when pi runs under Node (the Bun
+  branch was unaffected). The opener now omits the options argument entirely
+  for read-write opens.
+- **Hardening.** Read-only opens now verify the index schema before use and
+  report "no index" (callers fall back to the live scan) when the file is empty
+  or tableless, and the read-only search path catches query errors and degrades
+  to a live scan instead of surfacing SQL errors to the tool result.
+
+### oqto-todos: unify todo tools and add interactive `/todo` command
+
+- Consolidated `TodoWrite`, `TodoRead`, and `Todo` into a single `Todo` tool with actions `write`, `read`, `add`, `update`, `remove`, and `clear`. The old `TodoWrite`/`TodoRead` tools are removed.
+- Added an interactive `/todo` command that drives `ctx.ui` (select/input/confirm/notify) to add, start, complete, cancel, edit, delete, or clear todos ergonomically.
+- Update the compaction reminder to reference only the `Todo` tool.
+
+
 
 - **Root cause.** The node:sqlite opener passed `undefined` options explicitly
   (`new DatabaseSync(path, undefined)`), which Node validates as a TypeError —
