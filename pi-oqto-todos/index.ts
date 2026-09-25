@@ -18,9 +18,9 @@
  */
 
 import crypto from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
@@ -220,6 +220,42 @@ function getSessionId(ctx: ExtensionContext): string | undefined {
 function getSessionDir(ctx: ExtensionContext): string | undefined {
 	const manager = ctx.sessionManager as { getSessionDir?: () => string };
 	return manager.getSessionDir?.();
+}
+
+/**
+ * Extract the session id from a session file path. Session files are named
+ * `<timestamp>_<session-id>.jsonl`, so the id is the segment after the last
+ * underscore (the timestamp never contains one).
+ */
+function sessionIdFromFile(sessionFile: string): string | undefined {
+	const base = basename(sessionFile, ".jsonl");
+	const idx = base.lastIndexOf("_");
+	if (idx === -1) return undefined;
+	return base.slice(idx + 1);
+}
+
+/**
+ * When a session is forked or cloned, pi starts a new session (new session id)
+ * under the same session directory, firing `session_start` with reason "fork"
+ * and the previous session file. Copy the parent's todo list into the new
+ * session's todo file so work carries over.
+ */
+function inheritTodosOnFork(ctx: ExtensionContext, previousSessionFile: string): void {
+	const config = loadConfig(ctx.cwd);
+	if (!config.enabled || !config.sessionScoped) return;
+
+	const sessionId = getSessionId(ctx);
+	if (!sessionId) return;
+
+	const parentId = sessionIdFromFile(previousSessionFile);
+	if (!parentId || parentId === sessionId) return;
+
+	// Parent's todos live next to its session file (same per-cwd session dir).
+	const parentPath = join(dirname(previousSessionFile), "todos", `${parentId}.json`);
+	if (!existsSync(parentPath)) return;
+
+	ensureTodosDir(ctx, config);
+	copyFileSync(parentPath, join(getTodosDir(ctx, config), `${sessionId}.json`));
 }
 
 // ============================================================================
@@ -466,8 +502,13 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 
 	// Session event handlers are individually wrapped so one failure does not
 	// prevent the others from registering or executing.
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async (event, ctx) => {
 		try {
+			// Forks and clones start a new session (new id); carry the parent's
+			// todo list over so the task list survives the fork.
+			if (event.reason === "fork" && event.previousSessionFile) {
+				inheritTodosOnFork(ctx, event.previousSessionFile);
+			}
 			reconstructTodos(ctx);
 		} catch (e) {
 			console.error("[oqto-todos] session_start handler error:", e);
