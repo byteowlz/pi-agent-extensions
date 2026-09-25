@@ -68,6 +68,10 @@ All notable changes to pi-agent-extensions will be documented in this file.
 - Added an interactive `/todo` command that drives `ctx.ui` (select/input/confirm/notify) to add, start, complete, cancel, edit, delete, or clear todos ergonomically.
 - Update the compaction reminder to reference only the `Todo` tool.
 
+### oqto-todos: inherit todos across forks and clones
+
+- On `session_start` with reason `fork` (which `/fork` and `/clone` both use), the parent session's todo file is copied into the new session's file so the task list carries over. Branches via `/tree` keep sharing the same session id and therefore the same list.
+
 ### oqto-todos: store todos under pi's session directory
 
 - Todos now default to `<pi-session-dir>/todos/` (derived from `ctx.sessionManager.getSessionDir()`) instead of `./.pi/todos`, so they live with pi's session state rather than the project. Set `storagePath` to override; falls back to `./.pi/todos` when no session directory is available.

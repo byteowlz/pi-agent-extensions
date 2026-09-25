@@ -118,6 +118,13 @@ By default todos are stored under pi's session directory, in a dedicated `todos`
 
 Set `storagePath` to override the location. If `storagePath` is omitted and a session directory is unavailable, the extension falls back to `./.pi/todos`.
 
+### Forks, clones, and branches
+
+Each session gets its own todo list (keyed by session id).
+
+- **Branches (`/tree`)** stay within the same session file, so they share the same todo list.
+- **Forks (`/fork`) and clones (`/clone`)** start a new session with a new id; the parent session's todo list is copied into the new session so the task list carries over.
+
 ## Compatibility
 
 This extension is compatible with:
