@@ -138,33 +138,39 @@ function loadConfig(cwd: string): OqtoTodosConfig {
 // Todo Storage
 // ============================================================================
 
-function getTodosDir(cwd: string, config: OqtoTodosConfig): string {
+function getTodosDir(ctx: ExtensionContext, config: OqtoTodosConfig): string {
 	if (config.storagePath) {
 		if (config.storagePath.startsWith("~")) {
 			return join(homedir(), config.storagePath.slice(1));
 		}
 		return config.storagePath;
 	}
-	return join(cwd, ".pi", "todos");
+	const sessionDir = getSessionDir(ctx);
+	if (sessionDir) {
+		// Store todos under pi's session directory (per-cwd), in a dedicated
+		// subdir so we never collide with the session file itself.
+		return join(sessionDir, "todos");
+	}
+	return join(ctx.cwd, ".pi", "todos");
 }
 
-function getTodosPath(cwd: string, config: OqtoTodosConfig, sessionId?: string): string {
-	const dir = getTodosDir(cwd, config);
+function getTodosPath(ctx: ExtensionContext, config: OqtoTodosConfig, sessionId?: string): string {
+	const dir = getTodosDir(ctx, config);
 	if (config.sessionScoped && sessionId) {
 		return join(dir, `${sessionId}.json`);
 	}
 	return join(dir, TODOS_FILENAME);
 }
 
-function ensureTodosDir(cwd: string, config: OqtoTodosConfig): void {
-	const dir = getTodosDir(cwd, config);
+function ensureTodosDir(ctx: ExtensionContext, config: OqtoTodosConfig): void {
+	const dir = getTodosDir(ctx, config);
 	if (!existsSync(dir)) {
 		mkdirSync(dir, { recursive: true });
 	}
 }
 
-function loadTodos(cwd: string, config: OqtoTodosConfig, sessionId?: string): TodoStore {
-	const path = getTodosPath(cwd, config, sessionId);
+function loadTodos(ctx: ExtensionContext, config: OqtoTodosConfig, sessionId?: string): TodoStore {
+	const path = getTodosPath(ctx, config, sessionId);
 
 	if (!existsSync(path)) {
 		return { todos: [], updated_at: new Date().toISOString() };
@@ -179,9 +185,9 @@ function loadTodos(cwd: string, config: OqtoTodosConfig, sessionId?: string): To
 	}
 }
 
-function saveTodos(cwd: string, config: OqtoTodosConfig, todos: TodoItem[], sessionId?: string): void {
-	ensureTodosDir(cwd, config);
-	const path = getTodosPath(cwd, config, sessionId);
+function saveTodos(ctx: ExtensionContext, config: OqtoTodosConfig, todos: TodoItem[], sessionId?: string): void {
+	ensureTodosDir(ctx, config);
+	const path = getTodosPath(ctx, config, sessionId);
 	const store: TodoStore = {
 		todos,
 		updated_at: new Date().toISOString(),
@@ -203,12 +209,17 @@ function normalizeTodo(todo: Partial<TodoItem> & { content: string }): TodoItem 
 }
 
 // ============================================================================
-// Session ID Helper
+// Session ID / Dir Helper
 // ============================================================================
 
 function getSessionId(ctx: ExtensionContext): string | undefined {
 	const manager = ctx.sessionManager as { getSessionId?: () => string };
 	return manager.getSessionId?.();
+}
+
+function getSessionDir(ctx: ExtensionContext): string | undefined {
+	const manager = ctx.sessionManager as { getSessionDir?: () => string };
+	return manager.getSessionDir?.();
 }
 
 // ============================================================================
@@ -440,7 +451,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 			}
 
 			const sessionId = getSessionId(ctx);
-			const store = loadTodos(ctx.cwd, config, sessionId);
+			const store = loadTodos(ctx, config, sessionId);
 			_currentTodos = store.todos;
 			updateWidget(ctx);
 		} catch (e) {
@@ -483,7 +494,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 			if (!config.enabled || !config.preserveInCompaction) return;
 
 			const sessionId = getSessionId(ctx);
-			const store = loadTodos(ctx.cwd, config, sessionId);
+			const store = loadTodos(ctx, config, sessionId);
 			if (store.todos.length === 0) return;
 
 			const todosText = formatTodosForSummary(store.todos);
@@ -527,7 +538,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 		sessionId: string | undefined,
 		ctx: ExtensionContext
 	) {
-		saveTodos(ctx.cwd, config, todos, sessionId);
+		saveTodos(ctx, config, todos, sessionId);
 		_currentTodos = todos;
 		updateWidget(ctx);
 		return {
@@ -635,7 +646,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 			}
 
 			const sessionId = getSessionId(ctx);
-			const store = loadTodos(ctx.cwd, config, sessionId);
+			const store = loadTodos(ctx, config, sessionId);
 			const todos = [...store.todos];
 
 			switch (params.action) {
@@ -717,7 +728,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 			try {
 				const config = loadConfig(ctx.cwd);
 				const sessionId = getSessionId(ctx);
-				const store = loadTodos(ctx.cwd, config, sessionId);
+				const store = loadTodos(ctx, config, sessionId);
 
 				if (!ctx.hasUI) {
 					console.log(JSON.stringify(store.todos, null, 2));
@@ -758,15 +769,15 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 				const ui = ctx.ui;
 
 				if (!ctx.hasUI) {
-					const store = loadTodos(ctx.cwd, config, sessionId);
+					const store = loadTodos(ctx, config, sessionId);
 					console.log(JSON.stringify(store.todos, null, 2));
 					return;
 				}
 
-				const refresh = (): TodoItem[] => loadTodos(ctx.cwd, config, sessionId).todos;
+				const refresh = (): TodoItem[] => loadTodos(ctx, config, sessionId).todos;
 
 				const commit = (next: TodoItem[]): void => {
-					saveTodos(ctx.cwd, config, next, sessionId);
+					saveTodos(ctx, config, next, sessionId);
 					_currentTodos = next;
 					updateWidget(ctx);
 				};

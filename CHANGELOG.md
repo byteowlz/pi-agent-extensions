@@ -68,6 +68,10 @@ All notable changes to pi-agent-extensions will be documented in this file.
 - Added an interactive `/todo` command that drives `ctx.ui` (select/input/confirm/notify) to add, start, complete, cancel, edit, delete, or clear todos ergonomically.
 - Update the compaction reminder to reference only the `Todo` tool.
 
+### oqto-todos: store todos under pi's session directory
+
+- Todos now default to `<pi-session-dir>/todos/` (derived from `ctx.sessionManager.getSessionDir()`) instead of `./.pi/todos`, so they live with pi's session state rather than the project. Set `storagePath` to override; falls back to `./.pi/todos` when no session directory is available.
+
 
 
 - **Root cause.** The node:sqlite opener passed `undefined` options explicitly

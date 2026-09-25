@@ -85,7 +85,7 @@ Create `oqto-todos.json` in your project root, `.pi/` directory, or `~/.pi/agent
 | `enabled` | boolean | `true` | Enable/disable the extension |
 | `debug` | boolean | `false` | Enable debug logging |
 | `sessionScoped` | boolean | `true` | Store todos per session (vs. shared) |
-| `storagePath` | string | `.pi/todos` | Directory for todo storage |
+| `storagePath` | string | pi session dir `todos` subdir | Directory for todo storage (defaults to `<pi-session-dir>/todos`) |
 | `tuiWidget` | boolean | `true` | Render persistent todo widget in Pi TUI (set to `false` for Oqto-only frontend usage) |
 | `preserveInCompaction` | boolean | `true` | After context compaction, inject the current todo list into the LLM context so the model keeps using the todo tools |
 
@@ -111,10 +111,12 @@ ln -s $(pwd)/oqto-todos ~/.pi/agent/extensions/oqto-todos
 
 ## Storage
 
-Todos are stored as JSON files in `.pi/todos/`:
+By default todos are stored under pi's session directory, in a dedicated `todos` subdir (so they never collide with the session file):
 
-- **Session-scoped**: `.pi/todos/<session-id>.json`
-- **Shared**: `.pi/todos/todos.json`
+- **Session-scoped**: `<pi-session-dir>/todos/<session-id>.json`
+- **Shared**: `<pi-session-dir>/todos/todos.json`
+
+Set `storagePath` to override the location. If `storagePath` is omitted and a session directory is unavailable, the extension falls back to `./.pi/todos`.
 
 ## Compatibility
 
