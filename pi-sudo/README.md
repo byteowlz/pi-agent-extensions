@@ -76,9 +76,30 @@ over the SSH process stdin; it is never placed in argv, env, or files.
 
 | Command         | Description |
 |-----------------|-------------|
-| `/sudo-status`  | Show cache state and TTL remaining |
+| `/sudo-status`  | Show cached passwords with remaining TTL / turns, plus the active policy |
+| `/sudo-ttl <seconds> [turns]` | Change the session's cache policy: time-based and/or turn-based validity (0 = no expiry / unlimited turns) |
 | `/sudo-forget`  | Drop the cached password immediately |
 | `/sudo-test`    | Verify the cached password with `sudo true` |
+
+## Configuration
+
+`pi-sudo.json` — searched in `./`, `./.pi/`, then `~/.pi/agent/` (first match
+wins; see `pi-sudo.schema.json` / `pi-sudo.example.json`):
+
+- `defaultTimeoutMs` — default command execution timeout (per-call `timeout`
+  parameter overrides); default 120000.
+- `promptTimeoutMs` — auto-cancel the password prompt after this many ms
+  without an answer, so an unattended agent is not blocked forever; default
+  120000, `0` waits indefinitely. The prompt shows a live countdown.
+- `cacheTtlMs` — how long a cached password stays valid; default 300000
+  (5 min, matching sudo's timestamp_timeout), `0` disables time-based expiry.
+- `cacheTurns` — how many completed agent turns a cached password stays valid
+  for; default `0` (unlimited). Time and turn limits both apply when set.
+- `maxPromptAttempts` — attempts before giving up after wrong passwords; default 3.
+
+While a password prompt is open, the pane is reported to herdr as `blocked`
+(source `pi-sudo`), so herdr's sidebar shows it correctly; the state is handed
+back to herdr's own detection once the prompt resolves.
 
 ## Security
 

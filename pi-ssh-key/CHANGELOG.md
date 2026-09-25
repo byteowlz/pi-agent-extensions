@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.2.0
+
+- **Fuzzy multi-select key picker.** `/ssh-key-load` now opens a picker with a
+  type-to-filter search box (matches key name, comment, and path), checkbox
+  multi-select (`space` toggles, `a` selects all), and `Enter` loads the
+  selected keys — or the highlighted one when nothing is selected. Protected
+  keys are marked `[locked]` (was an emoji).
+- **Sequential passphrases.** Multiple selected keys are loaded one at a time
+  in picker order, so passphrase prompts appear sequentially, one per key;
+  per-key failures no longer abort the remaining loads.
+- **herdr blocked state.** While a passphrase prompt is open, the pane is
+  reported to herdr as `blocked` (source `pi-ssh-key`), since herdr's screen
+  detection cannot classify the custom prompt UI; `working` + authority
+  release is reported once the prompt resolves.
+
 ## 1.1.0
 
 - **oqto SSH proxy sessions.** When `OQTO_SSH_AGENT=proxy` is set (owned by

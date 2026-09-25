@@ -43,8 +43,43 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
-import { type Focusable, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { Key, fuzzyFilter, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+
+// ---------------------------------------------------------------------------
+// herdr blocked-state reporting (best-effort; only inside a herdr pane)
+// ---------------------------------------------------------------------------
+
+const HERDR_SOURCE = "pi-ssh-key";
+let herdrSeq = 0;
+
+function herdrReport(state: "blocked" | "working", message?: string): void {
+	const pane = process.env.HERDR_PANE_ID;
+	if (process.env.HERDR_ENV !== "1" || !pane) return;
+	herdrSeq += 1;
+	const args = [
+		"pane",
+		"report-agent",
+		pane,
+		"--source",
+		HERDR_SOURCE,
+		"--agent",
+		"pi",
+		"--state",
+		state,
+		"--seq",
+		String(herdrSeq),
+	];
+	if (message) args.push("--message", message);
+	execFile("herdr", args, () => {}); // fire-and-forget
+}
+
+/** Hand lifecycle authority back to herdr's own detection after a prompt. */
+function herdrRelease(): void {
+	const pane = process.env.HERDR_PANE_ID;
+	if (process.env.HERDR_ENV !== "1" || !pane) return;
+	execFile("herdr", ["pane", "release-agent", pane, "--source", HERDR_SOURCE, "--agent", "pi"], () => {});
+}
 
 // ---------------------------------------------------------------------------
 // State
@@ -542,63 +577,71 @@ function addSucceeded(res: RunResult): boolean {
 async function promptPassphrase(ctx: ExtensionCommandContext, title: string, subtitle?: string): Promise<string | null> {
 	if (!ctx.hasUI) return null;
 
-	return await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-		let buf = "";
-		let cachedLines: string[] | undefined;
+	// Show the pane as blocked in herdr (detection cannot classify our custom
+	// TUI), then hand authority back once the prompt resolves.
+	herdrReport("blocked", "ssh key passphrase prompt");
+	try {
+		return await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+			let buf = "";
+			let cachedLines: string[] | undefined;
 
-		const refresh = (): void => {
-			cachedLines = undefined;
-			tui.requestRender();
-		};
-
-		const handle = (data: string): void => {
-			if (matchesKey(data, Key.escape)) {
-				done(null);
-				return;
-			}
-			if (matchesKey(data, Key.enter)) {
-				done(buf);
-				return;
-			}
-			if (matchesKey(data, Key.backspace)) {
-				buf = buf.slice(0, -1);
-				refresh();
-				return;
-			}
-			for (const ch of data) {
-				const code = ch.charCodeAt(0);
-				if (code >= 0x20 && code !== 0x7f) buf += ch;
-			}
-			refresh();
-		};
-
-		const render = (width: number): string[] => {
-			if (cachedLines) return cachedLines;
-			const lines: string[] = [];
-			const add = (s: string): void => {
-				lines.push(truncateToWidth(s, width));
-			};
-			add(theme.fg("accent", "─".repeat(width)));
-			add(theme.fg("text", ` ${title}`));
-			if (subtitle) add(theme.fg("muted", ` ${subtitle}`));
-			lines.push("");
-			const dots = "•".repeat(buf.length);
-			add(` ${theme.fg("muted", "passphrase:")} ${theme.fg("accent", dots)}${theme.fg("dim", "▏")}`);
-			lines.push("");
-			add(theme.fg("dim", " Enter to submit • Esc to cancel"));
-			add(theme.fg("accent", "─".repeat(width)));
-			cachedLines = lines;
-			return lines;
-		};
-
-		return {
-			render,
-			invalidate: (): void => {
+			const refresh = (): void => {
 				cachedLines = undefined;
-			},
-			handleInput: handle,
-		};
-	});
+				tui.requestRender();
+			};
+
+			const handle = (data: string): void => {
+				if (matchesKey(data, Key.escape)) {
+					done(null);
+					return;
+				}
+				if (matchesKey(data, Key.enter)) {
+					done(buf);
+					return;
+				}
+				if (matchesKey(data, Key.backspace)) {
+					buf = buf.slice(0, -1);
+					refresh();
+					return;
+				}
+				for (const ch of data) {
+					const code = ch.charCodeAt(0);
+					if (code >= 0x20 && code !== 0x7f) buf += ch;
+				}
+				refresh();
+			};
+
+			const render = (width: number): string[] => {
+				if (cachedLines) return cachedLines;
+				const lines: string[] = [];
+				const add = (s: string): void => {
+					lines.push(truncateToWidth(s, width));
+				};
+				add(theme.fg("accent", "─".repeat(width)));
+				add(theme.fg("text", ` ${title}`));
+				if (subtitle) add(theme.fg("muted", ` ${subtitle}`));
+				lines.push("");
+				const dots = "•".repeat(buf.length);
+				add(` ${theme.fg("muted", "passphrase:")} ${theme.fg("accent", dots)}${theme.fg("dim", "▏")}`);
+				lines.push("");
+				add(theme.fg("dim", " Enter to submit • Esc to cancel"));
+				add(theme.fg("accent", "─".repeat(width)));
+				cachedLines = lines;
+				return lines;
+			};
+
+			return {
+				render,
+				invalidate: (): void => {
+					cachedLines = undefined;
+				},
+				handleInput: handle,
+			};
+		});
+	} finally {
+		herdrReport("working");
+		herdrRelease();
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -722,7 +765,7 @@ async function setTimeouts(timeoutSecs: number): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// Key picker overlay
+// Key picker overlay (fuzzy search + multi-select)
 // ---------------------------------------------------------------------------
 
 interface KeyItem {
@@ -732,94 +775,7 @@ interface KeyItem {
 	comment?: string;
 }
 
-class KeyPickerOverlay implements Focusable {
-	focused = false;
-
-	private theme: Theme;
-	private done: (result: KeyItem | undefined) => void;
-	private items: KeyItem[];
-	private selected = 0;
-	private scrollOffset = 0;
-
-	constructor(theme: Theme, done: (result: KeyItem | undefined) => void, items: KeyItem[]) {
-		this.theme = theme;
-		this.done = done;
-		this.items = items;
-	}
-
-	handleInput(data: string): void {
-		if (matchesKey(data, Key.escape)) {
-			this.done(undefined);
-			return;
-		}
-		if (matchesKey(data, Key.enter) || matchesKey(data, "return")) {
-			if (this.items.length > 0) this.done(this.items[this.selected]);
-			return;
-		}
-		if (matchesKey(data, Key.up)) {
-			if (this.selected > 0) this.selected--;
-			return;
-		}
-		if (matchesKey(data, Key.down)) {
-			if (this.selected < this.items.length - 1) this.selected++;
-			return;
-		}
-	}
-
-	render(width: number): string[] {
-		const th = this.theme;
-		const innerW = Math.min(width - 2, 100);
-		const total = this.items.length;
-		const maxVisible = 15;
-		if (this.selected < this.scrollOffset) this.scrollOffset = this.selected;
-		else if (this.selected >= this.scrollOffset + maxVisible) this.scrollOffset = this.selected - maxVisible + 1;
-
-		const lines: string[] = [];
-		const row = (content: string): string => {
-			const vis = visibleWidth(content);
-			return `${th.fg("border", "│")}${content}${" ".repeat(Math.max(0, innerW - vis))}${th.fg("border", "│")}`;
-		};
-		lines.push(th.fg("border", `╭${"─".repeat(innerW)}╮`));
-		lines.push(row(` ${th.fg("accent", th.bold("pick an ssh key"))}${th.fg("dim", `  ${total} found`)}`));
-		lines.push(row(""));
-
-		if (total === 0) {
-			lines.push(row(` ${th.fg("warning", "No private keys found in ~/.ssh")}`));
-		} else {
-			const start = this.scrollOffset;
-			const end = Math.min(total, start + maxVisible);
-			for (let i = start; i < end; i++) {
-				const item = this.items[i];
-				const selected = i === this.selected;
-				const pointer = selected ? th.fg("accent", "▸") : " ";
-				const lock = item.protected ? th.fg("dim", "🔒") : th.fg("muted", " ");
-				const name = selected ? th.fg("text", item.name) : th.fg("muted", item.name);
-				const comment = item.comment ? th.fg("dim", `  ${item.comment}`) : "";
-				const label = `${pointer} ${lock} ${name}${comment}`;
-				lines.push(row(` ${truncateToWidth(label, Math.max(10, innerW - 3))}`));
-			}
-			if (total > maxVisible) {
-				lines.push(row(th.fg("dim", ` ${start + 1}-${end} of ${total}`)));
-			}
-		}
-
-		lines.push(row(""));
-		const help = `${th.fg("dim", "↑↓")} navigate${th.fg("border", " │ ")}${th.fg("dim", "Enter")} load${th.fg("border", " │ ")}${th.fg("dim", "Esc")} cancel`;
-		lines.push(row(` ${help}`));
-		lines.push(th.fg("border", `╰${"─".repeat(innerW)}╯`));
-		return lines;
-	}
-
-	invalidate(): void {
-		/* noop */
-	}
-
-	dispose(): void {
-		/* noop */
-	}
-}
-
-async function pickKey(ctx: ExtensionCommandContext, keyDir: string): Promise<KeyItem | undefined> {
+async function pickKeys(ctx: ExtensionCommandContext, keyDir: string): Promise<KeyItem[] | undefined> {
 	const paths = discoverKeys(keyDir);
 	const items: KeyItem[] = [];
 	for (const path of paths) {
@@ -831,26 +787,152 @@ async function pickKey(ctx: ExtensionCommandContext, keyDir: string): Promise<Ke
 		return undefined;
 	}
 
-	return await ctx.ui.custom<KeyItem | undefined>(
-		(tui, theme, _kb, done) => {
-			const overlay = new KeyPickerOverlay(theme, done, items);
-			return {
-				render: (w: number) => overlay.render(w),
-				invalidate: () => overlay.invalidate(),
-				handleInput: (data: string) => {
-					overlay.handleInput(data);
-					tui.requestRender();
-				},
-				get focused() {
-					return overlay.focused;
-				},
-				set focused(v: boolean) {
-					overlay.focused = v;
-				},
-			};
-		},
-		{ overlay: true }
-	);
+	interface Row {
+		item: KeyItem;
+		match: string;
+	}
+	const all: Row[] = items.map((item) => ({
+		item,
+		match: `${item.name} ${item.comment ?? ""} ${item.path}`,
+	}));
+
+	return await ctx.ui.custom<KeyItem[] | undefined>((tui, theme, _kb, done) => {
+		let query = "";
+		let visible: Row[] = all;
+		let selected = 0;
+		const chosen = new Set<string>(); // key paths
+		const maxVisible = 14;
+		let cachedLines: string[] | undefined;
+
+		const finish = (result: KeyItem[] | undefined): void => {
+			if (chosen.size > 0) {
+				done(items.filter((it) => chosen.has(it.path)));
+				return;
+			}
+			done(result);
+		};
+
+		const refresh = (): void => {
+			cachedLines = undefined;
+			tui.requestRender();
+		};
+
+		function recompute(): void {
+			const q = query.trim();
+			visible = q ? fuzzyFilter(all, q, (r) => r.match) : all;
+			if (selected >= visible.length) selected = Math.max(0, visible.length - 1);
+			if (selected < 0) selected = 0;
+		}
+
+		function toggleSelected(): void {
+			const row = visible[selected];
+			if (!row) return;
+			if (chosen.has(row.item.path)) chosen.delete(row.item.path);
+			else chosen.add(row.item.path);
+		}
+
+		function toggleAll(): void {
+			if (visible.every((r) => chosen.has(r.item.path))) {
+				for (const r of visible) chosen.delete(r.item.path);
+			} else {
+				for (const r of visible) chosen.add(r.item.path);
+			}
+		}
+
+		function handleInput(data: string): void {
+			if (matchesKey(data, Key.escape)) {
+				finish(undefined);
+				return;
+			}
+			if (matchesKey(data, Key.enter) || matchesKey(data, "return")) {
+				if (chosen.size === 0) {
+					const row = visible[selected];
+					if (row) chosen.add(row.item.path);
+				}
+				if (chosen.size > 0) finish(items.filter((it) => chosen.has(it.path)));
+				return;
+			}
+			if (matchesKey(data, Key.space)) {
+				toggleSelected();
+				refresh();
+				return;
+			}
+			if (data === "a" || data === "A" || matchesKey(data, "ctrl+a")) {
+				toggleAll();
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.up)) {
+				if (visible.length > 0) selected = (selected - 1 + visible.length) % visible.length;
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.down)) {
+				if (visible.length > 0) selected = (selected + 1) % visible.length;
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.backspace)) {
+				query = query.slice(0, -1);
+				recompute();
+				refresh();
+				return;
+			}
+			for (const ch of data) {
+				const code = ch.charCodeAt(0);
+				if (code >= 0x20 && code !== 0x7f) query += ch;
+			}
+			recompute();
+			refresh();
+		}
+
+		function render(width: number): string[] {
+			if (cachedLines) return cachedLines;
+			const rw = Math.max(1, width);
+			const lines: string[] = [];
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			lines.push(...wrapTextWithAnsi(theme.fg("accent", `Load ssh key(s): ${chosen.size} selected • ${all.length} found`), rw));
+			lines.push("");
+			lines.push(` ${theme.fg("muted", "filter:")} ${theme.fg("text", query)}${theme.fg("dim", "▏")}`);
+			lines.push("");
+			if (visible.length === 0) {
+				lines.push(theme.fg("warning", "  No matching keys"));
+			} else {
+				const start = Math.max(0, Math.min(selected - Math.floor(maxVisible / 2), visible.length - maxVisible));
+				const end = Math.min(start + maxVisible, visible.length);
+				for (let i = start; i < end; i++) {
+					const row = visible[i];
+					const isSelectedRow = i === selected;
+					const checked = chosen.has(row.item.path);
+					const prefix = isSelectedRow ? theme.fg("accent", "→ ") : "  ";
+					const box = theme.fg(checked ? "success" : "muted", checked ? "☑ " : "☐ ");
+					const lock = row.item.protected ? theme.fg("dim", "[locked] ") : "";
+					const comment = row.item.comment ? theme.fg("dim", `  ${row.item.comment}`) : "";
+					const label = `${prefix}${box}${lock}${row.item.name}${comment}`;
+					lines.push(truncateToWidth(label, rw));
+				}
+				if (start > 0 || end < visible.length) lines.push(theme.fg("dim", `  (${selected + 1}/${visible.length})`));
+			}
+			lines.push("");
+			lines.push(
+				...wrapTextWithAnsi(
+					theme.fg("dim", "Type to filter • space select • a select all • Enter load selected (or highlighted) • Esc cancel"),
+					rw
+				)
+			);
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			cachedLines = lines;
+			return lines;
+		}
+
+		return {
+			render,
+			invalidate: (): void => {
+				cachedLines = undefined;
+			},
+			handleInput,
+		};
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -891,51 +973,58 @@ export default function piSshKey(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("ssh-key-load", {
-		description: "Pick an SSH private key and load it into an ssh-agent for this process",
+		description:
+			"Pick one or more SSH private keys (fuzzy search, multi-select) and load them into an ssh-agent for this process",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const cwd = process.cwd();
 			const config = loadConfig(cwd);
 			const { path: argPath, timeout } = parseArgs(args);
 			const timeoutSecs = timeout ?? defaultTimeoutSecs;
 
-			let keyPath: string | undefined;
+			let keyPaths: string[] | undefined;
 			const oqto = isOqtoProxySession();
 			if (argPath) {
-				keyPath = expandPath(argPath, cwd);
-				if (!oqto && !isPrivateKeyFile(keyPath)) {
-					ctx.ui.notify(`not a recognized private key: ${keyPath}`, "error");
+				const resolved = expandPath(argPath, cwd);
+				if (!oqto && !isPrivateKeyFile(resolved)) {
+					ctx.ui.notify(`not a recognized private key: ${resolved}`, "error");
 					return;
 				}
+				keyPaths = [resolved];
 			} else {
 				if (!ctx.hasUI) {
 					ctx.ui.notify("ssh-key-load without a path requires an interactive UI for the picker", "error");
 					return;
 				}
-				const picked = await pickKey(ctx, config.keyDir);
-				if (!picked) return;
-				keyPath = picked.path;
+				const picked = await pickKeys(ctx, config.keyDir);
+				if (!picked || picked.length === 0) return;
+				keyPaths = picked.map((k) => k.path);
 			}
 
-			// In an oqto proxy session the agent socket is not a real ssh-agent
-			// (it blocks add-identity) and keys live on the host, so a load
-			// becomes a grant request rather than an add.
-			if (oqto) {
-				await oqtoProxyLoad(keyPath, ctx);
-				return;
+			// Keys are loaded one at a time so passphrase prompts appear
+			// sequentially, one per key, in picker order.
+			const results: string[] = [];
+			let loadedAny = false;
+			for (const keyPath of keyPaths) {
+				const keyName = basename(keyPath);
+				// In an oqto proxy session the agent socket is not a real ssh-agent
+				// (it blocks add-identity) and keys live on the host, so a load
+				// becomes a grant request rather than an add.
+				if (oqto) {
+					await oqtoProxyLoad(keyPath, ctx);
+					continue;
+				}
+				try {
+					const loaded = await loadKey(keyPath, timeoutSecs, ctx);
+					loadedAny = true;
+					const fp = loaded.fingerprint ? ` ${loaded.fingerprint}` : "";
+					const lock = loaded.protected ? " (passphrase-protected)" : "";
+					results.push(`loaded ${loaded.name}${fp}${lock}`);
+				} catch (error) {
+					results.push(`failed ${keyName}: ${error instanceof Error ? error.message : "error"}`);
+				}
 			}
-
-			try {
-				const loaded = await loadKey(keyPath, timeoutSecs, ctx);
-				defaultTimeoutSecs = timeoutSecs;
-				const fp = loaded.fingerprint ? ` ${loaded.fingerprint}` : "";
-				const lock = loaded.protected ? " (passphrase-protected)" : "";
-				ctx.ui.notify(
-					`loaded ssh key ${loaded.name}${fp}${lock}${timeoutSecs > 0 ? ` for ${formatTimeout(timeoutSecs)}` : ""}`,
-					"info"
-				);
-			} catch (error) {
-				ctx.ui.notify(error instanceof Error ? error.message : "failed to load ssh key", "error");
-			}
+			if (loadedAny) defaultTimeoutSecs = timeoutSecs;
+			if (results.length > 0) ctx.ui.notify(results.join("\n"), "info");
 		},
 	});
 

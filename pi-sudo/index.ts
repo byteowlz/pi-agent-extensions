@@ -26,29 +26,122 @@
  *   /sudo-test     — verify the cached password still works.
  */
 
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { Key, Text, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 // ---------------------------------------------------------------------------
-// Password cache
+// Configuration (pi-sudo.json: ./ , ./.pi/ , ~/.pi/agent/ — first match wins)
 // ---------------------------------------------------------------------------
 
-const DEFAULT_TTL_MS = 5 * 60 * 1000; // matches sudo default timestamp_timeout
-const MAX_PROMPT_ATTEMPTS = 3;
+interface SudoConfig {
+	/** Default command execution timeout in ms (per-call `timeout` overrides). */
+	defaultTimeoutMs: number;
+	/** Password prompt auto-cancel after this many ms without an answer (0 = wait forever). */
+	promptTimeoutMs: number;
+	/** Password cache TTL in ms (0 = no time-based expiry). */
+	cacheTtlMs: number;
+	/** Password cache expires after this many completed agent turns (0 = unlimited turns). */
+	cacheTurns: number;
+	/** Password prompt attempts before giving up. */
+	maxPromptAttempts: number;
+}
+
+const DEFAULT_CONFIG: SudoConfig = {
+	defaultTimeoutMs: 120_000,
+	promptTimeoutMs: 120_000,
+	cacheTtlMs: 5 * 60 * 1000,
+	cacheTurns: 0,
+	maxPromptAttempts: 3,
+};
+
+let config: SudoConfig = { ...DEFAULT_CONFIG };
+
+function loadSudoConfig(): SudoConfig {
+	const cfg = { ...DEFAULT_CONFIG };
+	for (const path of ["pi-sudo.json", joinConfigPath(".pi", "pi-sudo.json"), joinConfigPath("agent", "pi-sudo.json")]) {
+		if (!path || !existsSync(path)) continue;
+		try {
+			const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<SudoConfig>;
+			if (typeof parsed.defaultTimeoutMs === "number" && parsed.defaultTimeoutMs >= 1000)
+				cfg.defaultTimeoutMs = parsed.defaultTimeoutMs;
+			if (typeof parsed.promptTimeoutMs === "number" && parsed.promptTimeoutMs >= 0) cfg.promptTimeoutMs = parsed.promptTimeoutMs;
+			if (typeof parsed.cacheTtlMs === "number" && parsed.cacheTtlMs >= 0) cfg.cacheTtlMs = parsed.cacheTtlMs;
+			if (typeof parsed.cacheTurns === "number" && parsed.cacheTurns >= 0) cfg.cacheTurns = Math.floor(parsed.cacheTurns);
+			if (typeof parsed.maxPromptAttempts === "number" && parsed.maxPromptAttempts >= 1)
+				cfg.maxPromptAttempts = Math.floor(parsed.maxPromptAttempts);
+			break; // first match wins
+		} catch {
+			// ignore malformed config, keep defaults
+		}
+	}
+	return cfg;
+}
+
+function joinConfigPath(sub: string, file: string): string | undefined {
+	const home = process.env.HOME;
+	if (!home) return undefined;
+	return `${home}/.pi/${sub}/${file}`;
+}
+
+// ---------------------------------------------------------------------------
+// herdr blocked-state reporting (best-effort; only inside a herdr pane)
+// ---------------------------------------------------------------------------
+
+const HERDR_SOURCE = "pi-sudo";
+let herdrSeq = 0;
+
+function herdrReport(state: "blocked" | "working", message?: string): void {
+	const pane = process.env.HERDR_PANE_ID;
+	if (process.env.HERDR_ENV !== "1" || !pane) return;
+	herdrSeq += 1;
+	const args = [
+		"pane",
+		"report-agent",
+		pane,
+		"--source",
+		HERDR_SOURCE,
+		"--agent",
+		"pi",
+		"--state",
+		state,
+		"--seq",
+		String(herdrSeq),
+	];
+	if (message) args.push("--message", message);
+	execFile("herdr", args, () => {}); // fire-and-forget
+}
+
+/** Hand lifecycle authority back to herdr's own detection after a prompt. */
+function herdrRelease(): void {
+	const pane = process.env.HERDR_PANE_ID;
+	if (process.env.HERDR_ENV !== "1" || !pane) return;
+	execFile("herdr", ["pane", "release-agent", pane, "--source", HERDR_SOURCE, "--agent", "pi"], () => {});
+}
 
 interface PasswordCacheEntry {
 	password: string;
 	expiresAt: number;
+	/** Agent-turn counter when the password was cached. */
+	turnStamp: number;
+	/** Turns this entry stays valid for (0 = unlimited). */
+	turns: number;
 }
 
 const passwordCache = new Map<string, PasswordCacheEntry>();
 
+/** Completed agent turns this session; drives the turn-based cache policy. */
+let turnCounter = 0;
+
 function cacheHasPassword(scope = "local"): boolean {
 	const entry = passwordCache.get(scope);
-	return typeof entry?.password === "string" && Date.now() < entry.expiresAt;
+	if (!entry || typeof entry.password !== "string") return false;
+	if (Date.now() >= entry.expiresAt) return false;
+	if (entry.turns > 0 && turnCounter - entry.turnStamp >= entry.turns) return false;
+	return true;
 }
 
 function cacheGet(scope = "local"): string | undefined {
@@ -56,8 +149,13 @@ function cacheGet(scope = "local"): string | undefined {
 	return passwordCache.get(scope)?.password;
 }
 
-function cacheSet(pw: string, ttlMs = DEFAULT_TTL_MS, scope = "local"): void {
-	passwordCache.set(scope, { password: pw, expiresAt: Date.now() + ttlMs });
+function cacheSet(pw: string, scope = "local"): void {
+	passwordCache.set(scope, {
+		password: pw,
+		expiresAt: config.cacheTtlMs > 0 ? Date.now() + config.cacheTtlMs : Number.POSITIVE_INFINITY,
+		turnStamp: turnCounter,
+		turns: config.cacheTurns,
+	});
 }
 
 function cacheClear(scope?: string): void {
@@ -67,7 +165,15 @@ function cacheClear(scope?: string): void {
 
 function cacheRemainingMs(scope = "local"): number {
 	if (!cacheHasPassword(scope)) return 0;
-	return Math.max(0, (passwordCache.get(scope)?.expiresAt ?? 0) - Date.now());
+	const expiresAt = passwordCache.get(scope)?.expiresAt ?? 0;
+	return expiresAt === Number.POSITIVE_INFINITY ? Number.POSITIVE_INFINITY : Math.max(0, expiresAt - Date.now());
+}
+
+function cacheRemainingTurns(scope = "local"): number {
+	if (!cacheHasPassword(scope)) return 0;
+	const entry = passwordCache.get(scope);
+	if (!entry || entry.turns <= 0) return Number.POSITIVE_INFINITY;
+	return Math.max(0, entry.turns - (turnCounter - entry.turnStamp));
 }
 
 function cacheScopes(): string[] {
@@ -99,72 +205,108 @@ function parseSshArgs(raw: string | undefined): string[] {
 // Masked password prompt (custom TUI component)
 // ---------------------------------------------------------------------------
 
-async function promptPassword(ctx: ExtensionContext, title: string, subtitle?: string): Promise<string | null> {
-	if (!ctx.hasUI) return null;
+type PasswordPromptResult = { kind: "ok"; password: string } | { kind: "cancelled" } | { kind: "timeout" };
 
-	return await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-		let buf = "";
-		let cachedLines: string[] | undefined;
+async function promptPassword(ctx: ExtensionContext, title: string, subtitle?: string): Promise<PasswordPromptResult> {
+	if (!ctx.hasUI) return { kind: "cancelled" };
 
-		const refresh = (): void => {
-			cachedLines = undefined;
-			tui.requestRender();
-		};
+	// Show the pane as blocked in herdr (detection cannot classify our custom
+	// TUI), then hand authority back once the prompt resolves.
+	herdrReport("blocked", "sudo password prompt");
+	try {
+		const deadline = config.promptTimeoutMs > 0 ? Date.now() + config.promptTimeoutMs : null;
 
-		function handleInput(data: string): void {
-			if (matchesKey(data, Key.escape)) {
-				done(null);
-				return;
-			}
-			if (matchesKey(data, Key.enter)) {
-				done(buf);
-				return;
-			}
-			if (matchesKey(data, Key.backspace)) {
-				buf = buf.slice(0, -1);
-				refresh();
-				return;
-			}
-			// Accept printable characters only. Drop control bytes and escape
-			// sequences so paste of garbage cannot poison the buffer.
-			for (const ch of data) {
-				const code = ch.charCodeAt(0);
-				if (code >= 0x20 && code !== 0x7f) buf = `${buf}${ch}`;
-			}
-			refresh();
-		}
+		return await ctx.ui.custom<PasswordPromptResult>((tui, theme, _kb, done) => {
+			let buf = "";
+			let cachedLines: string[] | undefined;
+			let settled = false;
+			let timer: ReturnType<typeof setInterval> | null = null;
 
-		function render(width: number): string[] {
-			if (cachedLines) return cachedLines;
-			const lines: string[] = [];
-			const add = (s: string): void => {
-				lines.push(truncateToWidth(s, width));
+			const finish = (v: PasswordPromptResult): void => {
+				if (settled) return;
+				settled = true;
+				if (timer) clearInterval(timer);
+				done(v);
 			};
 
-			add(theme.fg("accent", "─".repeat(width)));
-			add(theme.fg("text", ` ${title}`));
-			if (subtitle) add(theme.fg("muted", ` ${subtitle}`));
-			lines.push("");
-
-			const dots = "•".repeat(buf.length);
-			add(` ${theme.fg("muted", "password:")} ${theme.fg("accent", dots)}${theme.fg("dim", "▏")}`);
-
-			lines.push("");
-			add(theme.fg("dim", " Enter to submit • Esc to cancel"));
-			add(theme.fg("accent", "─".repeat(width)));
-
-			cachedLines = lines;
-			return lines;
-		}
-
-		return {
-			render,
-			invalidate: (): void => {
+			const refresh = (): void => {
 				cachedLines = undefined;
-			},
-			handleInput,
-		};
-	});
+				tui.requestRender();
+			};
+
+			if (deadline !== null) {
+				timer = setInterval(() => {
+					if (settled) return;
+					if (Date.now() >= deadline) {
+						finish({ kind: "timeout" });
+					} else {
+						refresh();
+					}
+				}, 500);
+			}
+
+			function handleInput(data: string): void {
+				if (matchesKey(data, Key.escape)) {
+					finish({ kind: "cancelled" });
+					return;
+				}
+				if (matchesKey(data, Key.enter)) {
+					finish({ kind: "ok", password: buf });
+					return;
+				}
+				if (matchesKey(data, Key.backspace)) {
+					buf = buf.slice(0, -1);
+					refresh();
+					return;
+				}
+				// Accept printable characters only. Drop control bytes and escape
+				// sequences so paste of garbage cannot poison the buffer.
+				for (const ch of data) {
+					const code = ch.charCodeAt(0);
+					if (code >= 0x20 && code !== 0x7f) buf = `${buf}${ch}`;
+				}
+				refresh();
+			}
+
+			function render(width: number): string[] {
+				if (cachedLines) return cachedLines;
+				const lines: string[] = [];
+				const add = (s: string): void => {
+					lines.push(truncateToWidth(s, width));
+				};
+
+				add(theme.fg("accent", "─".repeat(width)));
+				add(theme.fg("text", ` ${title}`));
+				if (subtitle) add(theme.fg("muted", ` ${subtitle}`));
+				lines.push("");
+
+				const dots = "•".repeat(buf.length);
+				add(` ${theme.fg("muted", "password:")} ${theme.fg("accent", dots)}${theme.fg("dim", "▏")}`);
+
+				lines.push("");
+				const countdown =
+					deadline !== null
+						? theme.fg("warning", ` • auto-cancel in ${Math.max(0, Math.ceil((deadline - Date.now()) / 1000))}s`)
+						: "";
+				add(theme.fg("dim", ` Enter to submit • Esc to cancel${countdown}`));
+				add(theme.fg("accent", "─".repeat(width)));
+
+				cachedLines = lines;
+				return lines;
+			}
+
+			return {
+				render,
+				invalidate: (): void => {
+					cachedLines = undefined;
+				},
+				handleInput,
+			};
+		});
+	} finally {
+		herdrReport("working");
+		herdrRelease();
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -277,21 +419,24 @@ async function ensurePasswordAndRun(
 ): Promise<EnsureOutcome> {
 	let attempts = 0;
 
-	while (attempts < MAX_PROMPT_ATTEMPTS) {
+	while (attempts < config.maxPromptAttempts) {
 		if (!cacheHasPassword(scope)) {
 			const title = scope === "local" ? "sudo: local password required" : `sudo: password required for ${scope}`;
 			const subtitle = reason
 				? `${reason} — will run: ${truncateForDisplay(command, 80)}`
 				: `will run: ${truncateForDisplay(command, 80)}`;
-			const pw = await promptPassword(ctx, title, subtitle);
-			if (pw === null) {
+			const prompted = await promptPassword(ctx, title, subtitle);
+			if (prompted.kind === "timeout") {
+				return { error: `sudo: password prompt timed out after ${Math.round(config.promptTimeoutMs / 1000)}s with no answer` };
+			}
+			if (prompted.kind === "cancelled") {
 				return { error: "User cancelled password prompt" };
 			}
-			if (pw.length === 0) {
+			if (prompted.password.length === 0) {
 				attempts = attempts + 1;
 				continue;
 			}
-			cacheSet(pw, DEFAULT_TTL_MS, scope);
+			cacheSet(prompted.password, scope);
 		}
 
 		const pw = cacheGet(scope);
@@ -307,15 +452,15 @@ async function ensurePasswordAndRun(
 		if (result.authFailed) {
 			cacheClear(scope);
 			attempts = attempts + 1;
-			ctx.ui.notify(`sudo: incorrect password for ${scope} (attempt ${attempts}/${MAX_PROMPT_ATTEMPTS})`, "warning");
+			ctx.ui.notify(`sudo: incorrect password for ${scope} (attempt ${attempts}/${config.maxPromptAttempts})`, "warning");
 			continue;
 		}
 
-		cacheSet(pw, DEFAULT_TTL_MS, scope);
+		cacheSet(pw, scope);
 		return result;
 	}
 
-	return { error: `sudo: too many incorrect password attempts (${MAX_PROMPT_ATTEMPTS})` };
+	return { error: `sudo: too many incorrect password attempts (${config.maxPromptAttempts})` };
 }
 
 // ---------------------------------------------------------------------------
@@ -348,6 +493,13 @@ export type RemoteSudoExecInput = {
 };
 
 export default function pisudo(pi: ExtensionAPI): void {
+	config = loadSudoConfig();
+
+	// Completed agent turns drive the turn-based cache policy.
+	pi.on("agent_end", async () => {
+		turnCounter = turnCounter + 1;
+	});
+
 	// ---- session_shutdown: drop the cached password ---------------------
 	pi.on("session_shutdown", async () => {
 		cacheClear();
@@ -601,16 +753,67 @@ export default function pisudo(pi: ExtensionAPI): void {
 	});
 
 	// ---- Commands --------------------------------------------------------
+	const describeCache = (scope: string): string => {
+		const ms = cacheRemainingMs(scope);
+		const turns = cacheRemainingTurns(scope);
+		const time = ms === Number.POSITIVE_INFINITY ? "no expiry" : `${Math.ceil(ms / 1000)}s`;
+		const turnPart = turns === Number.POSITIVE_INFINITY ? "unlimited turns" : `${turns} turn(s) left`;
+		return `${time}, ${turnPart}`;
+	};
+
+	// ---- Commands --------------------------------------------------------
 	pi.registerCommand("sudo-status", {
 		description: "Show pi-sudo password cache status",
 		handler: async (_args, ctx) => {
 			const scopes = cacheScopes();
 			if (scopes.length > 0) {
-				const summary = scopes.map((scope) => `${scope} ${Math.ceil(cacheRemainingMs(scope) / 1000)}s`).join(", ");
-				ctx.ui.notify(`sudo: cached passwords (${summary})`, "info");
+				const summary = scopes.map((scope) => `${scope}: ${describeCache(scope)}`).join("\n  ");
+				ctx.ui.notify(`sudo: cached passwords\n  ${summary}`, "info");
 			} else {
 				ctx.ui.notify("sudo: no cached passwords", "info");
 			}
+			ctx.ui.notify(
+				`policy: ttl ${config.cacheTtlMs > 0 ? `${Math.round(config.cacheTtlMs / 1000)}s` : "none"}, turns ${config.cacheTurns > 0 ? config.cacheTurns : "unlimited"}, prompt timeout ${config.promptTimeoutMs > 0 ? `${Math.round(config.promptTimeoutMs / 1000)}s` : "none"}`,
+				"info"
+			);
+		},
+	});
+
+	pi.registerCommand("sudo-ttl", {
+		description: "Set the session's sudo cache policy: /sudo-ttl <seconds> [turns]. 0 = no expiry / unlimited turns",
+		handler: async (args, ctx) => {
+			const tokens = args.trim().split(/\s+/).filter(Boolean);
+			if (tokens.length === 0) {
+				ctx.ui.notify(
+					`usage: /sudo-ttl <seconds> [turns] — current: ttl ${config.cacheTtlMs > 0 ? `${Math.round(config.cacheTtlMs / 1000)}s` : "none"}, turns ${config.cacheTurns > 0 ? config.cacheTurns : "unlimited"}`,
+					"info"
+				);
+				return;
+			}
+			const secs = Number.parseInt(tokens[0], 10);
+			if (!Number.isFinite(secs) || secs < 0) {
+				ctx.ui.notify("seconds must be a non-negative number (0 = no expiry)", "error");
+				return;
+			}
+			let turns = 0;
+			if (tokens[1] !== undefined) {
+				turns = Number.parseInt(tokens[1], 10);
+				if (!Number.isFinite(turns) || turns < 0) {
+					ctx.ui.notify("turns must be a non-negative number (0 = unlimited)", "error");
+					return;
+				}
+			}
+			config.cacheTtlMs = secs * 1000;
+			if (tokens[1] !== undefined) config.cacheTurns = turns;
+			// Re-stamp existing entries so the new policy applies from now.
+			for (const scope of passwordCache.keys()) {
+				const entry = passwordCache.get(scope);
+				if (entry) cacheSet(entry.password, scope);
+			}
+			ctx.ui.notify(
+				`sudo: cache now valid for ${secs > 0 ? `${secs}s` : "no expiry"}${tokens[1] !== undefined ? ` / ${turns > 0 ? `${turns} turns` : "unlimited turns"}` : ""}`,
+				"info"
+			);
 		},
 	});
 
