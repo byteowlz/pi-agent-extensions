@@ -4,6 +4,39 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-history-search: fix "no such table: messages_fts" under Node
+
+- **Root cause.** The node:sqlite opener passed `undefined` options explicitly
+  (`new DatabaseSync(path, undefined)`), which Node validates as a TypeError —
+  so every read-write index open failed silently, indexing never ran, and
+  searches fell back to read-only opens of leftover 0-byte `index.db` files
+  whose queries then crashed with `no such table: messages_fts` instead of
+  degrading to the live scan. Only manifests when pi runs under Node (the Bun
+  branch was unaffected). The opener now omits the options argument entirely
+  for read-write opens.
+- **Hardening.** Read-only opens now verify the index schema before use and
+  report "no index" (callers fall back to the live scan) when the file is empty
+  or tableless, and the read-only search path catches query errors and degrades
+  to a live scan instead of surfacing SQL errors to the tool result.
+
+### pi-herdr-tools: remote relay targets + model override on spawn confirm
+
+- **/send lists remote herdr targets.** Agents on saved SSH machines
+  (`herdr machine list`) now appear in the /send and /relay fuzzy picker
+  alongside local ones, prefixed with the machine label. Picking a remote
+  target routes the prompt (and the Ctrl+j cross-inject read-back) through
+  `herdr --machine <profile-id>`, so it lands on the right server even when
+  pane ids collide across machines. Requires herdr >= 0.9.1 locally and on the
+  remote; machines that fail to answer are skipped with a warning instead of
+  blocking the picker, and never fall back to Local.
+- **Change the subagent model at the spawn prompt.** In `confirm` and `timeout`
+  allow modes, the spawn confirmation now offers a third action besides
+  allow/deny: press `m` to fuzzy-pick a different model from all available
+  models; the spawn is then approved with that model for just this spawn
+  (only shown for kinds that consume a model, i.e. `pi`). While the picker is
+  open the auto-decide countdown is suspended; Esc returns to the prompt with
+  a fresh countdown.
+
 ### pi-herdr-tools: durable subagent history + push close events
 
 - **Durable outcome history.** Every subagent now records a terminal `outcome`

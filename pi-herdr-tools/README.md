@@ -110,6 +110,12 @@ Loadouts resolve to a set of allowed model ids + spawn kinds, which gates
 - **`timeout`** — ask the user, but if they don't answer within `confirmTimeoutMs`
   the session **auto-decides** to `allow` or `deny` (set with `/subagent decide`).
 
+In `confirm` and `timeout` modes the prompt offers three actions:
+**y/Enter** allow, **n/Esc** deny, and **m** change model — a fuzzy picker over
+all available models that approves the spawn with the picked model for just this
+spawn (shown when the kind consumes a model, i.e. `pi`). While the picker is
+open the countdown is suspended; Esc returns to the prompt with a fresh countdown.
+
 The mode, decision, timeout and allowance are stored **per session** (keyed by the
 pi session id), so each session gets its own policy and it survives a resume/reload.
 
@@ -219,6 +225,12 @@ Flow:
    herdr agents (identified by pane): type to filter, ↑↓ to navigate, Enter to pick
 3. shows a compose box with a preview of the output; type an optional note
 4. sends `note + output` to the target via `herdr agent prompt <pane> "…"`
+
+Remote targets: agents on **saved SSH machines** (`herdr machine add`) are listed
+alongside local ones, prefixed with the machine label (`buildbox: π - repo`).
+Sending routes through `herdr --machine <profile-id> …`, which needs herdr
+>= 0.9.1 on this machine **and** on the remote; unreachable machines are skipped
+with a warning and never fall back to Local.
 
 Keybindings in the compose box:
 
