@@ -1554,7 +1554,7 @@ async function fuzzyTargetPicker(ctx: ExtensionContext, targets: RelayTarget[]):
 		}
 		let visible: Row[] = all;
 		let selected = 0;
-		const maxVisible = Math.max(1, Math.min(all.length, 10));
+		const maxVisible = Math.max(1, Math.min(all.length, 16));
 		let cachedLines: string[] | undefined;
 
 		function recompute(query: string): void {
@@ -1623,7 +1623,7 @@ async function fuzzyTargetPicker(ctx: ExtensionContext, targets: RelayTarget[]):
 			const rw = Math.max(1, width);
 			const lines: string[] = [];
 			lines.push(theme.fg("accent", "─".repeat(rw)));
-			lines.push(...wrapTextWithAnsi(theme.fg("accent", "Send last output to:"), rw));
+			lines.push(...wrapTextWithAnsi(theme.fg("accent", `Send last output to: (${all.length} targets, type to filter)`), rw));
 			lines.push("");
 			lines.push(...search.render(Math.max(1, rw - 2)).map((l) => ` ${l}`));
 			lines.push("");
@@ -1636,7 +1636,12 @@ async function fuzzyTargetPicker(ctx: ExtensionContext, targets: RelayTarget[]):
 				if (start > 0 || end < visible.length) lines.push(theme.fg("dim", `  (${selected + 1}/${visible.length})`));
 			}
 			lines.push("");
-			lines.push(...wrapTextWithAnsi(theme.fg("dim", "Type to fuzzy-filter • ↑↓ navigate • Enter select • Esc cancel"), rw));
+			lines.push(
+				...wrapTextWithAnsi(
+					theme.fg("dim", "Type to fuzzy-filter • ↑↓ navigate • PgUp/PgDn page • Enter select • Esc cancel"),
+					rw
+				)
+			);
 			lines.push(theme.fg("accent", "─".repeat(rw)));
 			cachedLines = lines;
 			return lines;
