@@ -55,7 +55,9 @@ function loadOpener(): SqlOpener | null {
 			const m = require(mod) as Record<string, unknown>;
 			if (mod === "node:sqlite" && typeof m.DatabaseSync === "function") {
 				const Ctor = m.DatabaseSync as new (p: string, o?: { readOnly?: boolean }) => SqlDatabase;
-				return (p, ro) => new Ctor(p, ro ? { readOnly: true } : undefined);
+				// Never pass `undefined` options explicitly: Node's DatabaseSync validates that
+				// a provided options value must be an object, so `new Ctor(p, undefined)` throws.
+				return (p, ro) => (ro ? new Ctor(p, { readOnly: true }) : new Ctor(p));
 			}
 			if (mod === "bun:sqlite" && typeof m.Database === "function") {
 				const Ctor = m.Database as new (p: string, o?: { readonly?: boolean }) => SqlDatabase;
@@ -365,6 +367,15 @@ function openDb(projDir: string, mode: "rw" | "ro"): SqlDatabase | null {
 		}
 		if (!fs.existsSync(dbPath)) return null;
 		const db = opener(dbPath, true);
+		if (!hasIndexSchema(db)) {
+			// Leftover/empty index file: querying it would only produce "no such table".
+			try {
+				db.close();
+			} catch {
+				// ignore
+			}
+			return null;
+		}
 		openDbs.set(dbPath, { db, writable: false });
 		return db;
 	} catch {
@@ -381,6 +392,16 @@ export function closeAll(): void {
 		}
 	}
 	openDbs.clear();
+}
+
+/** Does this database actually contain the index schema? (Rejects 0-byte/leftover files.) */
+function hasIndexSchema(db: SqlDatabase): boolean {
+	try {
+		const row = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'").get();
+		return !!row;
+	} catch {
+		return false;
+	}
 }
 
 // ── Incremental indexing (current project, read-write) ───────────────
@@ -680,7 +701,13 @@ export async function searchProject(
 		}
 	}
 	const ro = openDb(projDir, "ro");
-	if (ro) return searchDb(ro, project, query, limit, config.snippetsPerSession, roleFilter, allowedSessionIds);
+	if (ro) {
+		try {
+			return searchDb(ro, project, query, limit, config.snippetsPerSession, roleFilter, allowedSessionIds);
+		} catch {
+			// broken index: fall through to the live scan
+		}
+	}
 	return scanProject(projDir, project, query, limit, config.snippetsPerSession, roleFilter, allowedSessionIds);
 }
 
