@@ -4,6 +4,11 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-xlatch-session: theme-aware transparent icon
+
+- Replaced the dark icon tile with transparent black and white Pi marks. New
+  xlatch clients choose the appropriate variant for their current appearance.
+
 ### pi-xlatch-session: branded xlatch action icon
 
 - Pi session actions now register with the Pi Coding Agent icon, embedded by

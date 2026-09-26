@@ -42,6 +42,7 @@ const MANIFEST_DIR = path.join(ROOT, "manifests");
 const ADAPTER = path.join(ROOT, "adapter.py");
 const CLAIMS = path.join(ROOT, "claims.json");
 const ICON = fileURLToPath(new URL("./assets/pi-coding-agent.svg", import.meta.url));
+const ICON_DARK = fileURLToPath(new URL("./assets/pi-coding-agent-dark.svg", import.meta.url));
 const STATE_ENTRY = "xlatch-session-slot";
 const SLOT_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 
@@ -147,7 +148,7 @@ async function registerSlot(slot: string): Promise<{ id: string; revision?: stri
 	const file = manifestPath(slot);
 	// Stable bytes => stable revision => approve/grant once per slot.
 	fs.writeFileSync(file, `${JSON.stringify(buildManifest(slot), null, 2)}\n`);
-	const { stdout } = await execFileAsync("xlatch", ["register", file, "--icon", ICON, "--json"], {
+	const { stdout } = await execFileAsync("xlatch", ["register", file, "--icon", ICON, "--icon-dark", ICON_DARK, "--json"], {
 		maxBuffer: 4 * 1024 * 1024,
 	});
 	try {
