@@ -2,6 +2,9 @@
 
 Share text or a link from your iPhone straight into **one specific running pi
 session**. The session appears in the iOS share sheet as a normal xlatch action.
+Pi targets use the Pi Coding Agent mark supplied by this extension. xlatch
+embeds the icon into each registered action for offline rendering; users may
+still replace it with a per-device icon override.
 
 ## Chain
 

@@ -4,6 +4,12 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-xlatch-session: branded xlatch action icon
+
+- Pi session actions now register with the Pi Coding Agent icon, embedded by
+  xlatch for offline rendering on native clients. The integration owns the
+  brand asset while xlatch remains a generic capability host.
+
 ### pi-sudo: bash guard false-positive fixes, escape hatch, configurable guard
 
 - **Fewer false positives.** The bash guard now strips quoted spans and
