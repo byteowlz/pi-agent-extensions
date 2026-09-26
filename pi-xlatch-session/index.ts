@@ -27,6 +27,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -40,6 +41,7 @@ const INCOMING = path.join(os.homedir(), "xlatch", "incoming");
 const MANIFEST_DIR = path.join(ROOT, "manifests");
 const ADAPTER = path.join(ROOT, "adapter.py");
 const CLAIMS = path.join(ROOT, "claims.json");
+const ICON = fileURLToPath(new URL("./assets/pi-coding-agent.svg", import.meta.url));
 const STATE_ENTRY = "xlatch-session-slot";
 const SLOT_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 
@@ -145,7 +147,9 @@ async function registerSlot(slot: string): Promise<{ id: string; revision?: stri
 	const file = manifestPath(slot);
 	// Stable bytes => stable revision => approve/grant once per slot.
 	fs.writeFileSync(file, `${JSON.stringify(buildManifest(slot), null, 2)}\n`);
-	const { stdout } = await execFileAsync("xlatch", ["register", file, "--json"], { maxBuffer: 4 * 1024 * 1024 });
+	const { stdout } = await execFileAsync("xlatch", ["register", file, "--icon", ICON, "--json"], {
+		maxBuffer: 4 * 1024 * 1024,
+	});
 	try {
 		const parsed = JSON.parse(stdout);
 		return { id: `pi.send.${slot}`, revision: parsed?.revision, status: parsed?.status };

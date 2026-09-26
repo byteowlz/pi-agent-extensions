@@ -6,9 +6,13 @@ import * as path from "node:path";
 test("session status checks the actual route; lost routes recover and conflicting routes show offline", () => {
 	const home = fs.mkdtempSync("/tmp/xlh-");
 	fs.mkdirSync(`${home}/bin`);
-	fs.writeFileSync(`${home}/bin/xlatch`, '#!/bin/sh\nprintf \'{"id":"pi.send.test","status":"active","revision":"test"}\\n\'\n', {
-		mode: 0o700,
-	});
+	fs.writeFileSync(
+		`${home}/bin/xlatch`,
+		'#!/bin/sh\ncase " $* " in *" --icon "*"pi-coding-agent.svg"*) ;; *) echo "missing pi icon" >&2; exit 2;; esac\nprintf \'{"id":"pi.send.test","status":"active","revision":"test"}\\n\'\n',
+		{
+			mode: 0o700,
+		}
+	);
 	fs.mkdirSync(`${home}/.pi/agent/xlatch-pi`, { recursive: true });
 	fs.writeFileSync(`${home}/.pi/agent/xlatch-pi/adapter.py`, "fixture");
 	const script = `
