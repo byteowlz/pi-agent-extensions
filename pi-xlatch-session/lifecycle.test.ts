@@ -8,7 +8,7 @@ test("session status checks the actual route; lost routes recover and conflictin
 	fs.mkdirSync(`${home}/bin`);
 	fs.writeFileSync(
 		`${home}/bin/xlatch`,
-		'#!/bin/sh\ncase " $* " in *" --icon "*"pi-coding-agent.svg"*) ;; *) echo "missing pi icon" >&2; exit 2;; esac\nprintf \'{"id":"pi.send.test","status":"active","revision":"test"}\\n\'\n',
+		'#!/bin/sh\ncase " $* " in *" --icon "*"pi-coding-agent.svg"*" --icon-dark "*"pi-coding-agent-dark.svg"*) ;; *) echo "missing pi icon variants" >&2; exit 2;; esac\nprintf \'{"id":"pi.send.test","status":"active","revision":"test"}\\n\'\n',
 		{
 			mode: 0o700,
 		}
