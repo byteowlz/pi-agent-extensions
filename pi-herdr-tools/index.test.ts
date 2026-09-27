@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildCatalogDigest, loadCatalog, resolveLoadoutKinds, resolveLoadoutModelIds } from "./index";
+import { buildCatalogDigest, isPaneBusyError, loadCatalog, resolveLoadoutKinds, resolveLoadoutModelIds } from "./index";
 
 interface TestModel {
 	id: string;
@@ -82,6 +82,29 @@ function sampleCatalog(): { models: TestModel[]; loadouts: Record<string, { matc
 function tmpdir2(): string {
 	return mkdtempSync(join(tmpdir(), "herdr-cat-"));
 }
+
+describe("pi-herdr-tools pane-busy detection", () => {
+	test("detects agent_pane_busy in the error message", () => {
+		expect(isPaneBusyError(new Error('herdr failed: {"error":{"code":"agent_pane_busy"}}'))).toBe(true);
+	});
+
+	test("detects agent_pane_busy in stderr JSON", () => {
+		const err = Object.assign(new Error("Command failed: herdr agent start"), {
+			stderr:
+				'{"id":"cli:agent:start","error":{"code":"agent_pane_busy","message":"agent target pane w21:p2 is not an available shell"}}',
+		});
+		expect(isPaneBusyError(err)).toBe(true);
+	});
+
+	test("does not match other herdr errors", () => {
+		const notReady = Object.assign(new Error("failed"), {
+			stderr: '{"error":{"code":"agent_not_ready","message":"agent blocked during startup"}}',
+		});
+		expect(isPaneBusyError(notReady)).toBe(false);
+		expect(isPaneBusyError(new Error("network unreachable"))).toBe(false);
+		expect(isPaneBusyError(undefined)).toBe(false);
+	});
+});
 
 describe("pi-herdr-tools loadout resolution", () => {
 	test("local resolves to local models only", () => {

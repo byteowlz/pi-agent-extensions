@@ -297,7 +297,7 @@ export function buildCatalogDigest(catalog: ModelCatalog): string {
 interface TrackedSubagent {
 	name: string;
 	paneId: string;
-	tabId: string;
+	tabId?: string;
 	model: string;
 	kind?: string;
 	label: string;
@@ -438,6 +438,39 @@ async function herdr(args: string[], opts?: { timeout?: number }): Promise<any> 
 async function herdrRaw(args: string[], opts?: { timeout?: number }): Promise<string> {
 	const { stdout } = await execFileAsync("herdr", args, { maxBuffer: 16 * 1024 * 1024, ...opts });
 	return stdout;
+}
+
+/** True when a failed `herdr agent start` was rejected because the target pane's
+ * shell was not yet at an interactive prompt (`agent_pane_busy`). A freshly
+ * created tab's shell can take a moment (slow rc files, load) to get there. */
+export function isPaneBusyError(err: unknown): boolean {
+	if (!err) return false;
+	const e = err as Error & { stderr?: string; message?: string };
+	const text = `${e.message ?? ""}\n${e.stderr ?? ""}`;
+	return /agent_pane_busy/.test(text);
+}
+
+const AGENT_START_ATTEMPTS = 4;
+const AGENT_START_BACKOFF_MS = 500;
+
+/** `herdr agent start` with bounded retries: a freshly created tab's root pane
+ * is only startable once its shell sits at an interactive prompt, and herdr
+ * rejects too-early attempts with `agent_pane_busy`. Retries only that error
+ * (400/800/1600ms backoff); anything else fails immediately. */
+async function startAgentWithRetry(args: string[], attempts = AGENT_START_ATTEMPTS): Promise<any> {
+	let lastErr: unknown;
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		if (attempt > 0) {
+			await new Promise((resolve) => setTimeout(resolve, AGENT_START_BACKOFF_MS * 2 ** (attempt - 1)));
+		}
+		try {
+			return await herdr(args);
+		} catch (err) {
+			lastErr = err;
+			if (!isPaneBusyError(err)) throw err;
+		}
+	}
+	throw lastErr;
 }
 
 /** Convert a simple glob (e.g. "openai/*") to a RegExp. */
@@ -862,7 +895,7 @@ async function openSideTab(opts: {
 
 	const piArgs: string[] = ["--fork", sessionFile];
 	if (opts.model) piArgs.push("--model", opts.model);
-	const startRes = await herdr(["agent", "start", name, "--kind", "pi", "--pane", paneId, "--", ...piArgs]);
+	const startRes = await startAgentWithRetry(["agent", "start", name, "--kind", "pi", "--pane", paneId, "--", ...piArgs]);
 	if (startRes?.error || !startRes?.result?.agent?.name) {
 		throw new Error(`herdr agent start failed: ${JSON.stringify(startRes).slice(0, 400)}`);
 	}
@@ -2172,19 +2205,36 @@ export default function herdrTools(pi: ExtensionAPI) {
 			if (approval.model) model = approval.model;
 
 			const name = randomName();
-			const tabRes = await herdr(["tab", "create", "--label", label, "--cwd", cwd, "--no-focus"]);
-			const paneId = tabRes?.result?.root_pane?.pane_id;
-			const tabId = tabRes?.result?.tab?.tab_id;
-			if (!paneId) {
+			let paneId: string | undefined;
+			let tabId: string | undefined;
+			let startRes: { error?: unknown; result?: { agent?: { name?: string } } } | undefined;
+			try {
+				const tabRes = await herdr(["tab", "create", "--label", label, "--cwd", cwd, "--no-focus"]);
+				paneId = tabRes?.result?.root_pane?.pane_id;
+				tabId = tabRes?.result?.tab?.tab_id;
+				if (!paneId) {
+					return {
+						content: [
+							{ type: "text", text: `Error: herdr tab create failed. Response: ${JSON.stringify(tabRes).slice(0, 500)}` },
+						],
+						details: { spawned: false },
+					};
+				}
+
+				// A fresh root pane is only startable once its shell sits at its
+				// interactive prompt; herdr rejects too-early attempts with
+				// agent_pane_busy. startAgentWithRetry absorbs that race.
+				const startArgs = kind === "pi" ? ["--", "--model", model] : [];
+				startRes = await startAgentWithRetry(["agent", "start", name, "--kind", kind, "--pane", paneId, ...startArgs]);
+			} catch (err) {
+				const e = err as Error & { stderr?: string };
+				const detail = e?.stderr?.trim() || e?.message || "unknown error";
 				return {
-					content: [{ type: "text", text: `Error: herdr tab create failed. Response: ${JSON.stringify(tabRes).slice(0, 500)}` }],
+					content: [{ type: "text", text: `Error: herdr agent start failed after retries: ${detail.slice(0, 500)}` }],
 					details: { spawned: false },
 				};
 			}
-
-			const startArgs = kind === "pi" ? ["--", "--model", model] : [];
-			const startRes = await herdr(["agent", "start", name, "--kind", kind, "--pane", paneId, ...startArgs]);
-			if (startRes?.error || !startRes?.result?.agent?.name) {
+			if (!paneId || startRes?.error || !startRes?.result?.agent?.name) {
 				return {
 					content: [
 						{ type: "text", text: `Error: herdr agent start failed. Response: ${JSON.stringify(startRes).slice(0, 500)}` },

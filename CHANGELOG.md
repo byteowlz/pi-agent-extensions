@@ -4,7 +4,17 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
-## [Unreleased]
+### pi-herdr-tools: fix subagent spawn failing with agent_pane_busy
+
+- A freshly created tab's root pane is only startable once its shell sits at
+  its interactive prompt; under load `herdr agent start` could hit the pane
+  before that and fail with `agent_pane_busy`, aborting the spawn. Both spawn
+  paths (subagent tool and /side, /btw) now retry `agent start` on that
+  specific error (400/800/1600ms backoff, 4 attempts) and rethrow anything
+  else immediately. The subagent spawn path also converts herdr CLI failures
+  into structured tool errors that carry the raw herdr error code/message
+  instead of an uncaught exception.
+- New exported `isPaneBusyError()` predicate with unit tests.
 
 ### oqto-todos: collapse done todos by default
 
