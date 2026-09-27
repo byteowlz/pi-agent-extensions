@@ -4,6 +4,17 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+## [Unreleased]
+
+### oqto-todos: collapse done todos by default
+
+- The persistent TUI widget and the collapsed Todo tool-result view now show
+  only active (pending / in-progress) todos plus one dim `✓ N todos done`
+  line instead of listing every completed entry. Expanding a tool result
+  (or `/todos`) still shows everything line by line. The LLM-facing todo
+  text used after compaction is unchanged, so the model keeps full state.
+
+
 ### pi-xlatch-session: theme-aware transparent icon
 
 - Replaced the dark icon tile with transparent black and white Pi marks. New

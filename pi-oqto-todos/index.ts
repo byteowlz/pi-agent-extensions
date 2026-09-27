@@ -292,7 +292,7 @@ function normalizeTodoText(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
 }
 
-function buildSummaryLine(todos: TodoItem[], theme: Theme): string {
+function buildSummaryLine(todos: TodoItem[], theme: Theme, includeDone = true): string {
 	const counts: Record<string, number> = {};
 	for (const t of todos) {
 		counts[t.status] = (counts[t.status] || 0) + 1;
@@ -303,8 +303,17 @@ function buildSummaryLine(todos: TodoItem[], theme: Theme): string {
 		["completed", "done"],
 		["cancelled", "cancelled"],
 	];
-	const parts = labels.filter(([key]) => counts[key] > 0).map(([key, label]) => `${counts[key]} ${label}`);
+	const parts = labels
+		.filter(([key]) => counts[key] > 0 && (includeDone || key === "in_progress" || key === "pending"))
+		.map(([key, label]) => `${counts[key]} ${label}`);
 	return theme.fg("muted", `${todos.length} todos (${parts.join(", ")})`);
+}
+
+/** One collapsed line for all completed todos, e.g. `✓ 3 todos done`. */
+function buildDoneLine(todos: TodoItem[], theme: Theme): string | undefined {
+	const done = todos.filter((t) => t.status === "completed").length;
+	if (done === 0) return undefined;
+	return theme.fg("dim", `  ✓ ${done} todo${done === 1 ? "" : "s"} done`);
 }
 
 function getStatusColor(status: TodoStatus): ThemeColor {
@@ -356,21 +365,34 @@ function renderTodoList(todos: TodoItem[], theme: Theme, expanded: boolean): str
 	}
 
 	const lines: string[] = [];
-	const maxItems = expanded ? 20 : 5;
 	const maxWidth = expanded ? 120 : 80;
 
-	lines.push(buildSummaryLine(todos, theme));
-	lines.push("");
-
 	const allOrdered = orderTodos(todos);
-	const displayTodos = expanded ? allOrdered : allOrdered.slice(0, maxItems);
+	const active = allOrdered.filter((t) => t.status === "in_progress" || t.status === "pending");
+	const doneLine = buildDoneLine(todos, theme);
 
-	for (const todo of displayTodos) {
-		lines.push(renderTodoLine(todo, theme, maxWidth));
-	}
-
-	if (!expanded && allOrdered.length > maxItems) {
-		lines.push(theme.fg("dim", `  ... ${allOrdered.length - maxItems} more`));
+	if (expanded) {
+		// Expanded: everything, including done/cancelled todos line by line.
+		lines.push(buildSummaryLine(todos, theme));
+		lines.push("");
+		for (const todo of allOrdered) {
+			lines.push(renderTodoLine(todo, theme, maxWidth));
+		}
+	} else {
+		// Default: active todos only; done todos collapse into one line.
+		const maxItems = 5;
+		if (active.length > 0) {
+			lines.push(buildSummaryLine(todos, theme, false));
+			lines.push("");
+			for (const todo of active.slice(0, maxItems)) {
+				lines.push(renderTodoLine(todo, theme, maxWidth));
+			}
+			if (active.length > maxItems) {
+				lines.push(theme.fg("dim", `  ... ${active.length - maxItems} more`));
+			}
+		}
+		const collapsed = doneLine ?? (todos.length > 0 ? buildSummaryLine(todos, theme) : undefined);
+		if (collapsed) lines.push(collapsed);
 	}
 
 	return lines.join("\n");
@@ -414,15 +436,25 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 		const maxWidgetItems = 8;
 
 		const lines: string[] = [];
-		lines.push(truncateToWidth(buildSummaryLine(todos, theme).replace(/^\d+ todos/, "Todos:"), effectiveWidth));
-
 		const active = todos.filter((t) => t.status === "in_progress" || t.status === "pending");
-		const displayItems = active.slice(0, maxWidgetItems);
-		for (const todo of displayItems) {
-			lines.push(renderWidgetTodoLine(todo, theme, effectiveWidth));
+		const done = todos.filter((t) => t.status === "completed").length;
+
+		if (active.length > 0) {
+			lines.push(truncateToWidth(buildSummaryLine(todos, theme, false).replace(/^\d+ todos/, "Todos:"), effectiveWidth));
+			const displayItems = active.slice(0, maxWidgetItems);
+			for (const todo of displayItems) {
+				lines.push(renderWidgetTodoLine(todo, theme, effectiveWidth));
+			}
+			if (active.length > maxWidgetItems) {
+				lines.push(truncateToWidth(theme.fg("dim", `  ... ${active.length - maxWidgetItems} more`), effectiveWidth));
+			}
 		}
-		if (active.length > maxWidgetItems) {
-			lines.push(truncateToWidth(theme.fg("dim", `  ... ${active.length - maxWidgetItems} more`), effectiveWidth));
+		if (done > 0) {
+			lines.push(truncateToWidth(theme.fg("dim", `  ✓ ${done} todo${done === 1 ? "" : "s"} done`), effectiveWidth));
+		}
+		if (lines.length === 0 && todos.length > 0) {
+			// Only cancelled items remain.
+			lines.push(truncateToWidth(theme.fg("muted", `Todos: ${todos.length} cancelled`), effectiveWidth));
 		}
 
 		return lines;
