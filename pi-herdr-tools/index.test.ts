@@ -2,7 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildCatalogDigest, isPaneBusyError, loadCatalog, resolveLoadoutKinds, resolveLoadoutModelIds } from "./index";
+import {
+	buildCatalogDigest,
+	deriveCatalogEntries,
+	isPaneBusyError,
+	loadCatalog,
+	resolveLoadoutKinds,
+	resolveLoadoutModelIds,
+} from "./index";
 
 interface TestModel {
 	id: string;
@@ -82,6 +89,42 @@ function sampleCatalog(): { models: TestModel[]; loadouts: Record<string, { matc
 function tmpdir2(): string {
 	return mkdtempSync(join(tmpdir(), "herdr-cat-"));
 }
+
+describe("pi-herdr-tools catalog derive", () => {
+	const catalog = {
+		models: [
+			{ id: "deepseek", provider: "rtx6000", tags: ["local"] },
+			{ id: "kimi", provider: "az", tags: ["azure"] },
+		],
+	};
+	const registry = [
+		{ provider: "rtx6000", id: "deepseek", name: "DeepSeek" },
+		{ provider: "rtx6000", id: "glm", name: "GLM" },
+		{ provider: "fh", id: "deepseek", name: "Fraunhofer DeepSeek" },
+		{ provider: "az", id: "kimi", name: "Kimi" },
+		{ provider: "openai", id: "gpt-5", name: "GPT-5" },
+	];
+
+	test("derives stubs for scoped models missing from the catalog", () => {
+		const r = deriveCatalogEntries(catalog, registry, ["rtx6000/*"], ["local"]);
+		expect(r.added).toEqual([{ id: "glm", provider: "rtx6000", label: "GLM", tags: ["local"] }]);
+		expect(r.existingCount).toBe(1);
+		expect(r.unmatched).toEqual([]);
+	});
+
+	test("reports patterns that match nothing and keeps existing entries untouched", () => {
+		const r = deriveCatalogEntries(catalog, registry, ["az/kimi", "ghost/*"], []);
+		expect(r.added).toEqual([]);
+		expect(r.existingCount).toBe(1);
+		expect(r.unmatched).toEqual(["ghost/*"]);
+	});
+
+	test("exact-pattern scoping only derives what is allowed", () => {
+		const r = deriveCatalogEntries(catalog, registry, ["fh/deepseek"], []);
+		expect(r.added.map((m) => `${m.provider}/${m.id}`)).toEqual(["fh/deepseek"]);
+		expect(r.added[0]?.tags).toEqual([]);
+	});
+});
 
 describe("pi-herdr-tools pane-busy detection", () => {
 	test("detects agent_pane_busy in the error message", () => {

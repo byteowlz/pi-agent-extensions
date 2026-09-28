@@ -92,7 +92,7 @@ Loadouts resolve to a set of allowed model ids + spawn kinds, which gates
 | `/subagent history` | Durable record of this session's finished/closed subagents (outcome + end time) |
 | `/subagent close <name>` | Close a subagent's tab (kills it) |
 | `/subagent reset <name> [task]` | Interrupt a subagent and (optionally) re-prompt it |
-| `/subagent models` | Open the **interactive provider/model picker** |
+| `/subagent models` | Open the **fuzzy allowlist palette** (scoped view + loadouts + fuzzy search) |
 | `/subagent models add <glob>` | Allow a model pattern (repeatable) |
 | `/subagent models remove <glob>` | Remove an allowlisted pattern |
 | `/subagent models list` | Show the allowlist + loadouts |
@@ -119,16 +119,18 @@ open the countdown is suspended; Esc returns to the prompt with a fresh countdow
 The mode, decision, timeout and allowance are stored **per session** (keyed by the
 pi session id), so each session gets its own policy and it survives a resume/reload.
 
-### Model picker + loadouts
+### Model allowlist palette + loadouts
 
-`/subagent models` opens an interactive picker: it lists every available
-provider and its models with checkboxes. **Space** toggles the highlighted row
-(model or whole provider), **↑↓** navigate, **type** to filter, **Enter** saves the
-session's allowlist, **Esc** cancels.
+`/subagent models` opens a **fuzzy allowlist palette** — no mega-list. The
+empty view is scoped by default: it shows only what's allowed plus the
+available **loadouts** (catalog tag scopes like `local`/`data-privacy`, plus
+config/session pattern presets). **Type** to fuzzy-search the full model
+catalog (name, `provider/id`, tags) — results are capped, and a
+`provider/*` row appears when your query names a provider prefix.
 
-Loadouts are named presets. There are **two scopes**: **global** (shared across
-sessions, stored in `~/.pi/agent/subagent-config.json`) and **local** (per
-session, stored in the session state file).
+Keys: **space**/**Enter** toggle a model without closing (Enter advances for
+fast multi-add), **Enter on a loadout applies it** as the whole allowlist,
+**Esc saves & closes**, **ctrl+r** reverts to what you started with.
 
 ```
 /subagent models loadout save  cheap            # save current allowlist as a LOCAL loadout
@@ -137,6 +139,16 @@ session, stored in the session state file).
 /subagent models loadout delete cheap [local|global]
 /subagent models loadout list                  # show local and global loadouts
 ```
+
+### Catalog derivation
+
+`/subagent catalog derive [tag1,tag2]` bootstraps the model catalog from the
+scoped allowlist: every registry model matching an allowlist pattern that
+isn't cataloged yet gets a stub entry (label from the registry, optional
+tags) appended to `model-catalog.json`. Existing entries — including ones
+with hand-tuned tags — are never touched; patterns matching no registry
+model are reported. Typical flow: scope models with `/subagent models`, then
+`/subagent catalog derive local` and add more tags in the file as needed.
 
 A session can opt in or out of global loadouts, and pin itself to a loadout:
 

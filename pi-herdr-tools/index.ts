@@ -262,6 +262,46 @@ export function resolveLoadoutModelIds(catalog: ModelCatalog, loadoutName: strin
 		.map((m) => m.id);
 }
 
+export interface CatalogDeriveResult {
+	/** New entries to append to the catalog file. */
+	added: CatalogModelEntry[];
+	/** Scoped models already present in the catalog. */
+	existingCount: number;
+	/** Allowlist patterns that matched no registry model. */
+	unmatched: string[];
+}
+
+/**
+ * Derive catalog model entries from the scoped (allowlisted) registry models:
+ * every registry model matching an allowlist pattern that is not already in
+ * the catalog becomes a stub entry (label from the registry, optional tags).
+ * Existing catalog entries are never modified.
+ */
+export function deriveCatalogEntries(
+	catalog: ModelCatalog,
+	registry: ModelInfo[],
+	patterns: string[],
+	tags: string[]
+): CatalogDeriveResult {
+	const known = new Set((catalog.models ?? []).map((m) => `${m.provider}/${m.id}`));
+	const matchedPatterns = new Set<string>();
+	const added: CatalogModelEntry[] = [];
+	let existingCount = 0;
+	for (const m of registry) {
+		const full = `${m.provider}/${m.id}`;
+		if (!allowedBy(patterns, full)) continue;
+		for (const p of patterns) {
+			if (allowedBy([p], full)) matchedPatterns.add(p);
+		}
+		if (known.has(full)) {
+			existingCount++;
+			continue;
+		}
+		added.push({ id: m.id, provider: m.provider, label: m.name, tags: [...tags] });
+	}
+	return { added, existingCount, unmatched: patterns.filter((p) => !matchedPatterns.has(p)) };
+}
+
 /** Return the spawn kinds a loadout allows (from its models' spawnKind). */
 export function resolveLoadoutKinds(catalog: ModelCatalog, loadoutName: string): string[] {
 	const ids = new Set(resolveLoadoutModelIds(catalog, loadoutName));
@@ -1195,162 +1235,227 @@ function collectModels(ctx: ExtensionContext): ModelInfo[] {
 	return out;
 }
 
-interface PickerRow {
-	kind: "provider" | "model";
+// --- Model allowlist palette (fuzzy, scoped-by-default) ---------------
+
+interface PaletteModel {
 	provider: string;
-	modelId?: string;
-	pattern: string;
-	label: string;
+	id: string;
+	name: string;
+	tags: string[];
 }
 
-/** Interactive provider/model picker. Returns the new allowlist, or null on cancel. */
-function runModelPicker(ctx: ExtensionContext, models: ModelInfo[], initial: string[]): Promise<string[] | null> {
-	const providers = [...new Set(models.map((m) => m.provider))].sort();
-	const rows: PickerRow[] = [];
-	for (const p of providers) {
-		rows.push({ kind: "provider", provider: p, pattern: `${p}/*`, label: `${p} (provider)` });
-		for (const m of models.filter((x) => x.provider === p)) {
-			rows.push({ kind: "model", provider: p, modelId: m.id, pattern: `${p}/${m.id}`, label: m.name });
+interface PaletteLoadout {
+	name: string;
+	ids: string[];
+	tags: string[];
+}
+
+interface PaletteRow {
+	kind: "model" | "provider" | "loadout";
+	/** Pattern toggled in the working set (model/provider rows). */
+	pattern?: string;
+	/** Loadout name (loadout rows). */
+	loadout?: PaletteLoadout;
+	label: string;
+	match: string;
+}
+
+/**
+ * Fuzzy allowlist palette: empty query shows only what's scoped (allowed
+ * patterns + catalog loadouts); typing fuzzy-searches the full catalog
+ * (name, provider/id, tags) with a hard row cap, so the registry's full
+ * model list never floods the screen.
+ *
+ * Keys: space/Enter toggle a model (Enter advances for fast multi-add),
+ * provider/* rows appear for typed provider prefixes, Enter on a loadout
+ * applies it as the whole allowlist, Esc saves & closes, ctrl+r reverts.
+ */
+function runAllowlistPalette(
+	ctx: ExtensionContext,
+	models: PaletteModel[],
+	loadouts: PaletteLoadout[],
+	initial: string[]
+): Promise<string[]> {
+	return ctx.ui.custom<string[]>((tui, theme, _kb, done) => {
+		const search = new Input();
+		try {
+			search.focused = true;
+		} catch {
+			// focus is best-effort; input still works without it
 		}
-	}
 
-	const sel = new Set(initial);
-	const providerModels = new Map<string, string[]>();
-	for (const m of models) {
-		if (!providerModels.has(m.provider)) providerModels.set(m.provider, []);
-		providerModels.get(m.provider)?.push(m.id);
-	}
-
-	const isModelAllowed = (provider: string, id: string): boolean => allowedBy([...sel], `${provider}/${id}`);
-	const providerAllSelected = (provider: string): boolean => {
-		const ids = providerModels.get(provider) ?? [];
-		return ids.length > 0 && ids.every((id) => isModelAllowed(provider, id));
-	};
-	const providerSelected = (provider: string): boolean => sel.has(`${provider}/*`) || providerAllSelected(provider);
-
-	function toggleProvider(provider: string): void {
-		const pattern = `${provider}/*`;
-		const ids = providerModels.get(provider) ?? [];
-		if (sel.has(pattern) || providerAllSelected(provider)) {
-			sel.delete(pattern);
-			for (const id of ids) sel.delete(`${provider}/${id}`);
-		} else {
-			for (const id of ids) sel.delete(`${provider}/${id}`);
-			sel.add(pattern);
-		}
-	}
-
-	function toggleModel(provider: string, id: string): void {
-		const full = `${provider}/${id}`;
-		const providerPattern = `${provider}/*`;
-		const ids = providerModels.get(provider) ?? [];
-		if (isModelAllowed(provider, id)) {
-			// turn this model off
-			if (sel.has(providerPattern)) {
-				sel.delete(providerPattern);
-				for (const other of ids) {
-					if (other !== id) sel.add(`${provider}/${other}`);
-				}
-			} else {
-				sel.delete(full);
-			}
-		} else {
-			sel.add(full);
-		}
-	}
-
-	return ctx.ui.custom<string[] | null>((tui, theme, _kb, done) => {
-		let filter = "";
-		let visible: PickerRow[] = rows;
+		const working = new Set(initial);
 		let selected = 0;
-		const maxVisible = Math.max(1, Math.min(rows.length, 18));
+		const maxMatches = 10;
+		const maxAllowedShown = 8;
 		let cachedLines: string[] | undefined;
+		type Item = { kind: "header"; label: string } | { kind: "row"; row: PaletteRow };
+		let items: Item[] = [];
 
-		function recompute(): void {
-			const q = filter.trim().toLowerCase();
-			visible = q ? rows.filter((r) => r.label.toLowerCase().includes(q) || r.pattern.toLowerCase().includes(q)) : rows;
-			if (selected >= visible.length) selected = Math.max(0, visible.length - 1);
-			if (selected < 0) selected = 0;
-		}
-
-		function refresh(): void {
+		const refresh = (): void => {
 			cachedLines = undefined;
 			tui.requestRender();
+		};
+
+		function modelRow(m: PaletteModel): PaletteRow {
+			const pattern = `${m.provider}/${m.id}`;
+			return {
+				kind: "model",
+				pattern,
+				label: `${working.has(pattern) || allowedBy([...working], pattern) ? "☑" : "☐"} ${m.name}  (${pattern})${m.tags.length ? `  ${m.tags.join(", ")}` : ""}`,
+				match: `${m.name} ${pattern} ${m.tags.join(" ")}`,
+			};
 		}
 
-		function checkboxFor(row: PickerRow): string {
-			const on = row.kind === "provider" ? providerSelected(row.provider) : isModelAllowed(row.provider, row.modelId ?? "");
-			return on ? "☑" : "☐";
+		function providerRow(provider: string): PaletteRow {
+			const pattern = `${provider}/*`;
+			return {
+				kind: "provider",
+				pattern,
+				label: `${working.has(pattern) ? "☑" : "☐"} ${provider} — whole provider`,
+				match: `${provider} provider/*`,
+			};
 		}
 
-		function handleNav(data: string): boolean {
-			if (visible.length === 0) return false;
-			if (matchesKey(data, Key.up)) {
-				selected = (selected - 1 + visible.length) % visible.length;
-				return true;
+		function loadoutRow(l: PaletteLoadout): PaletteRow {
+			return {
+				kind: "loadout",
+				loadout: l,
+				label: `${l.name}  · ${l.ids.length} model(s)${l.tags.length ? `  ${l.tags.join(", ")}` : ""}`,
+				match: `loadout ${l.name} ${l.tags.join(" ")}`,
+			};
+		}
+
+		function buildItems(): Item[] {
+			const q = search.getValue().trim();
+			const out: Item[] = [];
+			if (!q) {
+				// Scoped-by-default: only allowed patterns + loadouts.
+				const allowed = [...working].sort();
+				if (allowed.length > 0) {
+					out.push({ kind: "header", label: `Allowed (${allowed.length})` });
+					for (const pattern of allowed.slice(0, maxAllowedShown)) {
+						const m = models.find((x) => `${x.provider}/${x.id}` === pattern);
+						out.push({
+							kind: "row",
+							row: m ? modelRow(m) : { kind: "model", pattern, label: `☑ ${pattern}`, match: pattern },
+						});
+					}
+					if (allowed.length > maxAllowedShown)
+						out.push({ kind: "header", label: `+ ${allowed.length - maxAllowedShown} more allowed` });
+				} else {
+					out.push({ kind: "header", label: "Allowed: none (all models allowed)" });
+				}
+				if (loadouts.length > 0) {
+					out.push({ kind: "header", label: "Loadouts (space applies; replaces the allowlist)" });
+					for (const l of loadouts) out.push({ kind: "row", row: loadoutRow(l) });
+				}
+				return out;
 			}
-			if (matchesKey(data, Key.down)) {
-				selected = (selected + 1) % visible.length;
-				return true;
+
+			// Fuzzy over the full catalog, capped.
+			const modelMatches = fuzzyFilter(models.map(modelRow), q, (r) => r.match).slice(0, maxMatches);
+			const providers = [...new Set(modelMatches.map((r) => (r.pattern ?? "").split("/")[0] ?? ""))];
+			if (q.includes("/")) {
+				for (const p of providers.slice(0, 3)) out.push({ kind: "row", row: providerRow(p) });
 			}
-			if (matchesKey(data, Key.pageUp)) {
-				selected = Math.max(0, selected - maxVisible);
-				return true;
+			for (const r of modelMatches) out.push({ kind: "row", row: r });
+			const loadoutMatches = fuzzyFilter(loadouts, q, (l) => `loadout ${l.name} ${l.tags.join(" ")}`)
+				.slice(0, 4)
+				.map(loadoutRow);
+			if (loadoutMatches.length > 0) {
+				out.push({ kind: "header", label: "Loadouts" });
+				for (const r of loadoutMatches) out.push({ kind: "row", row: r });
 			}
-			if (matchesKey(data, Key.pageDown)) {
-				selected = Math.min(visible.length - 1, selected + maxVisible);
-				return true;
+			if (out.length === 0) out.push({ kind: "header", label: "No matches" });
+			return out;
+		}
+
+		function recompute(): void {
+			items = buildItems();
+			const sel = items[selected];
+			if (!sel || sel.kind === "header") {
+				selected = clampRowSelection(items, selected);
 			}
-			return false;
+		}
+
+		function clampRowSelection(items2: Item[], from: number): number {
+			let idx = Math.max(0, Math.min(from, items2.length - 1));
+			while (idx < items2.length - 1 && items2[idx].kind === "header") idx++;
+			if (items2[idx]?.kind === "header") {
+				idx = items2.length - 1;
+				while (idx > 0 && items2[idx].kind === "header") idx--;
+			}
+			return idx;
+		}
+
+		function applyRow(row: PaletteRow): void {
+			if (row.kind === "loadout" && row.loadout) {
+				working.clear();
+				for (const id of row.loadout.ids) working.add(id);
+			} else if (row.pattern) {
+				if (working.has(row.pattern)) working.delete(row.pattern);
+				else working.add(row.pattern);
+			}
+		}
+
+		function move(delta: number): void {
+			if (items.length === 0) return;
+			let idx = selected;
+			for (let step = 0; step < Math.abs(delta); step++) {
+				do {
+					idx += Math.sign(delta);
+				} while (idx >= 0 && idx < items.length && items[idx]?.kind === "header");
+				if (idx < 0 || idx >= items.length) {
+					idx = Math.max(0, Math.min(idx, items.length - 1));
+					while (idx > 0 && items[idx]?.kind === "header") idx--;
+					break;
+				}
+			}
+			selected = Math.max(0, Math.min(idx, items.length - 1));
 		}
 
 		function handleInput(data: string): void {
 			if (matchesKey(data, Key.escape)) {
-				done(null);
+				done([...working].sort());
 				return;
 			}
-			if (matchesKey(data, Key.enter)) {
-				done([...sel]);
-				return;
-			}
-			if (matchesKey(data, "backspace") || data === "\u007f") {
-				filter = filter.slice(0, -1);
+			if (matchesKey(data, "ctrl+r")) {
+				working.clear();
+				for (const p of initial) working.add(p);
 				recompute();
 				refresh();
 				return;
 			}
-			if (data === " ") {
-				const row = visible[selected];
-				if (row) {
-					if (row.kind === "provider") toggleProvider(row.provider);
-					else toggleModel(row.provider, row.modelId ?? "");
+			if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
+				const delta = matchesKey(data, Key.up) ? -1 : 1;
+				if (items.length > 0) move(delta);
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.pageUp) || matchesKey(data, Key.pageDown)) {
+				const delta = matchesKey(data, Key.pageUp) ? -maxMatches : maxMatches;
+				if (items.length > 0) move(delta);
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.space) || matchesKey(data, Key.enter)) {
+				const item = items[selected];
+				if (item?.kind === "row") {
+					applyRow(item.row);
+					recompute();
+					// Enter advances for fast multi-add; space stays put.
+					if (matchesKey(data, Key.enter) && item.row.kind === "model") move(1);
 				}
 				refresh();
 				return;
 			}
-			if (handleNav(data)) {
-				refresh();
-				return;
+			if (matchesKey(data, Key.backspace)) {
+				// let Input handle its own backspace
 			}
-			const trimmed = data.length === 1 && data.charCodeAt(0) >= 32 ? data : "";
-			if (trimmed) {
-				filter += trimmed;
-				recompute();
-				refresh();
-			}
-		}
-
-		function renderRow(row: PickerRow, i: number, width: number): string {
-			const isSel = i === selected;
-			const prefix = isSel ? theme.fg("accent", "→ ") : "  ";
-			const box = theme.fg(isSel ? "accent" : "muted", checkboxFor(row));
-			const depth = row.kind === "provider" ? "" : "   ";
-			const label = `${depth}${row.label}`;
-			const meta = row.kind === "model" ? theme.fg("muted", ` (${row.provider})`) : theme.fg("dim", " ⌘");
-			const total = visibleWidth(prefix) + visibleWidth(box) + 2;
-			const labWidth = Math.max(1, width - total - visibleWidth(meta));
-			const trimmedLabel = truncateToWidth(label, labWidth, "…");
-			return `${prefix}${box} ${trimmedLabel}${meta}`;
+			search.handleInput(data);
+			recompute();
+			refresh();
 		}
 
 		function render(width: number): string[] {
@@ -1360,46 +1465,97 @@ function runModelPicker(ctx: ExtensionContext, models: ModelInfo[], initial: str
 			lines.push(theme.fg("accent", "─".repeat(rw)));
 			lines.push(
 				...wrapTextWithAnsi(
-					theme.fg("accent", `Allowed models for subagents  (${sel.size} pattern${sel.size === 1 ? "" : "s"} active)`),
+					theme.fg("accent", `Allowed subagent models — ${working.size} pattern(s) in this session's allowlist`),
 					rw
 				)
 			);
 			lines.push("");
-			lines.push(theme.fg("muted", `  search: ${filter || ""}`));
+			lines.push(...search.render(Math.max(1, rw - 2)).map((l) => ` ${l}`));
 			lines.push("");
-			if (visible.length === 0) {
-				lines.push(theme.fg("warning", "  No matching models"));
-			} else {
-				const start = Math.max(0, Math.min(selected - Math.floor(maxVisible / 2), visible.length - maxVisible));
-				const end = Math.min(start + maxVisible, visible.length);
-				for (let i = start; i < end; i++) lines.push(renderRow(visible[i], i, rw));
-				if (start > 0 || end < visible.length) lines.push(theme.fg("dim", `  (${selected + 1}/${visible.length})`));
+
+			const selRow = items[selected];
+			for (let i = 0; i < items.length; i++) {
+				const item = items[i];
+				if (item.kind === "header") {
+					lines.push(theme.fg("muted", theme.fg("accent", `▾ ${item.label}`)));
+				} else {
+					const isSel = i === selected;
+					const prefix = isSel ? theme.fg("accent", "→ ") : "  ";
+					const line = `${prefix}${item.row.label}`;
+					lines.push(truncateToWidth(isSel ? theme.fg("accent", line) : line, rw));
+				}
 			}
+			void selRow;
+
 			lines.push("");
 			lines.push(
-				...wrapTextWithAnsi(theme.fg("dim", "Type to filter • Space toggle • ↑↓ navigate • Enter save • Esc cancel"), rw)
+				...wrapTextWithAnsi(
+					theme.fg(
+						"dim",
+						"Type to fuzzy-search all models • space/Enter toggle (Enter advances) • Esc save & close • ctrl+r revert"
+					),
+					rw
+				)
 			);
 			lines.push(theme.fg("accent", "─".repeat(rw)));
 			cachedLines = lines;
 			return lines;
 		}
 
-		return { render, handleInput, invalidate: refresh };
+		recompute();
+
+		return {
+			render,
+			invalidate: (): void => {
+				cachedLines = undefined;
+			},
+			handleInput,
+		};
 	});
 }
 
 async function openModelPicker(ctx: ExtensionContext, config: SubagentConfig): Promise<boolean> {
-	const models = collectModels(ctx);
-	if (models.length === 0) {
+	const registry = collectModels(ctx);
+	if (registry.length === 0) {
 		ctx.ui.notify("No models found in the registry (ctx.modelRegistry.getAvailable()).", "warning");
 		return false;
 	}
-	const eff = effectiveAllowlist(config);
-	const result = await runModelPicker(ctx, models, eff.patterns);
-	if (!result) {
-		ctx.ui.notify("Model picker cancelled.", "info");
-		return false;
+
+	// Catalog tags scope the search ("local", "data-privacy", ...) and loadouts
+	// become one-keypress allowlist presets. Loadout sources: catalog tag scopes,
+	// then config/session pattern presets (first definition of a name wins).
+	const catalog = loadCatalog(ctx.cwd);
+	const catalogTags = new Map<string, string[]>();
+	for (const m of catalog.models ?? []) {
+		if (m.provider && m.id) catalogTags.set(`${m.provider}/${m.id}`, m.tags ?? []);
 	}
+	const models: PaletteModel[] = registry.map((m) => ({
+		provider: m.provider,
+		id: m.id,
+		name: m.name,
+		tags: catalogTags.get(`${m.provider}/${m.id}`) ?? [],
+	}));
+
+	const loadouts: PaletteLoadout[] = [];
+	const seenLoadouts = new Set<string>();
+	for (const [name, def] of Object.entries(catalog.loadouts ?? {})) {
+		seenLoadouts.add(name);
+		loadouts.push({ name, ids: resolveLoadoutModelIds(catalog, name), tags: def.tags ?? [] });
+	}
+	for (const [name, patterns] of Object.entries(config.loadouts)) {
+		if (seenLoadouts.has(name)) continue;
+		seenLoadouts.add(name);
+		loadouts.push({ name, ids: patterns, tags: [] });
+	}
+	for (const [name, patterns] of Object.entries(currentState?.loadouts ?? {})) {
+		if (seenLoadouts.has(name)) continue;
+		seenLoadouts.add(name);
+		loadouts.push({ name, ids: patterns, tags: [] });
+	}
+
+	const eff = effectiveAllowlist(config);
+	const result = await runAllowlistPalette(ctx, models, loadouts, eff.patterns);
+
 	// Save into this session's own allowlist, clearing any force pin so the
 	// explicit selection takes effect.
 	ensureSessionState(ctx);
@@ -2378,6 +2534,10 @@ export default function herdrTools(pi: ExtensionAPI) {
 				await handleModelsCommand(ctx, config, argv.slice(1));
 				return;
 			}
+			if (argv[0] === "catalog") {
+				await handleCatalogCommand(ctx, config, argv.slice(1));
+				return;
+			}
 
 			// default: status
 			const active = await countSubagents();
@@ -2401,6 +2561,51 @@ export default function herdrTools(pi: ExtensionAPI) {
 			);
 		},
 	});
+
+	// ---- model catalog: derive entries from the scoped allowlist ----
+	function handleCatalogCommand(ctx: ExtensionContext, config: SubagentConfig, rest: string[]): Promise<void> {
+		return (async () => {
+			if (rest[0] === "derive") {
+				const tags = (rest[1] ?? "")
+					.split(",")
+					.map((t) => t.trim())
+					.filter(Boolean);
+				const eff = effectiveAllowlist(config);
+				if (eff.patterns.length === 0) {
+					ctx.ui.notify(
+						"Allowlist is empty (all models allowed) — nothing scoped to derive from. Scope models first: /subagent models",
+						"error"
+					);
+					return;
+				}
+				const registry = collectModels(ctx);
+				if (registry.length === 0) {
+					ctx.ui.notify("No models found in the registry; cannot derive catalog entries.", "warning");
+					return;
+				}
+				const merged = loadCatalog(ctx.cwd);
+				const result = deriveCatalogEntries(merged, registry, eff.patterns, tags);
+				if (result.added.length === 0) {
+					ctx.ui.notify(`Nothing to derive: all ${result.existingCount} scoped model(s) are already in the catalog.`, "info");
+				} else {
+					const p = resolveCatalogPath(config.catalogPath);
+					const raw = loadCatalogFile(p) ?? { version: 1 };
+					const out = { ...raw, models: [...(raw.models ?? []), ...result.added] };
+					fs.mkdirSync(path.dirname(p), { recursive: true });
+					fs.writeFileSync(p, `${JSON.stringify(out, null, 2)}\n`);
+					ctx.ui.notify(
+						`Catalog ${p}: added ${result.added.length} (${result.added.map((m) => `${m.provider}/${m.id}`).join(", ")}); ${result.existingCount} already present.${tags.length ? ` Tags: ${tags.join(", ")}.` : " No tags — edit the file to tag them."}`,
+						"info"
+					);
+				}
+				if (result.unmatched.length > 0) {
+					ctx.ui.notify(`Allowlist patterns matching no registry model: ${result.unmatched.join(", ")}`, "warning");
+				}
+				return;
+			}
+			ctx.ui.notify("Usage: /subagent catalog derive [tag1,tag2] — derive catalog entries from the scoped allowlist", "info");
+		})();
+	}
 
 	// ---- model allowlist + loadouts ----
 	function handleModelsCommand(ctx: ExtensionContext, config: SubagentConfig, rest: string[]): Promise<void> {
