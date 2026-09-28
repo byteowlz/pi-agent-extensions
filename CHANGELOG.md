@@ -4,6 +4,24 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-herdr-tools: fuzzy allowlist palette + catalog derive
+
+- **/subagent models is now a fuzzy palette, not a mega-list.** The empty view
+  is scoped by default: it shows only the current allowlist plus available
+  loadouts (catalog tag scopes like local/data-privacy, plus config/session
+  pattern presets). Typing fuzzy-searches the full model catalog (name,
+  provider/id, tags) with results capped at 10 and a `provider/*` row when
+  the query names a provider prefix. space/Enter toggles without closing
+  (Enter advances for fast multi-add), Enter on a loadout applies it as the
+  whole allowlist, Esc saves & closes, ctrl+r reverts. Replaces the old
+  enumerate-every-model checkbox picker.
+- **/subagent catalog derive [tag1,tag2]** bootstraps the model catalog from
+  the scoped allowlist: registry models matching an allowlist pattern that
+  are not yet cataloged get stub entries appended to model-catalog.json
+  (label from the registry, optional tags). Existing entries keep their
+  hand-tuned tags; patterns matching no registry model are reported. Refuses
+  to run against an empty allowlist (that would derive everything).
+
 ### pi-herdr-tools: fix subagent spawn failing with agent_pane_busy
 
 - A freshly created tab's root pane is only startable once its shell sits at
