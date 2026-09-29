@@ -4,6 +4,16 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-herdr-tools: spawn-confirm ask dialog now reports blocked in herdr
+
+- While the spawn-subagent ask dialog is up (allow mode confirm or timeout,
+  including the change-model picker), the agent now reports `blocked` to
+  herdr via `herdr pane report-agent --state blocked`, instead of leaving
+  herdr's detection to guess about a custom TUI prompt it cannot classify.
+  On close/decision it reports `working` and calls `release-agent` to hand
+  lifecycle authority back to detection. Same best-effort guard as pi-sudo:
+  only fires inside a herdr pane (`HERDR_ENV=1` + `HERDR_PANE_ID`).
+
 ### pi-herdr-tools: fuzzy allowlist palette + catalog derive
 
 - **/subagent models is now a fuzzy palette, not a mega-list.** The empty view

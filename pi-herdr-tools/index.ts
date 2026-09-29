@@ -82,6 +82,41 @@ import { Type } from "typebox";
 
 const execFileAsync = promisify(execFile);
 
+// ---------------------------------------------------------------------------
+// herdr blocked-state reporting (best-effort; only inside a herdr pane)
+// ---------------------------------------------------------------------------
+
+const HERDR_SOURCE = "pi-herdr-tools";
+let herdrSeq = 0;
+
+function herdrReport(state: "blocked" | "working", message?: string): void {
+	const pane = process.env.HERDR_PANE_ID;
+	if (process.env.HERDR_ENV !== "1" || !pane) return;
+	herdrSeq += 1;
+	const args = [
+		"pane",
+		"report-agent",
+		pane,
+		"--source",
+		HERDR_SOURCE,
+		"--agent",
+		"pi",
+		"--state",
+		state,
+		"--seq",
+		String(herdrSeq),
+	];
+	if (message) args.push("--message", message);
+	execFile("herdr", args, () => {}); // fire-and-forget
+}
+
+/** Hand lifecycle authority back to herdr's own detection after a prompt. */
+function herdrRelease(): void {
+	const pane = process.env.HERDR_PANE_ID;
+	if (process.env.HERDR_ENV !== "1" || !pane) return;
+	execFile("herdr", ["pane", "release-agent", pane, "--source", HERDR_SOURCE, "--agent", "pi"], () => {});
+}
+
 const CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "subagent-config.json");
 const STATE_DIR = path.join(os.homedir(), ".pi", "agent", "subagent-state");
 const HISTORY_PATH = path.join(os.homedir(), ".pi", "agent", "subagent-history.jsonl"); // durable, append-only ledger
@@ -1000,6 +1035,8 @@ function spawnConfirm(
 	modelEditable: boolean
 ): Promise<SpawnDecision> {
 	return ctx.ui.custom<SpawnDecision>((tui, theme, _kb, done) => {
+		// Waiting on the human to approve spawn — show as blocked in herdr.
+		herdrReport("blocked", "subagent spawn confirmation");
 		let settled = false;
 		let deadline = timeoutMs !== null ? Date.now() + timeoutMs : null;
 		let cachedLines: string[] | undefined;
@@ -1026,6 +1063,8 @@ function spawnConfirm(
 			if (settled) return;
 			settled = true;
 			if (timer) clearInterval(timer);
+			herdrReport("working");
+			herdrRelease();
 			done(v);
 		}
 
