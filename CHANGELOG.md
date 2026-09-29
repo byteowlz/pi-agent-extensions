@@ -34,6 +34,17 @@ All notable changes to pi-agent-extensions will be documented in this file.
   instead of an uncaught exception.
 - New exported `isPaneBusyError()` predicate with unit tests.
 
+### oqto-todos: fix Todo tool-result line truncation overflow
+
+- The collapsed Todo `renderResult` truncated the *content* to `maxWidth` but
+  then appended the status icon (`[○] `) and the priority marker (` !`) on top
+  of it, so lines overflowed the panel by ~6 columns and the trailing marker
+  landed outside the status-colored region (the `!` appeared detached and
+  mis-colored). `renderTodoLine` now reserves width for both the icon prefix
+  and the priority suffix before truncating, and truncates the composed line
+  as a final safety net. Matches the already-correct behaviour in
+  `renderWidgetTodoLine`.
+
 ### oqto-todos: collapse done todos by default
 
 - The persistent TUI widget and the collapsed Todo tool-result view now show

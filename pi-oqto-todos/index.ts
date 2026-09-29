@@ -23,7 +23,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 // ============================================================================
@@ -325,13 +325,20 @@ function getStatusColor(status: TodoStatus): ThemeColor {
 function renderTodoLine(todo: TodoItem, theme: Theme, maxWidth: number): string {
 	const icon = getStatusIcon(todo.status);
 	const priorityLabel = getPriorityLabel(todo.priority);
-	const contentPreview = truncateToWidth(normalizeTodoText(todo.content), maxWidth);
+	// Reserve width for the status icon prefix and the priority suffix so the
+	// final line never exceeds maxWidth (the truncated content would otherwise
+	// overflow the panel and push the trailing priority marker out of the
+	// status-colored region).
+	const prefixWidth = visibleWidth(icon) + 1;
+	const suffixWidth = priorityLabel ? visibleWidth(priorityLabel) + 1 : 0;
+	const contentWidth = Math.max(8, maxWidth - prefixWidth - suffixWidth);
+	const contentPreview = truncateToWidth(normalizeTodoText(todo.content), contentWidth);
 	let line = theme.fg(getStatusColor(todo.status), `${icon} ${contentPreview}`);
 	if (priorityLabel) {
 		const priorityColor = todo.priority === "high" ? "error" : "dim";
 		line += ` ${theme.fg(priorityColor, priorityLabel)}`;
 	}
-	return line;
+	return truncateToWidth(line, maxWidth);
 }
 
 function orderTodos(todos: TodoItem[]): TodoItem[] {
