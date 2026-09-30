@@ -4,6 +4,19 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-mmry: visible session-start recall from mmry (piext-z2a0)
+
+- **New extension, off by default** (`--mmry-recall`, `PI_MMRY_RECALL=1`, or
+  `mmry-recall.json`). At session start it runs `mmry preview --json` and
+  shows the exact rendered block; the first prompt then carries those same
+  bytes once, framed as untrusted observations. No system-prompt rewrite, no
+  per-turn re-injection, no re-injection on resume; a cwd change is shown
+  again before use. Headless/RPC attach nothing unless `headless: "report"`.
+- `/memory preview|list|on|off`; `memory_search/create/supersede/deprecate`
+  tools that shell out to mmry and pass its errors through.
+- Disables itself visibly for a missing/old mmry, an unknown preview schema,
+  or contested entries. Count-only metrics JSONL.
+
 ### pi-herdr-tools: fuzzy allowlist palette + catalog derive
 
 - **/subagent models is now a fuzzy palette, not a mega-list.** The empty view

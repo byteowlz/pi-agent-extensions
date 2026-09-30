@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/pi-mmry/mmry-recall.schema.json",
+  "enabled": true,
+  "mmryBin": "mmry",
+  "maxTokens": 400,
+  "limit": 8,
+  "tools": true,
+  "headless": "off",
+  "timeoutMs": 5000
+}
