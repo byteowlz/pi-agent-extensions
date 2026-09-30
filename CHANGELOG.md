@@ -12,8 +12,9 @@ All notable changes to pi-agent-extensions will be documented in this file.
   bytes once, framed as untrusted observations. No system-prompt rewrite, no
   per-turn re-injection, no re-injection on resume; a cwd change is shown
   again before use. Headless/RPC attach nothing unless `headless: "report"`.
-- `/memory preview|list|on|off`; `memory_search/create/supersede/deprecate`
-  tools that shell out to mmry and pass its errors through.
+- `/memory preview|list|on|off`; one `memory` tool (action
+  search/create/supersede/deprecate) that shells out to mmry and passes its
+  errors through; missing fields are reported without calling mmry.
 - Disables itself visibly for a missing/old mmry, an unknown preview schema,
   or contested entries. Count-only metrics JSONL.
 

@@ -262,6 +262,47 @@ export function deprecateArgs(id: string, reason: string, expectedRevision: numb
 	return ["rm", "--json", "--reason", reason, "--expected-revision", String(expectedRevision), "--", id];
 }
 
+export interface MemoryParams {
+	action: "search" | "create" | "supersede" | "deprecate";
+	query?: string;
+	limit?: number;
+	id?: string;
+	content?: string;
+	reason?: string;
+	expected_revision?: number;
+	why?: string;
+	source?: string;
+	scope?: "general" | "repo";
+	expires?: string;
+}
+
+/** argv for the `memory` tool, or an error telling the model what is missing. */
+export function memoryArgs(params: MemoryParams): string[] | string {
+	const missing = (fields: (keyof MemoryParams)[]) => {
+		const absent = fields.filter((field) => params[field] === undefined || params[field] === "");
+		return absent.length > 0 ? `memory ${params.action} needs ${absent.join(", ")}` : undefined;
+	};
+	switch (params.action) {
+		case "search":
+			return missing(["query"]) ?? searchArgs(params.query as string, params.limit);
+		case "create":
+			if (params.content?.trim() === "-") return "content must be the memory text";
+			return missing(["content"]) ?? createArgs({ ...params, content: params.content as string });
+		case "supersede":
+			return (
+				missing(["id", "content", "reason", "expected_revision"]) ??
+				supersedeArgs(params.id as string, params.content as string, params.reason as string, params.expected_revision as number)
+			);
+		case "deprecate":
+			return (
+				missing(["id", "reason", "expected_revision"]) ??
+				deprecateArgs(params.id as string, params.reason as string, params.expected_revision as number)
+			);
+		default:
+			return `unknown memory action "${String((params as { action: unknown }).action)}" (search, create, supersede, deprecate)`;
+	}
+}
+
 // ----------------------------------------------------------------- metrics
 
 export type MetricEvent =

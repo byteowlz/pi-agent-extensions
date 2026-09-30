@@ -24,7 +24,7 @@ Off by default. Enable with any of:
 | `mmryBin` | `"mmry"` | Binary name or path |
 | `maxTokens` | `400` | Budget for the recalled block |
 | `limit` | `8` | Maximum memories |
-| `tools` | `true` | Register the memory tools while enabled |
+| `tools` | `true` | Give the model the `memory` tool while enabled |
 | `headless` | `"off"` | Without a UI: `off`, or `report` (print the block to stderr, then attach it) |
 | `timeoutMs` | `5000` | Per mmry call |
 | `metricsPath` | `<agent dir>/mmry-recall-metrics.jsonl` | Count-only metrics; `""` disables |
@@ -51,16 +51,16 @@ pi-mmry refuses to attach anything if mmry returns a contested memory or an unkn
 | `/memory off` | Nothing is attached in this session (kept on resume) |
 | `/memory on` | Enable for this session and show the selection |
 
-## Tools
+## Tool
 
-Available to the model only while recall is enabled and `tools` is on. Each tool runs mmry with `--json` in the session cwd (current repository plus general memories) and returns mmry's output or error verbatim, such as a revision mismatch.
+One `memory` tool with an `action`, available to the model only while recall is enabled and `tools` is on. It runs mmry with `--json` in the session cwd (current repository plus general memories) and returns mmry's output or error verbatim, such as a revision mismatch. Missing fields are reported without calling mmry.
 
-| Tool | mmry call |
-|---|---|
-| `memory_search(query, limit?)` | `mmry search --json --limit N -- <query>` |
-| `memory_create(content, why?, source?, scope?, expires?)` | `mmry add --json [--general] [--why] [--source] [--expires] -- <content>` |
-| `memory_supersede(id, replacement, reason, expected_revision)` | `mmry supersede --json --reason R --expected-revision N -- <id> <text>` |
-| `memory_deprecate(id, reason, expected_revision)` | `mmry rm --json --reason R --expected-revision N -- <id>` |
+| `action` | Fields | mmry call |
+|---|---|---|
+| `search` | `query`, `limit?` | `mmry search --json --limit N -- <query>` |
+| `create` | `content`, `why?`, `source?`, `scope?` (`repo`/`general`), `expires?` | `mmry add --json [--general] [--why] [--source] [--expires] -- <content>` |
+| `supersede` | `id`, `content`, `reason`, `expected_revision` | `mmry supersede --json --reason R --expected-revision N -- <id> <content>` |
+| `deprecate` | `id`, `reason`, `expected_revision` | `mmry rm --json --reason R --expected-revision N -- <id>` |
 
 ## Privacy
 
