@@ -73,7 +73,7 @@ function harness(opts: { cwd: string; hasUI?: boolean; entries?: Entry[]; flag?:
 	const entries: Entry[] = opts.entries ?? [];
 	const widgets: (string[] | undefined)[] = [];
 	const notices: { message: string; type?: string }[] = [];
-	let active = ["read", "bash", "memory_search", "memory_create", "memory_supersede", "memory_deprecate"];
+	let active = ["read", "bash", "memory"];
 
 	const pi = {
 		on: (event: string, handler: Handler) => handlers.set(event, handler),
@@ -119,8 +119,7 @@ function harness(opts: { cwd: string; hasUI?: boolean; entries?: Entry[]; flag?:
 		start: () => emit("session_start"),
 		prompt: () => emit("before_agent_start") as Promise<{ message: { customType: string; content: string } } | undefined>,
 		command: (args: string) => commands.get("memory")?.handler(args, ctx),
-		tool: (name: string, params: unknown) =>
-			tools.get(name)?.execute("call", params, undefined, undefined, ctx) as Promise<ToolResult>,
+		tool: (params: unknown) => tools.get("memory")?.execute("call", params, undefined, undefined, ctx) as Promise<ToolResult>,
 	};
 }
 
@@ -280,17 +279,19 @@ describe("session-start recall", () => {
 	});
 });
 
-describe("memory tools", () => {
-	test("each tool maps to the exact mmry argv in the session cwd", async () => {
+describe("memory tool", () => {
+	test("each action maps to the exact mmry argv in the session cwd", async () => {
 		const h = harness({ cwd: project("app") });
 		await h.start();
+		expect(h.active()).toEqual(["read", "bash", "memory"]);
 		writeFileSync(join(fakeDir, "search.json"), '[{"memory_id":"mem_1"}]\n');
 		writeFileSync(join(fakeDir, "add.json"), '{"memory_id":"mem_2"}\n');
 
-		const search = await h.tool("memory_search", { query: "--weird", limit: 3 });
+		const search = await h.tool({ action: "search", query: "--weird", limit: 3 });
 		expect(search.content[0].text).toBe('[{"memory_id":"mem_1"}]');
-		await h.tool("memory_search", { query: "vpn" });
-		const created = await h.tool("memory_create", {
+		await h.tool({ action: "search", query: "vpn" });
+		const created = await h.tool({
+			action: "create",
 			content: "-x is gone",
 			why: "breaks CI",
 			source: "issue 12",
@@ -298,9 +299,9 @@ describe("memory tools", () => {
 			expires: "30d",
 		});
 		expect(created.content[0].text).toBe('{"memory_id":"mem_2"}');
-		await h.tool("memory_create", { content: "repo fact" });
-		await h.tool("memory_supersede", { id: "mem_1", replacement: "new", reason: "changed", expected_revision: 2 });
-		await h.tool("memory_deprecate", { id: "mem_1", reason: "obsolete", expected_revision: 3 });
+		await h.tool({ action: "create", content: "repo fact" });
+		await h.tool({ action: "supersede", id: "mem_1", content: "new", reason: "changed", expected_revision: 2 });
+		await h.tool({ action: "deprecate", id: "mem_1", reason: "obsolete", expected_revision: 3 });
 
 		expect(calls().slice(1)).toEqual(
 			[
@@ -319,15 +320,30 @@ describe("memory tools", () => {
 		await h.start();
 		const message = "error: mem_1 is at revision 3, expected 2 (re-read it with `mmry show mem_1`)";
 		writeFileSync(join(fakeDir, "supersede.stderr"), `${message}\n`);
-		const result = await h.tool("memory_supersede", { id: "mem_1", replacement: "x", reason: "r", expected_revision: 2 });
+		const result = await h.tool({ action: "supersede", id: "mem_1", content: "x", reason: "r", expected_revision: 2 });
 		expect(result).toMatchObject({ isError: true, content: [{ type: "text", text: message }] });
 	});
 
-	test("the stdin marker is refused as content", async () => {
+	test("missing fields and the stdin marker are refused without calling mmry", async () => {
 		const h = harness({ cwd: project("app") });
 		await h.start();
-		const result = await h.tool("memory_create", { content: "-" });
-		expect(result.isError).toBe(true);
+		const texts = [];
+		for (const params of [
+			{ action: "deprecate", id: "mem_1" },
+			{ action: "supersede", id: "mem_1", content: "x" },
+			{ action: "search", query: "" },
+			{ action: "create", content: "-" },
+		]) {
+			const result = await h.tool(params);
+			expect(result.isError).toBe(true);
+			texts.push(result.content[0].text);
+		}
+		expect(texts).toEqual([
+			"memory deprecate needs reason, expected_revision",
+			"memory supersede needs reason, expected_revision",
+			"memory search needs query",
+			"content must be the memory text",
+		]);
 		expect(calls()).toHaveLength(1);
 	});
 });

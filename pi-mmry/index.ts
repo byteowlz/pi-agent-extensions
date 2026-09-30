@@ -18,31 +18,28 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Type } from "typebox";
 import {
 	ATTACHED_ENTRY,
-	type CreateParams,
 	DEFAULT_CONFIG,
 	type Exec,
+	type MemoryParams,
 	type MetricEvent,
 	OFF_ENTRY,
 	type Preview,
 	RECALL_MESSAGE,
 	type RecallConfig,
-	createArgs,
-	deprecateArgs,
 	envEnabled,
 	fetchPreview,
 	listLines,
 	loadConfig,
+	memoryArgs,
 	previewLines,
 	recallContent,
 	recordMetric,
 	runMmry,
-	searchArgs,
 	sha256,
-	supersedeArgs,
 } from "./src/core.js";
 
 const WIDGET = "mmry";
-const TOOL_NAMES = ["memory_search", "memory_create", "memory_supersede", "memory_deprecate"];
+const TOOL_NAME = "memory";
 
 interface State {
 	config: RecallConfig;
@@ -91,8 +88,8 @@ export default function piMmry(pi: ExtensionAPI) {
 	};
 
 	const setTools = (active: boolean) => {
-		const others = pi.getActiveTools().filter((name) => !TOOL_NAMES.includes(name));
-		pi.setActiveTools(active ? [...others, ...TOOL_NAMES] : others);
+		const others = pi.getActiveTools().filter((name) => name !== TOOL_NAME);
+		pi.setActiveTools(active ? [...others, TOOL_NAME] : others);
 	};
 
 	/** Display the frozen preview; returns whether the user can see it. */
@@ -245,68 +242,38 @@ export default function piMmry(pi: ExtensionAPI) {
 		}
 	};
 
-	const revision = Type.Integer({ minimum: 1, description: "Revision you last saw (from search or the recall list)" });
-
 	pi.registerTool({
-		name: "memory_search",
-		label: "Memory search",
-		description: "Search the user's mmry memories for the current repository and general scope. Returns JSON entries.",
-		parameters: Type.Object({
-			query: Type.String({ description: "Search text" }),
-			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, description: "Max results (default 10)" })),
-		}),
-		execute: (_id, params, _signal, _onUpdate, ctx) => tool("memory_search", searchArgs(params.query, params.limit), ctx),
-	});
-
-	pi.registerTool({
-		name: "memory_create",
-		label: "Memory create",
+		name: TOOL_NAME,
+		label: "Memory",
 		description:
-			"Record a durable, operative fact for future sessions (a working command, a gotcha, a preference the user stated). " +
-			"Not for session notes. Repo scope by default; general only when it applies across repositories.",
+			"The user's mmry memories for the current repository and general scope. " +
+			"search: find memories (query, limit?). " +
+			"create: record a durable, operative fact for future sessions such as a working command, a gotcha, or a stated " +
+			"preference; not session notes (content, why?, source?, scope? repo|general, default repo; expires?). " +
+			"supersede: replace a memory's text (id, content, reason, expected_revision). " +
+			"deprecate: remove a wrong or obsolete memory (id, reason, expected_revision). " +
+			"Edits keep history and fail if the memory changed since expected_revision. Returns mmry's JSON.",
 		parameters: Type.Object({
-			content: Type.String({ minLength: 1, description: "The memory, one or two sentences" }),
-			why: Type.Optional(Type.String({ description: "Why it matters / how to apply it" })),
-			source: Type.Optional(Type.String({ description: "Where it was observed (command, issue, URL)" })),
-			scope: Type.Optional(Type.Union([Type.Literal("repo"), Type.Literal("general")], { description: "Default repo" })),
-			expires: Type.Optional(Type.String({ description: "RFC 3339 timestamp or duration like 30d" })),
+			action: Type.Union([Type.Literal("search"), Type.Literal("create"), Type.Literal("supersede"), Type.Literal("deprecate")]),
+			query: Type.Optional(Type.String({ description: "search: text to find" })),
+			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, description: "search: max results (default 10)" })),
+			id: Type.Optional(Type.String({ description: "supersede/deprecate: memory_id" })),
+			content: Type.Optional(Type.String({ description: "create: the memory; supersede: the replacement text" })),
+			reason: Type.Optional(Type.String({ description: "supersede/deprecate: why it changed" })),
+			expected_revision: Type.Optional(
+				Type.Integer({ minimum: 1, description: "supersede/deprecate: revision you last saw (from search or the recall list)" })
+			),
+			why: Type.Optional(Type.String({ description: "create: why it matters / how to apply it" })),
+			source: Type.Optional(Type.String({ description: "create: where it was observed (command, issue, URL)" })),
+			scope: Type.Optional(Type.Union([Type.Literal("repo"), Type.Literal("general")], { description: "create: default repo" })),
+			expires: Type.Optional(Type.String({ description: "create: RFC 3339 timestamp or duration like 30d" })),
 		}),
 		execute: (_id, params, _signal, _onUpdate, ctx) => {
-			if (params.content.trim() === "-") {
-				return Promise.resolve({
-					content: [{ type: "text" as const, text: "content must be the memory text" }],
-					isError: true,
-					details: {},
-				});
+			const args = memoryArgs(params as MemoryParams);
+			if (typeof args === "string") {
+				return Promise.resolve({ content: [{ type: "text" as const, text: args }], isError: true, details: {} });
 			}
-			return tool("memory_create", createArgs(params as CreateParams), ctx);
+			return tool(params.action, args, ctx);
 		},
-	});
-
-	pi.registerTool({
-		name: "memory_supersede",
-		label: "Memory supersede",
-		description: "Replace a memory's text (keeps history). Fails if the memory changed since expected_revision.",
-		parameters: Type.Object({
-			id: Type.String({ description: "memory_id" }),
-			replacement: Type.String({ minLength: 1, description: "New text" }),
-			reason: Type.String({ minLength: 1, description: "Why it changed" }),
-			expected_revision: revision,
-		}),
-		execute: (_id, params, _signal, _onUpdate, ctx) =>
-			tool("memory_supersede", supersedeArgs(params.id, params.replacement, params.reason, params.expected_revision), ctx),
-	});
-
-	pi.registerTool({
-		name: "memory_deprecate",
-		label: "Memory deprecate",
-		description: "Remove a memory that is wrong or obsolete (keeps history). Fails if it changed since expected_revision.",
-		parameters: Type.Object({
-			id: Type.String({ description: "memory_id" }),
-			reason: Type.String({ minLength: 1, description: "Why it is obsolete" }),
-			expected_revision: revision,
-		}),
-		execute: (_id, params, _signal, _onUpdate, ctx) =>
-			tool("memory_deprecate", deprecateArgs(params.id, params.reason, params.expected_revision), ctx),
 	});
 }

@@ -11,7 +11,7 @@
     "mmryBin": { "type": "string", "minLength": 1, "default": "mmry", "description": "mmry binary (name on PATH or absolute path); needs `mmry preview --json`" },
     "maxTokens": { "type": "integer", "minimum": 1, "default": 400, "description": "Token budget for the recalled block (mmry preview --max-tokens)" },
     "limit": { "type": "integer", "minimum": 1, "default": 8, "description": "Maximum memories (mmry preview --limit)" },
-    "tools": { "type": "boolean", "default": true, "description": "Give the model memory_search/create/supersede/deprecate while recall is enabled" },
+    "tools": { "type": "boolean", "default": true, "description": "Give the model the memory tool (search/create/supersede/deprecate) while recall is enabled" },
     "headless": { "enum": ["off", "report"], "default": "off", "description": "Without an interactive UI: off (no recall) or report (print the block to stderr, then attach it)" },
     "timeoutMs": { "type": "integer", "minimum": 1, "default": 5000, "description": "Timeout for each mmry call" },
     "metricsPath": { "type": "string", "description": "Count-only metrics JSONL (default <agent dir>/mmry-recall-metrics.jsonl); empty string disables" }
