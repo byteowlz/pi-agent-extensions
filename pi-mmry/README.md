@@ -4,7 +4,13 @@ Visible session-start recall from [mmry](https://github.com/byteowlz/mmry), plus
 
 When a session starts, pi-mmry asks mmry which memories matter for this directory and **shows you the exact text** before anything reaches the model. Your first prompt then carries that same text once, framed as untrusted observations. The system prompt is never modified, nothing is re-injected on later turns, and a resumed session is not injected again.
 
-Requires an mmry with `mmry preview --json` (preview `schema_version` 1). With an older or missing mmry, recall turns itself off with a visible notice.
+## Install
+
+Requires mmry 0.14.0 or later (`mmry preview --json`). With an older or missing mmry, recall turns itself off with a visible notice. pi-mmry is not published to npm; load it from this repository:
+
+```bash
+ln -s "$(pwd)/pi-mmry" ~/.pi/agent/extensions/pi-mmry
+```
 
 ## Activation
 
@@ -55,12 +61,12 @@ pi-mmry refuses to attach anything if mmry returns a contested memory or an unkn
 
 One `memory` tool with an `action`, available to the model only while recall is enabled and `tools` is on. It runs mmry with `--json` in the session cwd (current repository plus general memories) and returns mmry's output or error verbatim, such as a revision mismatch. Missing fields are reported without calling mmry.
 
-| `action` | Fields | mmry call |
-|---|---|---|
-| `search` | `query`, `limit?` | `mmry search --json --limit N -- <query>` |
-| `create` | `content`, `why?`, `source?`, `scope?` (`repo`/`general`), `expires?` | `mmry add --json [--general] [--why] [--source] [--expires] -- <content>` |
-| `supersede` | `id`, `content`, `reason`, `expected_revision` | `mmry supersede --json --reason R --expected-revision N -- <id> <content>` |
-| `deprecate` | `id`, `reason`, `expected_revision` | `mmry rm --json --reason R --expected-revision N -- <id>` |
+| `action` | Fields |
+|---|---|
+| `search` | `query`, `limit?` |
+| `create` | `content`, `why?`, `source?`, `scope?` (`repo`/`general`), `expires?` |
+| `supersede` | `id`, `content`, `reason`, `expected_revision` |
+| `deprecate` | `id`, `reason`, `expected_revision` |
 
 ## Privacy
 
@@ -69,10 +75,15 @@ One `memory` tool with an `action`, available to the model only while recall is 
 - Metrics hold counts only (memories shown/attached, token estimate, tool calls, `/memory off`), never memory text or ids.
 - `AGENT_CTX_*` values that mmry records are provenance, not authorization.
 
-## Tests
+## Limitations
+
+- RPC clients (including Oqto) get no recall unless `headless` is `report`; there is no acknowledgement that a client rendered the preview.
+- The tool works in the session cwd's scope only; it cannot reach other repositories' memories.
+- Verification: automated tests use a fake `mmry` (`test/fake-mmry.ts`) that replays fixture JSON and records argv; the argv were checked once against mmry 0.14.0 and one live `pi -p` run with `headless: "report"`. The interactive widget has not been checked by a test.
+
+## Development
 
 ```bash
 bun test pi-mmry
+bun run check        # biome + typecheck for the whole repository
 ```
-
-The tests run the extension against a fake `mmry` (`test/fake-mmry.ts`) that replays fixture JSON and records every argv.
