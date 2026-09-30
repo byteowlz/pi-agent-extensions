@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.0
+
+- Add the `xlatch_later` tool and `/xlatch later` picker for retrieving durable parked content without claiming a live Pi slot.
+- Keep agent reads non-destructive; the interactive picker removes an item only after Pi accepts the message.
+
 ## 1.0.1
 
 - Bind each connection to a private socket and publish its stable slot as an exclusive symlink. Closing an old listener cannot unlink a replacement listener.

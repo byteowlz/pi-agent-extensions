@@ -24,7 +24,7 @@ const events = new Map(); let command; let status; const notifications = []; con
 const ctx = { cwd: process.env.HOME, isIdle: () => true,
  sessionManager: { getSessionId: () => 'fixture', getSessionName: () => 'fixture', getEntries: () => [] },
  ui: { setStatus: (_, value) => { status = value; }, notify: (value) => notifications.push(value) } };
-extension({ on: (event, handler) => events.set(event, handler), registerCommand: (_, value) => { command = value.handler; }, appendEntry: () => {}, sendUserMessage: (message) => messages.push(message) });
+extension({ on: (event, handler) => events.set(event, handler), registerCommand: (_, value) => { command = value.handler; }, registerTool: () => {}, appendEntry: () => {}, sendUserMessage: (message) => messages.push(message) });
 await events.get('session_start')({ reason: 'new' }, ctx);
 await command('test', ctx);
 const socket = process.env.HOME + '/.pi/agent/xlatch-pi/slots/test.sock';
