@@ -28,7 +28,7 @@ export interface RecallConfig {
 	maxTokens: number;
 	/** Entry limit passed to `mmry preview --limit`. */
 	limit: number;
-	/** Register memory_search/create/supersede/deprecate tools. */
+	/** Give the model the `memory` tool (search/create/supersede/deprecate). */
 	tools: boolean;
 	/** Without an interactive UI: "off" (no recall) or "report" (print to stderr, then attach). */
 	headless: HeadlessPolicy;
