@@ -30,7 +30,9 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 
+import { type ParkedContent, type ParkedItem, formatParkedContent, formatParkedList } from "./src/later.js";
 import { SlotEndpoint, removeDeadSocket, socketLive } from "./src/slot.js";
 
 const execFileAsync = promisify(execFile);
@@ -194,6 +196,22 @@ async function staleRegistrations(): Promise<string[]> {
 	} catch {
 		return [];
 	}
+}
+
+async function laterList(): Promise<ParkedItem[]> {
+	const { stdout } = await execFileAsync("xlatch", ["later", "list", "--json"], { maxBuffer: 4 * 1024 * 1024 });
+	return JSON.parse(stdout) as ParkedItem[];
+}
+
+async function laterRead(id: string): Promise<ParkedContent> {
+	const { stdout } = await execFileAsync("xlatch", ["later", "read", id, "--directory", INCOMING, "--json"], {
+		maxBuffer: 4 * 1024 * 1024,
+	});
+	return JSON.parse(stdout) as ParkedContent;
+}
+
+async function laterRemove(id: string): Promise<void> {
+	await execFileAsync("xlatch", ["later", "remove", id, "--json"], { maxBuffer: 4 * 1024 * 1024 });
 }
 
 function createShareServer(handle: (payload: SharePayload) => unknown): net.Server {
@@ -512,11 +530,80 @@ export default function xlatchSession(pi: ExtensionAPI) {
 		ctx.ui.notify(lines.join("\n"), "info");
 	}
 
+	async function openLater(ctx: ExtensionCommandContext, requested?: string): Promise<void> {
+		try {
+			const items = await laterList();
+			if (items.length === 0) {
+				ctx.ui.notify("Nothing is saved for later.", "info");
+				return;
+			}
+			let item = requested ? items.find((candidate) => candidate.id === requested) : undefined;
+			if (!item) {
+				const choices = items.map((candidate, index) => `${index + 1}. ${candidate.label}`);
+				const selected = await ctx.ui.select("Saved for later", [...choices, "Cancel"]);
+				if (!selected || selected === "Cancel") return;
+				item = items[choices.indexOf(selected)];
+			}
+			if (!item) throw new Error("That saved item is no longer available.");
+			const content = await laterRead(item.id);
+			pi.sendUserMessage(formatParkedContent(content), { deliverAs: "followUp" });
+			await laterRemove(item.id);
+			ctx.ui.notify(`Retrieved “${item.label}” from Save for Later.`, "info");
+		} catch (error) {
+			ctx.ui.notify(`Could not retrieve saved content: ${errorMessage(error)}`, "error");
+		}
+	}
+
+	function laterRequestFrom(arg: string): string | null {
+		if (arg === "later") return "";
+		if (arg.startsWith("later ")) return arg.slice("later".length).trim();
+		return null;
+	}
+
+	pi.registerTool({
+		name: "xlatch_later",
+		label: "xlatch Save for Later",
+		description:
+			"List, read, or remove content parked in xlatch Save for Later. This works without connecting the current Pi session to an xlatch live-share slot. Read is non-destructive; remove only after the content has been handled.",
+		parameters: Type.Object({
+			action: Type.Optional(Type.String({ enum: ["list", "read", "remove"], default: "list" })),
+			id: Type.Optional(Type.String({ description: "Parked item id, required for read or remove" })),
+		}),
+		async execute(_toolCallId, params) {
+			try {
+				const action = params.action ?? "list";
+				if (action === "list") {
+					const items = await laterList();
+					return { content: [{ type: "text" as const, text: formatParkedList(items) }], details: null };
+				}
+				const id = params.id?.trim();
+				if (!id) throw new Error(`id is required for ${action}`);
+				if (action === "read") {
+					const content = await laterRead(id);
+					return { content: [{ type: "text" as const, text: formatParkedContent(content) }], details: null };
+				}
+				await laterRemove(id);
+				return { content: [{ type: "text" as const, text: `Removed parked item ${id}.` }], details: null };
+			} catch (error) {
+				return {
+					content: [{ type: "text" as const, text: errorMessage(error) }],
+					isError: true as const,
+					details: null,
+				};
+			}
+		},
+	});
+
 	pi.registerCommand("xlatch", {
-		description: "Connect or disconnect this pi session as an xlatch share target for your phone.",
+		description: "Connect this session for live shares, or retrieve content saved for later.",
 		handler: async (args, ctx) => {
 			ctxRef = ctx;
 			const arg = (args ?? "").trim();
+			const laterRequest = laterRequestFrom(arg);
+			if (laterRequest !== null) {
+				const requested = laterRequest || undefined;
+				return openLater(ctx, requested);
+			}
 
 			// Direct forms: /xlatch <slot> | /xlatch off
 			if (arg === "off" || arg === "disconnect") return disconnect(ctx);
@@ -526,11 +613,13 @@ export default function xlatchSession(pi: ExtensionAPI) {
 			if (arg === "status") return showStatus(ctx, pruned);
 
 			const choice = await ctx.ui.select("xlatch", [
+				"Retrieve from Save for Later",
 				boundSlot ? `Disconnect  (currently "${boundSlot}")` : "Connect this session to a slot",
 				"Status",
 				"Cancel",
 			]);
 			if (!choice || choice === "Cancel") return;
+			if (choice === "Retrieve from Save for Later") return openLater(ctx);
 			if (choice === "Status") return showStatus(ctx, pruned);
 			if (choice.startsWith("Disconnect")) return disconnect(ctx);
 
