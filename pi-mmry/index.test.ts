@@ -291,6 +291,19 @@ describe("session-start recall", () => {
 });
 
 describe("memory tool", () => {
+	test("registers prompt snippet and guidelines with fixed text only", () => {
+		const h = harness({ cwd: project("app") });
+		const tool = h.tools.get("memory") as unknown as { promptSnippet: string; promptGuidelines: string[]; description: string };
+		expect(tool.promptSnippet).toStartWith("memory: persistent memories for this repository and in general");
+		expect(tool.promptSnippet).toContain("does not belong in git or an issue tracker");
+		expect(tool.promptGuidelines).toHaveLength(3);
+		for (const text of [tool.promptSnippet, tool.description, ...tool.promptGuidelines]) {
+			expect(text).not.toContain("user's");
+		}
+		expect(FRAMING).not.toContain("user's");
+		expect(FRAMING).toContain("memory tool");
+	});
+
 	test("each action maps to the exact mmry argv in the session cwd", async () => {
 		const h = harness({ cwd: project("app") });
 		await h.start();
