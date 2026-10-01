@@ -43,13 +43,16 @@ Item fields: `statusKey` (required, the key an extension publishes under),
 `id` (defaults to statusKey), `label` (short prefix, default statusKey),
 `color` (accent|success|warning|error|muted|dim|text), `position`, `order`
 (sort, ascending; default 1000). Top-level `showInactive` renders configured
-items even when idle (dimmed). By default the footer leads with the **real pi
-agent logo** — the pinwheel from pi.dev/logo.svg rendered as block art in its
-brand colors (salmon/blue/yellow), falling back to `pi` on clearly limited
-terminals (`TERM=dumb|linux|cons25`). To use a text glyph instead of the logo,
-set `icon`: `{ "glyph": "π", "fallback": "pi", "color": "text" }` (the
-`color` uses the theme's `text` token, so it is white on dark themes and dark
-on light themes). See `statusline.schema.json` and `statusline.example.json`.
+items even when idle (dimmed).
+
+The leading icon uses the **real pi press-kit badge** as an inline image on
+terminals with the **Kitty graphics protocol** (drawn from `assets/*.png`),
+sized to the statusbar height via `icon.rows` (1-2, default 2). It is
+theme-aware: the white mark on dark backgrounds, the black mark on light ones.
+On non-Kitty terminals it falls back to a theme-aware `π` glyph (white in dark,
+dark in light). Override with `icon`: `{ "glyph": "π", "fallback": "pi",
+"color": "text", "rows": 2 }`. See `statusline.schema.json` and
+`statusline.example.json`.
 
 ## Status-key convention
 
