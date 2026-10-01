@@ -14,7 +14,7 @@
  *     implement the protocol (herdr) work even when TERM says xterm-256color.
  *   - On terminals with the Kitty graphics protocol, the real pi press-kit badge
  *     (assets/badge-{size}-{dark|light}.png) is drawn as an inline image sized to the
- *     statusbar height (1-2 rows). It is theme-aware: the white mark on dark
+ *     statusbar height (1 row by default, 2 via icon.rows). It is theme-aware: the white mark on dark
  *     backgrounds, the black mark on light backgrounds.
  *   - On other terminals it falls back to a theme-aware "π" glyph (white in dark,
  *     dark in light), or the manifest `icon` override.
@@ -362,7 +362,7 @@ export default function (pi: ExtensionAPI) {
 				}
 				const ordered = [...manifest.items].sort((a, b) => (a.order ?? 1_000) - (b.order ?? 1_000));
 				const showInactive = manifest.showInactive === true;
-				const rows = Math.max(1, Math.min(2, manifest.icon?.rows ?? 2));
+				const rows = Math.max(1, Math.min(2, manifest.icon?.rows ?? 1));
 				return {
 					render: (width: number) => {
 						const sm = ctx.sessionManager;

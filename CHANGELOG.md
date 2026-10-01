@@ -4,6 +4,11 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-statusline: 1-row badge by default (1.21.2)
+
+- The badge now defaults to one terminal row (`icon.rows: 1`) so it sits on the
+  pwd line only; set `icon.rows: 2` for the taller badge.
+
 ### pi-statusline: detect Kitty graphics by querying the terminal (1.21.1)
 
 - The pi badge never rendered under herdr: herdr implements Kitty graphics but

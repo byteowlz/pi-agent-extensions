@@ -5,7 +5,7 @@
 		"glyph": "π",
 		"fallback": "pi",
 		"color": "text",
-		"rows": 2
+		"rows": 1
 	},
 	"items": [
 		{ "id": "kompressor", "statusKey": "kompressor-rolling", "label": "KSP", "color": "warning", "position": "right", "order": 10 },

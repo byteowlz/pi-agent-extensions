@@ -21,7 +21,7 @@
 				"color": { "enum": ["accent", "success", "warning", "error", "muted", "dim", "text"] },
 				"rows": {
 					"type": "integer",
-					"description": "Inline badge height in terminal rows (1-2, default 2) on Kitty/ghostty terminals."
+					"description": "Inline badge height in terminal rows (1-2, default 1) on terminals with Kitty graphics."
 				},
 				"image": {
 					"enum": ["auto", "on", "off"],
