@@ -9,6 +9,9 @@
  *     the current model), so nothing the built-in footer showed is lost.
  *
  * Leading icon:
+ *   - Kitty graphics support is detected by asking the terminal (a Kitty graphics
+ *     query answered with OK), not by matching terminal names, so multiplexers that
+ *     implement the protocol (herdr) work even when TERM says xterm-256color.
  *   - On terminals with the Kitty graphics protocol, the real pi press-kit badge
  *     (assets/badge-{size}-{dark|light}.png) is drawn as an inline image sized to the
  *     statusbar height (1-2 rows). It is theme-aware: the white mark on dark
@@ -23,7 +26,8 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
-	type ImageProtocol,
+	type TUI,
+	allocateImageId,
 	encodeKitty,
 	getCapabilities,
 	getCellDimensions,
@@ -109,29 +113,66 @@ function loadManifest(ctx: ExtensionContext): StatuslineManifest | undefined {
 // ---------------------------------------------------------------------------
 
 const ASSET_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "assets");
-const KITTY_IMAGE_ID = 7;
+let badgeImageId: number | undefined;
 
-/** Detect image-protocol support: pi's detection, plus a fallback for
-e.g. our own PTY/psuedo-terminals that report TERM=screen but forward raw
-escapes to a kitty-capable outer terminal. */
-function imageProtocol(icon: StatuslineIcon | undefined): ImageProtocol {
-	if (icon?.image === "off") return null;
-	if (icon?.image === "on") return "kitty";
-	const caps = getCapabilities();
-	if (caps.images) return caps.images;
-	// Fallback: kitty-capable outer terminal even when TERM reports a
-	// multiplexer (our herdr pty forwards the raw escapes to the real terminal).
-	const prog = (process.env.TERM_PROGRAM || "").toLowerCase();
-	if (process.env.KITTY_WINDOW_ID) return "kitty";
-	if (prog.includes("kitty") || prog.includes("ghostty") || prog.includes("wezterm")) return "kitty";
-	if (process.env.GHOSTTY_RESOURCES_DIR || process.env.GHOSTTY_STATUS_COMMAND) return "kitty";
-	if (process.env.WEZTERM_EXECUTABLE) return "kitty";
-	return null;
+// Kitty graphics query: a 1x1 RGB pixel with a=q (query only, nothing is stored or
+// drawn), followed by DA1 as a sentinel every terminal answers. A terminal that
+// implements the protocol replies `ESC_Gi=<id>;OK ESC\` before the DA1 reply.
+const KITTY_QUERY_ID = 31;
+const KITTY_QUERY = `\x1b_Gi=${KITTY_QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c`;
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching terminal escape replies
+const KITTY_REPLY_RE = /\x1b_Gi=31;([^\x1b]*)\x1b\\/;
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching terminal escape replies
+const DA1_REPLY_RE = /\x1b\[\?[\d;]*c/;
+const PROBE_TIMEOUT_MS = 1_500;
+
+/** Result of the terminal query: undefined until answered (or timed out). */
+let kittyProbe: boolean | undefined;
+let probeStarted = false;
+
+/**
+ * Ask the terminal whether it implements Kitty graphics. Replies arrive on stdin,
+ * so an input listener strips them before pi sees them as keystrokes.
+ */
+function probeKittyGraphics(tui: TUI): void {
+	if (probeStarted || !process.stdout.isTTY) return;
+	probeStarted = true;
+	let graphicsReply: boolean | undefined;
+	// Keep listening until the DA1 sentinel so neither reply leaks into the editor.
+	const stop = tui.addInputListener((data) => {
+		let rest = data;
+		const reply = KITTY_REPLY_RE.exec(rest);
+		if (reply) {
+			rest = rest.replace(reply[0], "");
+			graphicsReply = reply[1] === "OK";
+		}
+		const da1 = DA1_REPLY_RE.exec(rest);
+		if (da1) {
+			rest = rest.replace(da1[0], "");
+			finish();
+		}
+		if (rest === data) return undefined;
+		return rest.length === 0 ? { consume: true } : { data: rest };
+	});
+	const timer = setTimeout(finish, PROBE_TIMEOUT_MS);
+	tui.terminal.write(KITTY_QUERY);
+
+	function finish(): void {
+		if (kittyProbe !== undefined) return;
+		kittyProbe = graphicsReply === true;
+		stop();
+		clearTimeout(timer);
+		// Cell size in pixels sizes the badge; pi-tui consumes the reply itself.
+		if (kittyProbe) tui.terminal.write("\x1b[16t");
+		tui.requestRender(true);
+	}
 }
 
-/** Resolve whether to render the image badge: auto-detect, force on, or force off. */
+/** Resolve whether to render the image badge: manifest override, then detection. */
 function imageEnabled(icon: StatuslineIcon | undefined): boolean {
-	return imageProtocol(icon) !== null;
+	if (icon?.image === "off") return false;
+	if (icon?.image === "on") return true;
+	return getCapabilities().images === "kitty" || kittyProbe === true;
 }
 
 /** Whether we should draw the dark (white) or light (black) mark. */
@@ -156,18 +197,24 @@ function readBadgePng(rows: number, dark: boolean): { png: string } {
 	}
 }
 
+/** Width in cells of a square badge `rows` cells tall. */
+function badgeCols(rows: number): number {
+	const cell = getCellDimensions();
+	return Math.max(1, Math.round((rows * cell.heightPx) / cell.widthPx));
+}
+
 /**
- * Return the escape sequence to draw the badge inline at the current cursor,
- * sized to `rows` terminal rows and advancing the cursor past it. Uses pi's
- * encodeKitty (a=T transmit-and-place with c/r cell sizing + cursor movement).
+ * Return the escape sequence to draw the badge at the current cursor, `rows` tall,
+ * leaving the cursor just right of it on the same row. The image is drawn with
+ * C=1 (no terminal cursor movement): Kitty would otherwise move the cursor down
+ * by the image height, breaking pi-tui's line accounting for a 2-row badge.
  */
 function kittyBadgeEscape(rows: number): string {
-	const dark = isDarkBackground();
-	const { png } = readBadgePng(rows, dark);
+	const { png } = readBadgePng(rows, isDarkBackground());
 	if (!png) return "";
-	const cell = getCellDimensions();
-	const cols = Math.max(1, Math.round((rows * cell.heightPx) / cell.widthPx));
-	return encodeKitty(png, { columns: cols, rows, imageId: KITTY_IMAGE_ID });
+	badgeImageId ??= allocateImageId();
+	const cols = badgeCols(rows);
+	return `${encodeKitty(png, { columns: cols, rows, imageId: badgeImageId, moveCursor: false })}\x1b[${cols}C`;
 }
 
 /** The icon for a non-kitty terminal: theme-aware glyph, or manifest override. */
@@ -256,6 +303,34 @@ function alignLeftRight(left: string, right: string, width: number): string {
 	return truncateToWidth(left, width, "...");
 }
 
+/**
+ * Build the pwd + stats lines, led by the image badge when the terminal supports
+ * it (text on the lines the badge spans is indented past it) or the glyph otherwise.
+ */
+function buildHeaderLines(
+	pwd: string,
+	stats: { left: string; right: string },
+	icon: StatuslineIcon | undefined,
+	rows: number,
+	width: number,
+	theme: { fg(color: string, text: string): string }
+): string[] {
+	const ellipsis = theme.fg("dim", "...");
+	const badge = imageEnabled(icon) ? kittyBadgeEscape(rows) : "";
+	if (!badge) {
+		const glyph = pickGlyph(icon);
+		return [
+			truncateToWidth(`${theme.fg(glyph.color, glyph.glyph)} ${pwd}`, width, ellipsis),
+			theme.fg("dim", alignLeftRight(stats.left, stats.right, width)),
+		];
+	}
+	const indent = badgeCols(rows) + 1;
+	const textWidth = Math.max(1, width - indent);
+	const pwdLine = `${badge} ${truncateToWidth(pwd, textWidth, ellipsis)}`;
+	if (rows === 1) return [pwdLine, theme.fg("dim", alignLeftRight(stats.left, stats.right, width))];
+	return [pwdLine, `${" ".repeat(indent)}${theme.fg("dim", alignLeftRight(stats.left, stats.right, textWidth))}`];
+}
+
 /** Build the colored extension-status segments for the footer line. */
 function buildStatusSegments(
 	ordered: StatuslineItem[],
@@ -281,7 +356,10 @@ export default function (pi: ExtensionAPI) {
 		const manifest = loadManifest(ctx);
 		if (!manifest || manifest.items.length === 0) return; // no manifest -> keep built-in footer
 		try {
-			ctx.ui.setFooter((_tui, theme, footerData) => {
+			ctx.ui.setFooter((tui, theme, footerData) => {
+				if (manifest.icon?.image !== "on" && manifest.icon?.image !== "off" && !getCapabilities().images) {
+					probeKittyGraphics(tui);
+				}
 				const ordered = [...manifest.items].sort((a, b) => (a.order ?? 1_000) - (b.order ?? 1_000));
 				const showInactive = manifest.showInactive === true;
 				const rows = Math.max(1, Math.min(2, manifest.icon?.rows ?? 2));
@@ -290,7 +368,7 @@ export default function (pi: ExtensionAPI) {
 						const sm = ctx.sessionManager;
 						const home = process.env.HOME || process.env.USERPROFILE;
 						const usage = computeUsage(sm);
-						const { left: statsLeft, right: rightSide } = buildStats(ctx, usage, footerData.getAvailableProviderCount(), theme);
+						const stats = buildStats(ctx, usage, footerData.getAvailableProviderCount(), theme);
 
 						// --- pwd line (cwd + branch + session name) ---
 						let pwd = sm.getCwd();
@@ -300,14 +378,7 @@ export default function (pi: ExtensionAPI) {
 						const sessionName = sm.getSessionName();
 						if (sessionName) pwd = `${pwd} • ${sessionName}`;
 
-						const lines: string[] = [];
-						if (imageEnabled(manifest.icon)) {
-							lines.push(`${kittyBadgeEscape(rows)} ${pwd}`);
-						} else {
-							const glyph = pickGlyph(manifest.icon);
-							lines.push(truncateToWidth(`${theme.fg(glyph.color, glyph.glyph)} ${pwd}`, width, theme.fg("dim", "...")));
-						}
-						lines.push(theme.fg("dim", alignLeftRight(statsLeft, rightSide, width)));
+						const lines = buildHeaderLines(pwd, stats, manifest.icon, rows, width, theme);
 						const segments = buildStatusSegments(ordered, footerData.getExtensionStatuses(), showInactive, theme);
 						if (segments.length > 0) {
 							lines.push(truncateToWidth(segments.join(theme.fg("dim", " • ")), width, theme.fg("dim", "...")));

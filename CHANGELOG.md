@@ -4,6 +4,18 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-statusline: detect Kitty graphics by querying the terminal (1.21.1)
+
+- The pi badge never rendered under herdr: herdr implements Kitty graphics but
+  reports `TERM=xterm-256color` and passes no terminal-name variables, so
+  name-based detection always fell back to the `π` glyph. Detection now sends a
+  Kitty graphics query (`a=q`) plus DA1 at startup and enables the image when
+  the terminal answers `OK`; replies are stripped via `tui.addInputListener` so
+  they never reach the editor. Removed the terminal-name fallback.
+- Draw the badge through pi-tui's `encodeKitty` with `C=1` and step past it
+  explicitly, so a 2-row badge no longer moves the cursor down and breaks
+  pi-tui's line accounting; text on the lines the badge spans is indented.
+
 ### pi-statusline: optional manifest-driven status footer
 
 - New opt-in extension `pi-statusline` that renders extension statuses (\
