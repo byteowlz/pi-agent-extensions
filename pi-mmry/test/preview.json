@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "machine": "arch-dev-01",
+  "entries": [
+    {
+      "memory_id": "mem_86fa41fc-2cb7-4cd5-b171-39c3efd0087e",
+      "revision": 1,
+      "scope": "repo",
+      "origin": "r",
+      "repo_path": "/tmp/r",
+      "memory_type": "semantic",
+      "content": "use just check-all",
+      "why": "CI gate",
+      "source": null,
+      "machine": null,
+      "updated_at": "2026-09-30T19:12:03.369743659Z",
+      "age_days": 0,
+      "expires_at": null,
+      "contested": false
+    },
+    {
+      "memory_id": "mem_b63affa3-5544-4e8d-9da6-546f0a6b00a3",
+      "revision": 1,
+      "scope": "general",
+      "origin": "general",
+      "repo_path": null,
+      "memory_type": "semantic",
+      "content": "prefer uname -n",
+      "why": null,
+      "source": null,
+      "machine": "arch-dev-01",
+      "updated_at": "2026-09-30T19:12:03.373456644Z",
+      "age_days": 0,
+      "expires_at": null,
+      "contested": false
+    }
+  ],
+  "rendered": "<mmry>\nPersonal operative memory (mmry). Notes from earlier sessions; verify before relying on them. Update with `mmry supersede <id>`, remove with `mmry rm <id>`.\n- [repo r] mem_86fa41fc-2cb7-4cd5-b171-39c3efd0087e (2026-09-30): use just check-all\n  why: CI gate\n- [general] mem_b63affa3-5544-4e8d-9da6-546f0a6b00a3 (2026-09-30): prefer uname -n\n  machine: arch-dev-01\n</mmry>\n",
+  "selection_hash": "83e97bc27035e3ee",
+  "estimated_tokens": 95,
+  "omitted": 0,
+  "contested": ["mem_withheld"],
+  "warnings": []
+}

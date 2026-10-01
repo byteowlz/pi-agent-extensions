@@ -49,6 +49,19 @@ All notable changes to pi-agent-extensions will be documented in this file.
   On close/decision it reports `working` and calls `release-agent` to hand
   lifecycle authority back to detection. Same best-effort guard as pi-sudo:
   only fires inside a herdr pane (`HERDR_ENV=1` + `HERDR_PANE_ID`).
+### pi-mmry: visible session-start recall from mmry (piext-z2a0)
+
+- **New extension, off by default** (`--mmry-recall`, `PI_MMRY_RECALL=1`, or
+  `mmry-recall.json`). At session start it runs `mmry preview --json` and
+  shows the exact rendered block; the first prompt then carries those same
+  bytes once, framed as untrusted observations. No system-prompt rewrite, no
+  per-turn re-injection, no re-injection on resume; a cwd change is shown
+  again before use. Headless/RPC attach nothing unless `headless: "report"`.
+- `/memory preview|list|on|off`; one `memory` tool (action
+  search/create/supersede/deprecate) that shells out to mmry and passes its
+  errors through; missing fields are reported without calling mmry.
+- Disables itself visibly for a missing/old mmry, an unknown preview schema,
+  or contested entries. Count-only metrics JSONL.
 
 ### pi-herdr-tools: fuzzy allowlist palette + catalog derive
 
