@@ -14,7 +14,7 @@
 		},
 		"icon": {
 			"type": "object",
-			"description": "Optional leading icon. Omit to show the real pi logo (block art in brand colors). Set glyph/fallback to override with text.",
+			"description": "Optional leading icon. Omit to show the pi badge image on terminals with Kitty graphics, or the glyph elsewhere.",
 			"properties": {
 				"glyph": { "type": "string" },
 				"fallback": { "type": "string" },
@@ -25,10 +25,15 @@
 				},
 				"image": {
 					"enum": ["auto", "on", "off"],
-					"description": "auto (detect kitty/ghostty), on (force the image), off (force the glyph)."
+					"description": "auto (query the terminal for Kitty graphics), on (force the image), off (force the glyph)."
 				}
 			},
 			"additionalProperties": true
+		},
+		"projectIcon": {
+			"type": "boolean",
+			"default": true,
+			"description": "Show the cwd project's icon (icon/icon_on_dark or icon_on_light, .png or .svg, searched up to the git root) at the right of the pwd line. Needs Kitty graphics."
 		},
 		"items": {
 			"type": "array",
