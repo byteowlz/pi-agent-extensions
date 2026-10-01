@@ -7,6 +7,7 @@
 		"color": "text",
 		"rows": 1
 	},
+	"projectIcon": true,
 	"items": [
 		{ "id": "kompressor", "statusKey": "kompressor-rolling", "label": "KSP", "color": "warning", "position": "right", "order": 10 },
 		{ "id": "oqto-bridge", "statusKey": "oqto-bridge", "label": "PHASE", "color": "accent", "position": "right", "order": 20 },

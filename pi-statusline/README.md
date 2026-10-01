@@ -59,6 +59,14 @@ back to a theme-aware `π` glyph (white in dark, dark in light). Override with
 image), or `off` (force the glyph; also skips the query). See `statusline.schema.json` and
 `statusline.example.json`.
 
+On the right of the pwd line it shows the **cwd project's icon**, following the
+byteowlz project icon standard: `icon/icon_on_dark` (for dark themes) or
+`icon/icon_on_light` (for light themes), `.png` preferred over `.svg`, searched
+from the cwd up to the git root. An SVG-only icon is rasterised once with
+`rsvg-convert` (or ImageMagick) into `~/.cache/pi-statusline/`. No icon, no
+matching variant, or no Kitty graphics: nothing is shown. Disable with
+`"projectIcon": false`.
+
 ## Status-key convention
 
 - One status per extension, published under a **kebab-case key equal to the

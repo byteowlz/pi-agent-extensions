@@ -4,6 +4,18 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-statusline: show the cwd project's icon (1.22.0)
+
+- The right end of the pwd line shows the project's icon, following the new
+  byteowlz project icon standard: `icon/icon_on_dark` or `icon/icon_on_light`
+  (by theme), `.png` preferred over `.svg`, searched from the cwd up to the git
+  root so the nearest icon wins in a monorepo. SVG-only icons are rasterised
+  once into `~/.cache/pi-statusline/` with `rsvg-convert`, falling back to
+  ImageMagick. Nothing is shown without an icon, a matching variant or Kitty
+  graphics. Disable with `"projectIcon": false`.
+- Exported `findProjectIcon(cwd, variant)` with tests.
+- Fixed stale schema and comment text (block-art badge, default 2 rows).
+
 ### pi-statusline: 1-row badge by default (1.21.2)
 
 - The badge now defaults to one terminal row (`icon.rows: 1`) so it sits on the

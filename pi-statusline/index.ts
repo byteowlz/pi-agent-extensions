@@ -20,6 +20,8 @@
  *     dark in light), or the manifest `icon` override.
  */
 
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -52,7 +54,7 @@ interface StatuslineIcon {
 	glyph?: string;
 	fallback?: string;
 	color?: StatusColor;
-	/** Row height of the image badge (default 2). */
+	/** Row height of the image badge (default 1). */
 	rows?: number;
 	/** "auto" (detect), "on" (force image), or "off" (force glyph). */
 	image?: "auto" | "on" | "off";
@@ -63,6 +65,8 @@ interface StatuslineManifest {
 	/** When true, render configured items even if no status is published (dimmed). */
 	showInactive?: boolean;
 	icon?: StatuslineIcon;
+	/** Show the cwd project's icon/icon_on_{dark,light} at the right of the pwd line (default true). */
+	projectIcon?: boolean;
 	items: StatuslineItem[];
 }
 
@@ -100,7 +104,13 @@ function loadManifest(ctx: ExtensionContext): StatuslineManifest | undefined {
 			const obj = JSON.parse(fs.readFileSync(p, "utf8")) as Partial<StatuslineManifest>;
 			if (!obj || typeof obj !== "object" || !Array.isArray(obj.items)) continue;
 			const items = obj.items.map(parseItem).filter((x): x is StatuslineItem => x !== undefined);
-			return { version: obj.version, showInactive: obj.showInactive === true, icon: obj.icon, items };
+			return {
+				version: obj.version,
+				showInactive: obj.showInactive === true,
+				icon: obj.icon,
+				projectIcon: obj.projectIcon !== false,
+				items,
+			};
 		} catch {
 			// Ignore malformed manifest; fall through to the next candidate.
 		}
@@ -217,6 +227,81 @@ function kittyBadgeEscape(rows: number): string {
 	return `${encodeKitty(png, { columns: cols, rows, imageId: badgeImageId, moveCursor: false })}\x1b[${cols}C`;
 }
 
+// ---------------------------------------------------------------------------
+// Project icon (byteowlz repository standard): icon/icon_on_{dark,light}.{png,svg}
+// in the project, drawn one row tall at the right end of the pwd line.
+// ---------------------------------------------------------------------------
+
+const ICON_CACHE_DIR = path.join(os.homedir(), ".cache", "pi-statusline");
+const ICON_RENDER_PX = 64;
+let projectIconImageId: number | undefined;
+/** base64 PNG per `<cwd>\0<variant>`; "" when the project ships no matching icon. */
+const projectIconCache = new Map<string, string>();
+
+/**
+ * Find the project icon for `cwd`: the nearest directory from cwd up to the git
+ * root (or home) that ships icon/icon_<variant>.png or .svg. PNG wins over SVG.
+ */
+export function findProjectIcon(cwd: string, variant: "on_dark" | "on_light"): string | undefined {
+	const home = os.homedir();
+	let dir = path.resolve(cwd);
+	for (;;) {
+		for (const ext of ["png", "svg"]) {
+			const file = path.join(dir, "icon", `icon_${variant}.${ext}`);
+			if (fs.existsSync(file)) return file;
+		}
+		const parent = path.dirname(dir);
+		if (fs.existsSync(path.join(dir, ".git")) || dir === home || parent === dir) return undefined;
+		dir = parent;
+	}
+}
+
+/** Rasterise an SVG icon once into the cache (rsvg-convert, else ImageMagick). */
+function rasteriseSvg(svg: string): string | undefined {
+	const key = createHash("sha1")
+		.update(`${svg}\0${fs.statSync(svg).mtimeMs}`)
+		.digest("hex")
+		.slice(0, 16);
+	const out = path.join(ICON_CACHE_DIR, `${key}.png`);
+	if (fs.existsSync(out)) return out;
+	fs.mkdirSync(ICON_CACHE_DIR, { recursive: true });
+	const px = String(ICON_RENDER_PX);
+	const renderers: [string, string[]][] = [
+		["rsvg-convert", ["-w", px, "-h", px, "-a", svg, "-o", out]],
+		["magick", ["-background", "none", "-density", "384", svg, "-resize", `${px}x${px}`, out]],
+	];
+	for (const [cmd, args] of renderers) {
+		const result = spawnSync(cmd, args, { timeout: 5_000, stdio: "ignore" });
+		if (result.status === 0 && fs.existsSync(out)) return out;
+	}
+	return undefined;
+}
+
+function projectIconPng(cwd: string, dark: boolean): string {
+	const variant = dark ? "on_dark" : "on_light";
+	const key = `${cwd}\0${variant}`;
+	const cached = projectIconCache.get(key);
+	if (cached !== undefined) return cached;
+	let png = "";
+	try {
+		const file = findProjectIcon(cwd, variant);
+		const pngFile = file?.endsWith(".svg") ? rasteriseSvg(file) : file;
+		if (pngFile) png = fs.readFileSync(pngFile).toString("base64");
+	} catch {
+		// Unreadable or unrenderable icon: show nothing.
+	}
+	projectIconCache.set(key, png);
+	return png;
+}
+
+/** Escape to draw the project icon one row tall at the cursor, or "" when there is none. */
+function projectIconEscape(cwd: string): string {
+	const png = projectIconPng(cwd, isDarkBackground());
+	if (!png) return "";
+	projectIconImageId ??= allocateImageId();
+	return encodeKitty(png, { columns: badgeCols(1), rows: 1, imageId: projectIconImageId, moveCursor: false });
+}
+
 /** The icon for a non-kitty terminal: theme-aware glyph, or manifest override. */
 function pickGlyph(icon: StatuslineIcon | undefined): { glyph: string; color: StatusColor } {
 	const dark = isDarkBackground();
@@ -306,11 +391,13 @@ function alignLeftRight(left: string, right: string, width: number): string {
 /**
  * Build the pwd + stats lines, led by the image badge when the terminal supports
  * it (text on the lines the badge spans is indented past it) or the glyph otherwise.
+ * `projectIcon` (an image escape, or "") is right-aligned on the pwd line.
  */
 function buildHeaderLines(
 	pwd: string,
 	stats: { left: string; right: string },
 	icon: StatuslineIcon | undefined,
+	projectIcon: string,
 	rows: number,
 	width: number,
 	theme: { fg(color: string, text: string): string }
@@ -326,7 +413,12 @@ function buildHeaderLines(
 	}
 	const indent = badgeCols(rows) + 1;
 	const textWidth = Math.max(1, width - indent);
-	const pwdLine = `${badge} ${truncateToWidth(pwd, textWidth, ellipsis)}`;
+	const iconCols = projectIcon ? badgeCols(1) : 0;
+	const pwdText = truncateToWidth(pwd, projectIcon ? Math.max(1, textWidth - iconCols - 1) : textWidth, ellipsis);
+	let pwdLine = `${badge} ${pwdText}`;
+	if (projectIcon) {
+		pwdLine += `${" ".repeat(Math.max(1, textWidth - visibleWidth(pwdText) - iconCols))}${projectIcon}`;
+	}
 	if (rows === 1) return [pwdLine, theme.fg("dim", alignLeftRight(stats.left, stats.right, width))];
 	return [pwdLine, `${" ".repeat(indent)}${theme.fg("dim", alignLeftRight(stats.left, stats.right, textWidth))}`];
 }
@@ -363,6 +455,7 @@ export default function (pi: ExtensionAPI) {
 				const ordered = [...manifest.items].sort((a, b) => (a.order ?? 1_000) - (b.order ?? 1_000));
 				const showInactive = manifest.showInactive === true;
 				const rows = Math.max(1, Math.min(2, manifest.icon?.rows ?? 1));
+				const showProjectIcon = manifest.projectIcon !== false;
 				return {
 					render: (width: number) => {
 						const sm = ctx.sessionManager;
@@ -378,7 +471,8 @@ export default function (pi: ExtensionAPI) {
 						const sessionName = sm.getSessionName();
 						if (sessionName) pwd = `${pwd} • ${sessionName}`;
 
-						const lines = buildHeaderLines(pwd, stats, manifest.icon, rows, width, theme);
+						const projectIcon = showProjectIcon && imageEnabled(manifest.icon) ? projectIconEscape(sm.getCwd()) : "";
+						const lines = buildHeaderLines(pwd, stats, manifest.icon, projectIcon, rows, width, theme);
 						const segments = buildStatusSegments(ordered, footerData.getExtensionStatuses(), showInactive, theme);
 						if (segments.length > 0) {
 							lines.push(truncateToWidth(segments.join(theme.fg("dim", " • ")), width, theme.fg("dim", "...")));
