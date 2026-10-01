@@ -1,5 +1,7 @@
 {
 	"version": 1,
+	"showInactive": true,
+	"icon": { "glyph": "π", "fallback": "pi", "color": "text" },
 	"items": [
 		{ "id": "kompressor", "statusKey": "kompressor-rolling", "label": "KSP", "color": "warning", "position": "right", "order": 10 },
 		{ "id": "oqto-bridge", "statusKey": "oqto-bridge", "label": "PHASE", "color": "accent", "position": "right", "order": 20 },

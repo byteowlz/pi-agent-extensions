@@ -30,6 +30,8 @@ Looked up in this order (first match wins):
 ```json
 {
   "version": 1,
+  "showInactive": true,
+  "icon": { "glyph": "π", "fallback": "pi", "color": "text" },
   "items": [
     { "id": "kompressor", "statusKey": "kompressor-rolling",
       "label": "KSP", "color": "warning", "position": "right", "order": 10 }
@@ -40,7 +42,11 @@ Looked up in this order (first match wins):
 Item fields: `statusKey` (required, the key an extension publishes under),
 `id` (defaults to statusKey), `label` (short prefix, default statusKey),
 `color` (accent|success|warning|error|muted|dim|text), `position`, `order`
-(sort, ascending; default 1000). See `statusline.schema.json` and
+(sort, ascending; default 1000). Top-level `showInactive` renders configured
+items even when idle (dimmed). `icon` renders a leading glyph: `color` uses the
+theme's `text` token by default so it is white on dark themes and dark on light
+themes, and it falls back to `fallback` on clearly limited terminals
+(`TERM=dumb|linux|cons25`). See `statusline.schema.json` and
 `statusline.example.json`.
 
 ## Status-key convention
