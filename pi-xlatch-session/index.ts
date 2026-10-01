@@ -546,6 +546,13 @@ export default function xlatchSession(pi: ExtensionAPI) {
 			}
 			if (!item) throw new Error("That saved item is no longer available.");
 			const content = await laterRead(item.id);
+			if (["queued", "running"].includes(content.item.preparation?.status ?? "")) {
+				ctx.ui.notify(
+					`“${item.label}” is still being prepared by ${content.item.preparation?.capability_id}. Try again shortly.`,
+					"info"
+				);
+				return;
+			}
 			pi.sendUserMessage(formatParkedContent(content), { deliverAs: "followUp" });
 			await laterRemove(item.id);
 			ctx.ui.notify(`Retrieved “${item.label}” from Save for Later.`, "info");

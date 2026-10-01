@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.0
+
+- Include successful typed Save for Later preparation results as cached context alongside the original content.
+- Keep interactively selected items parked while their configured preparation action is still running.
+
 ## 1.2.0
 
 - Add the `xlatch_later` tool and `/xlatch later` picker for retrieving durable parked content without claiming a live Pi slot.
