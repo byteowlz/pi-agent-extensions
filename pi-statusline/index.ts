@@ -22,7 +22,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+	type ImageProtocol,
+	encodeKitty,
+	getCapabilities,
+	getCellDimensions,
+	truncateToWidth,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 
 /** Color tokens that map onto Theme.fg (a safe subset of p's ThemeColor). */
 type StatusColor = "accent" | "success" | "warning" | "error" | "muted" | "dim" | "text";
@@ -103,26 +110,17 @@ function loadManifest(ctx: ExtensionContext): StatuslineManifest | undefined {
 
 const ASSET_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "assets");
 const KITTY_IMAGE_ID = 7;
-const CELL_PX = 16; // assumed terminal cell height/width (adjust via icon.rows)
-let kittyTransmitted = false;
 
-/** Terminals that implement the Kitty graphics protocol (kitty, Ghostty, Wez*). */
-function supportsKittyImage(): boolean {
-	const term = (process.env.TERM || "").toLowerCase();
-	const prog = (process.env.TERM_PROGRAM || "").toLowerCase();
-	if (term.includes("kitty") || term.includes("ghostty") || term.includes("wezterm")) return true;
-	if (process.env.KITTY_WINDOW_ID) return true;
-	if (prog.includes("kitty") || prog.includes("ghostty") || prog.includes("wezterm")) return true;
-	if (process.env.GHOSTTY_RESOURCES_DIR || process.env.GHOSTTY_STATUS_COMMAND) return true;
-	if (process.env.WEZTERM_EXECUTABLE) return true;
-	return false;
+/** Detect image-protocol support via pi's own terminal-image detection. */
+function imageProtocol(icon: StatuslineIcon | undefined): ImageProtocol {
+	if (icon?.image === "off") return null;
+	if (icon?.image === "on") return "kitty";
+	return getCapabilities().images;
 }
 
 /** Resolve whether to render the image badge: auto-detect, force on, or force off. */
 function imageEnabled(icon: StatuslineIcon | undefined): boolean {
-	if (icon?.image === "on") return true;
-	if (icon?.image === "off") return false;
-	return supportsKittyImage();
+	return imageProtocol(icon) !== null;
 }
 
 /** Whether we should draw the dark (white) or light (black) mark. */
@@ -134,36 +132,31 @@ function isDarkBackground(): boolean {
 	return true; // default to dark
 }
 
-function readBadgePng(rows: number, dark: boolean): { png: string; w: number; h: number } {
-	const px = Math.max(16, Math.min(32, rows * CELL_PX));
-	// Snap to available asset sizes (16/24/32).
-	const size = px <= 16 ? 16 : px <= 24 ? 24 : 32;
+function readBadgePng(rows: number, dark: boolean): { png: string } {
+	// Square badge, so width = height; pick the asset size nearest the target height.
+	const cell = getCellDimensions();
+	const targetPx = Math.round(rows * cell.heightPx);
+	const size = targetPx <= 16 ? 16 : targetPx <= 24 ? 24 : 32;
 	const file = path.join(ASSET_DIR, `badge-${size}-${dark ? "dark" : "light"}.png`);
 	try {
-		const buf = fs.readFileSync(file);
-		return { png: buf.toString("base64"), w: size, h: size };
+		return { png: fs.readFileSync(file).toString("base64") };
 	} catch {
-		return { png: "", w: 0, h: 0 };
+		return { png: "" };
 	}
 }
 
 /**
- * Return the escape sequence to draw the badge inline at the current cursor and
- * advance past it (transmits once, re-places on subsequent renders).
+ * Return the escape sequence to draw the badge inline at the current cursor,
+ * sized to `rows` terminal rows and advancing the cursor past it. Uses pi's
+ * encodeKitty (a=T transmit-and-place with c/r cell sizing + cursor movement).
  */
 function kittyBadgeEscape(rows: number): string {
-	if (!supportsKittyImage()) return "";
 	const dark = isDarkBackground();
-	const { png, w } = readBadgePng(rows, dark);
+	const { png } = readBadgePng(rows, dark);
 	if (!png) return "";
-	let out = "";
-	if (!kittyTransmitted) {
-		out += `\x1b_Ga=t,f=100,s=${w},v=${w},i=${KITTY_IMAGE_ID},m=0;${png}\x1b\\`;
-		kittyTransmitted = true;
-	}
-	const cols = Math.max(1, Math.round(w / CELL_PX));
-	out += `\x1b_Ga=p,i=${KITTY_IMAGE_ID},x=0,y=0,z=0\x1b\\\x1b[${cols}C`;
-	return out;
+	const cell = getCellDimensions();
+	const cols = Math.max(1, Math.round((rows * cell.heightPx) / cell.widthPx));
+	return encodeKitty(png, { columns: cols, rows, imageId: KITTY_IMAGE_ID });
 }
 
 /** The icon for a non-kitty terminal: theme-aware glyph, or manifest override. */
