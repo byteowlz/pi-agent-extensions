@@ -4,6 +4,22 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-herdr-tools: preset loadouts (mode/cap/kind in addition to models)
+
+- Loadouts can now be **full presets**, not just model-pattern arrays. A
+  loadout value may be `["pattern"]` (legacy) or an object
+  `{ models, mode?, max?, kinds? }`. Applying one via
+  `/subagent models loadout load <name>` (or `force`) now sets the session's
+  allowlist *and* pins `allowMode`, `maxSubagents`, and `allowedKinds` when the
+  preset carries them; omitted fields keep the current value.
+- Added a per-session `allowedKinds` override (session > config) so a preset
+  can restrict which agent kinds may spawn (e.g. a `claude` preset that allows
+  claude-code subagents only). The spawn gate now honors this. `models: []`
+  means all models allowed (rely on `kinds` to gate kinds).
+- `/subagent status` and `/subagent models loadout list` now show the active
+  kinds and describe each preset fully. Backward compatible: existing
+  pattern-array loadouts still work.
+
 ### pi-herdr-tools: subagent completion message queues safely
 
 - The background completion notification (`notifyFinished`) called

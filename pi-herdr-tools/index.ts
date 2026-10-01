@@ -16,7 +16,9 @@
  *     "allowMode": "confirm",       // per-session default: "confirm" | "auto" | "timeout"
  *     "autoDecision": "deny",       // when allowMode=timeout and nobody answers: "allow" | "deny"
  *     "confirmTimeoutMs": 60000,    // how long the timed prompt waits before auto-deciding
- *     "loadouts": {}                // named model-presets: { "cheap": ["archvm/*"] }
+ *     "loadouts": {}                // named presets: array of patterns OR { models, mode?, max?, kinds? }
+ *     //   { "local": ["rtx6000/deepseek"],
+ *     //     "smart": { models: ["openai-codex/gpt-6.1-sol"], mode: "auto", max: 3, kinds: ["pi"] } }
  *   }
  *
  * Per-session settings (allow mode, auto decision, timeout, allowance and the
@@ -80,6 +82,48 @@ import {
 } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
+/** A named subagent profile: model allowlist plus optional mode/cap/kind. */
+export interface PresetLoadout {
+	/** Allowlist patterns ("provider/id" or globs). Empty = all models allowed. */
+	models: string[];
+	/** Optional allow mode this preset pins the session to. */
+	mode?: AllowMode;
+	/** Optional concurrent-subagent cap this preset pins the session to. */
+	max?: number;
+	/** Optional set of herdr agent kinds this preset allows spawn. */
+	kinds?: string[];
+}
+/** A loadout may be a plain pattern array (legacy) or a full preset object. */
+export type LoadoutDef = string[] | PresetLoadout;
+
+function isPresetObject(v: unknown): v is Record<string, unknown> {
+	return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** Normalize a loadout (pattern array or preset object) to a full preset. */
+export function normalizeLoadout(def: LoadoutDef): PresetLoadout {
+	if (Array.isArray(def)) return { models: def };
+	return { models: def.models ?? [], mode: def.mode, max: def.max, kinds: def.kinds };
+}
+
+/** True if the preset carries any useful setting (else it is empty/ignored). */
+export function loadoutHasContent(def: PresetLoadout): boolean {
+	return def.models.length > 0 || def.mode !== undefined || def.max !== undefined || def.kinds !== undefined;
+}
+
+/** Human description of a preset for notify/status output. */
+function describePreset(def: PresetLoadout): string {
+	const parts: string[] = [def.models.length ? def.models.join(", ") : "(all models)"];
+	if (def.mode) parts.push(`mode=${def.mode}`);
+	if (def.max !== undefined) parts.push(`max=${def.max}`);
+	if (def.kinds) parts.push(`kinds=${def.kinds.join(",")}`);
+	return parts.join(" · ");
+}
+
+function stringArray(v: unknown): string[] | undefined {
+	return Array.isArray(v) ? v.filter((p) => typeof p === "string") : undefined;
+}
+
 const execFileAsync = promisify(execFile);
 
 // ---------------------------------------------------------------------------
@@ -142,7 +186,7 @@ interface SubagentConfig {
 	allowMode: AllowMode;
 	autoDecision: AutoDecision;
 	confirmTimeoutMs: number;
-	loadouts: Record<string, string[]>;
+	loadouts: Record<string, LoadoutDef>;
 	/** Path to the byteowlz model catalog (metadata + loadouts + policy). */
 	catalogPath?: string;
 }
@@ -173,10 +217,18 @@ function loadConfig(): SubagentConfig {
 		if (fs.existsSync(CONFIG_PATH)) {
 			const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) as Partial<SubagentConfig>;
 			const allowMode = asAllowMode(raw.allowMode) ?? (raw.requireConfirmation === false ? "auto" : "confirm");
-			const loadouts: Record<string, string[]> = {};
+			const loadouts: Record<string, LoadoutDef> = {};
 			if (raw.loadouts && typeof raw.loadouts === "object") {
 				for (const [k, v] of Object.entries(raw.loadouts)) {
-					if (Array.isArray(v)) loadouts[k] = v.filter((p) => typeof p === "string");
+					if (Array.isArray(v)) {
+						loadouts[k] = v.filter((p) => typeof p === "string");
+					} else if (isPresetObject(v)) {
+						const models = stringArray(v.models) ?? [];
+						const mode = asAllowMode(v.mode);
+						const max = typeof v.max === "number" && v.max >= 0 ? Math.floor(v.max) : undefined;
+						const kinds = stringArray(v.kinds);
+						loadouts[k] = { models, mode, max, kinds };
+					}
 				}
 			}
 			return {
@@ -413,9 +465,11 @@ interface SessionState {
 	/** This session's active model allowlist (overrides the global default while set). */
 	allowlist?: string[];
 	/** Local (per-session) named loadouts. */
-	loadouts?: Record<string, string[]>;
+	loadouts?: Record<string, LoadoutDef>;
 	/** Whether this session may use global loadouts. Default true. */
 	allowGlobalLoadouts?: boolean;
+	/** This session's allowed herdr agent kinds (overrides config.allowedKinds when set). */
+	allowedKinds?: string[];
 	/** Loadout name this session is pinned to (resolved local-first, then global if allowed). */
 	forceLoadout?: string;
 }
@@ -574,22 +628,44 @@ function sessionAllowGlobalLoadouts(): boolean {
 	return currentState?.allowGlobalLoadouts !== false;
 }
 
-/** Resolve a loadout name: local (per-session) first, then global if allowed. */
-function resolveLoadout(name: string, config: SubagentConfig): string[] | undefined {
+/** Resolve a loadout name to a full preset: local (per-session) first, then global if allowed. */
+function resolveLoadout(name: string, config: SubagentConfig): PresetLoadout | undefined {
 	const local = currentState?.loadouts?.[name];
-	if (local && local.length > 0) return local;
-	if (sessionAllowGlobalLoadouts() && config.loadouts?.[name] && config.loadouts[name].length > 0) {
-		return config.loadouts[name];
+	if (local !== undefined) {
+		const def = normalizeLoadout(local);
+		if (loadoutHasContent(def)) return def;
+	}
+	if (sessionAllowGlobalLoadouts() && config.loadouts?.[name] !== undefined) {
+		const def = normalizeLoadout(config.loadouts[name]);
+		if (loadoutHasContent(def)) return def;
 	}
 	return undefined;
+}
+
+/** This session's effective allowed herdr kinds (session override, else config). */
+function sessionAllowedKinds(config: SubagentConfig): string[] {
+	return currentState?.allowedKinds ?? config.allowedKinds;
+}
+
+/** Apply a full preset to the current session (allowlist + optional mode/max/kinds). Does not touch force. */
+function applyPresetToSession(name: string, config: SubagentConfig): PresetLoadout | undefined {
+	const def = resolveLoadout(name, config);
+	if (!def) return undefined;
+	if (!currentState) currentState = { sessionId: "ephemeral", subagents: {} };
+	currentState.allowlist = [...def.models];
+	if (def.mode !== undefined) currentState.allowMode = def.mode;
+	if (def.max !== undefined) currentState.maxSubagents = def.max;
+	if (def.kinds !== undefined) currentState.allowedKinds = [...def.kinds];
+	persistState();
+	return def;
 }
 
 /** The effective allowlist this session uses for spawning, plus where it came from. */
 function effectiveAllowlist(config: SubagentConfig): { patterns: string[]; source: string } {
 	const force = currentState?.forceLoadout;
 	if (force) {
-		const pats = resolveLoadout(force, config);
-		if (pats) return { patterns: pats, source: `loadout:${force}` };
+		const def = resolveLoadout(force, config);
+		if (def) return { patterns: def.models, source: `loadout:${force}` };
 	}
 	if (currentState?.allowlist !== undefined) return { patterns: currentState.allowlist, source: "session" };
 	return { patterns: config.allowedModels, source: "global" };
@@ -1583,15 +1659,15 @@ async function openModelPicker(ctx: ExtensionContext, config: SubagentConfig): P
 		seenLoadouts.add(name);
 		loadouts.push({ name, ids: resolveLoadoutModelIds(catalog, name), tags: def.tags ?? [] });
 	}
-	for (const [name, patterns] of Object.entries(config.loadouts)) {
+	for (const [name, def] of Object.entries(config.loadouts)) {
 		if (seenLoadouts.has(name)) continue;
 		seenLoadouts.add(name);
-		loadouts.push({ name, ids: patterns, tags: [] });
+		loadouts.push({ name, ids: normalizeLoadout(def).models, tags: [] });
 	}
-	for (const [name, patterns] of Object.entries(currentState?.loadouts ?? {})) {
+	for (const [name, def] of Object.entries(currentState?.loadouts ?? {})) {
 		if (seenLoadouts.has(name)) continue;
 		seenLoadouts.add(name);
-		loadouts.push({ name, ids: patterns, tags: [] });
+		loadouts.push({ name, ids: normalizeLoadout(def).models, tags: [] });
 	}
 
 	const eff = effectiveAllowlist(config);
@@ -2367,12 +2443,12 @@ export default function herdrTools(pi: ExtensionAPI) {
 						details: { spawned: false },
 					};
 				}
-				if (kind !== "pi" && !config.allowedKinds.includes(kind)) {
+				if (kind !== "pi" && !sessionAllowedKinds(config).includes(kind)) {
 					return {
 						content: [
 							{
 								type: "text",
-								text: `Error: kind "${kind}" is not allowed (allowedKinds: ${config.allowedKinds.join(", ")}). Add it to subagent-config.json or pick a loadout.`,
+								text: `Error: kind "${kind}" is not allowed (allowedKinds: ${sessionAllowedKinds(config).join(", ")}). Add it to subagent-config.json or pick a loadout.`,
 							},
 						],
 						details: { spawned: false },
@@ -2595,6 +2671,7 @@ export default function herdrTools(pi: ExtensionAPI) {
 					`Subagent config: enabled=${config.enabled}`,
 					`allowMode=${mode}${mode === "timeout" ? ` (auto-${decision} after ${timeout}ms)` : ""}`,
 					`max=${maxN}${maxN === 0 ? " (unlimited)" : ""}`,
+					`kinds=${sessionAllowedKinds(config).join(",")}`,
 					`active=${active}`,
 					`tracked=${tracked}`,
 					`Allowlist [${eff.source}]: ${eff.patterns.length ? eff.patterns.join(", ") : "(all)"}`,
@@ -2699,17 +2776,14 @@ export default function herdrTools(pi: ExtensionAPI) {
 					ctx.ui.notify("Force cleared; the session uses its own allowlist.", "info");
 					return;
 				}
-				const pats = resolveLoadout(name, config);
-				if (!pats) {
+				const def = applyPresetToSession(name, config);
+				if (!def) {
 					ctx.ui.notify(`Loadout "${name}" is not resolvable (local first, then global if allowed).`, "error");
 					return;
 				}
 				if (currentState) currentState.forceLoadout = name;
 				persistState();
-				ctx.ui.notify(
-					`This session is pinned to loadout "${name}" (${pats.length} pattern(s)). Open the picker to override.`,
-					"info"
-				);
+				ctx.ui.notify(`Session pinned to loadout "${name}": ${describePreset(def)}. Open the picker to override.`, "info");
 				return;
 			}
 			if (rest[0] === "list") {
@@ -2749,19 +2823,17 @@ export default function herdrTools(pi: ExtensionAPI) {
 					return;
 				}
 				if (action === "load" && name) {
-					const pats = resolveLoadout(name, config);
-					if (!pats) {
+					const def = applyPresetToSession(name, config);
+					if (!def) {
 						ctx.ui.notify(
 							`No loadout named "${name}" (local first, then global if allowed). See /subagent models list.`,
 							"error"
 						);
 						return;
 					}
-					if (!currentState) currentState = { sessionId: "ephemeral", subagents: {} };
-					currentState.allowlist = [...pats];
 					clearForceLoadout();
 					persistState();
-					ctx.ui.notify(`Applied loadout "${name}" (${pats.length} pattern(s)) to this session.`, "info");
+					ctx.ui.notify(`Applied loadout "${name}": ${describePreset(def)}.`, "info");
 					return;
 				}
 				if (action === "delete" && name) {
@@ -2781,12 +2853,12 @@ export default function herdrTools(pi: ExtensionAPI) {
 					const global = config.loadouts ?? {};
 					const localStr = Object.keys(local).length
 						? Object.entries(local)
-								.map(([k, v]) => `  ${k}: ${v.join(", ")}`)
+								.map(([k, v]) => `  ${k}: ${describePreset(normalizeLoadout(v))}`)
 								.join("\n")
 						: "  (none)";
 					const globalStr = Object.keys(global).length
 						? Object.entries(global)
-								.map(([k, v]) => `  ${k}: ${v.join(", ")}`)
+								.map(([k, v]) => `  ${k}: ${describePreset(normalizeLoadout(v))}`)
 								.join("\n")
 						: "  (none)";
 					ctx.ui.notify(`Local loadouts:\n${localStr}\n\nGlobal loadouts\n${globalStr}`, "info");
