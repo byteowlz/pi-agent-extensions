@@ -121,7 +121,6 @@ export default function piMmry(pi: ExtensionAPI) {
 			state.available = true;
 		} catch (error) {
 			state.available = false;
-			if (state.enabled) setTools(false);
 			notify(ctx, `recall disabled: ${(error as Error).message}`, "warning");
 			metric(ctx, { event: "disabled", reason: "unavailable" });
 			return false;
@@ -155,7 +154,8 @@ export default function piMmry(pi: ExtensionAPI) {
 		state.enabled = pi.getFlag("mmry-recall") === true || envEnabled() || state.config.enabled;
 		state.off = customEntries<{ off: boolean }>(ctx, OFF_ENTRY).at(-1)?.off ?? false;
 		state.attached = new Set(customEntries<AttachedMarker>(ctx, ATTACHED_ENTRY).map((marker) => marker.cwd));
-		setTools(state.enabled && state.config.tools);
+		// The tool is independent of recall: /memory off and disabled recall only stop injection.
+		setTools(state.config.tools);
 		if (!state.enabled) return;
 		// Resumed sessions already carry their recall; do not fetch or show again.
 		if (state.attached.has(ctx.cwd)) {
@@ -220,7 +220,6 @@ export default function piMmry(pi: ExtensionAPI) {
 					state.enabled = true;
 					state.off = false;
 					pi.appendEntry(OFF_ENTRY, { off: false });
-					setTools(state.config.tools);
 					if (state.attached.has(ctx.cwd)) notify(ctx, "mmry recall on (already attached in this session)");
 					else await refresh(ctx);
 					return;

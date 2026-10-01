@@ -4,6 +4,12 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-mmry: memory tool independent of recall (1.22.1)
+
+- The `memory` tool is available whenever `tools` is on (default), also with
+  recall disabled or after `/memory off`; those only stop injection. A missing
+  mmry no longer withdraws the tool; calls return mmry's error instead.
+
 ### pi-statusline: show the cwd project's icon (1.22.0)
 
 - The right end of the pwd line shows the project's icon, following the new

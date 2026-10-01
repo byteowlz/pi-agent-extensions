@@ -195,6 +195,7 @@ describe("session-start recall", () => {
 		await h.command("off");
 		expect(await h.prompt()).toBeUndefined();
 		expect(h.entries.at(-1)).toEqual({ type: "custom", customType: OFF_ENTRY, data: { off: true } });
+		expect(h.active()).toContain("memory");
 
 		const resumed = harness({ cwd: h.ctx.cwd, entries: h.entries });
 		await resumed.start();
@@ -237,7 +238,7 @@ describe("session-start recall", () => {
 		await h.start();
 		expect(await h.prompt()).toBeUndefined();
 		expect(h.notices.at(-1)?.message).toContain("recall disabled: cannot run");
-		expect(h.active()).toEqual(["read", "bash"]);
+		expect(h.active()).toEqual(["read", "bash", "memory"]);
 	});
 
 	test("an mmry without preview disables recall with its own error", async () => {
@@ -257,13 +258,23 @@ describe("session-start recall", () => {
 		expect(h.notices.at(-1)?.message).toContain("unsupported mmry preview schema_version 2");
 	});
 
-	test("disabled by default: no mmry call, tools inactive", async () => {
+	test("disabled by default: no mmry call, nothing attached, tool still available", async () => {
 		const dir = project("app", { enabled: false });
 		const h = harness({ cwd: dir });
 		await h.start();
 		expect(await h.prompt()).toBeUndefined();
 		expect(calls()).toEqual([]);
+		expect(h.active()).toEqual(["read", "bash", "memory"]);
+		writeFileSync(join(fakeDir, "search.json"), "[]\n");
+		expect((await h.tool({ action: "search", query: "vpn" })).isError).toBeUndefined();
+		expect(calls().map((call) => call.args[0])).toEqual(["search"]);
+	});
+
+	test("tools: false hides the memory tool, recall still works", async () => {
+		const h = harness({ cwd: project("app", { tools: false }) });
+		await h.start();
 		expect(h.active()).toEqual(["read", "bash"]);
+		expect((await h.prompt())?.message.content).toBe(FRAMING + RENDERED);
 	});
 
 	test("--mmry-recall and PI_MMRY_RECALL enable it", async () => {
