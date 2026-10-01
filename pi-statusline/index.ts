@@ -43,6 +43,8 @@ interface StatuslineIcon {
 	color?: StatusColor;
 	/** Row height of the image badge (default 2). */
 	rows?: number;
+	/** "auto" (detect), "on" (force image), or "off" (force glyph). */
+	image?: "auto" | "on" | "off";
 }
 
 interface StatuslineManifest {
@@ -104,9 +106,23 @@ const KITTY_IMAGE_ID = 7;
 const CELL_PX = 16; // assumed terminal cell height/width (adjust via icon.rows)
 let kittyTransmitted = false;
 
-function isKittyTerminal(): boolean {
+/** Terminals that implement the Kitty graphics protocol (kitty, Ghostty, Wez*). */
+function supportsKittyImage(): boolean {
 	const term = (process.env.TERM || "").toLowerCase();
-	return term.includes("kitty") || !!process.env.KITTY_WINDOW_ID;
+	const prog = (process.env.TERM_PROGRAM || "").toLowerCase();
+	if (term.includes("kitty") || term.includes("ghostty") || term.includes("wezterm")) return true;
+	if (process.env.KITTY_WINDOW_ID) return true;
+	if (prog.includes("kitty") || prog.includes("ghostty") || prog.includes("wezterm")) return true;
+	if (process.env.GHOSTTY_RESOURCES_DIR || process.env.GHOSTTY_STATUS_COMMAND) return true;
+	if (process.env.WEZTERM_EXECUTABLE) return true;
+	return false;
+}
+
+/** Resolve whether to render the image badge: auto-detect, force on, or force off. */
+function imageEnabled(icon: StatuslineIcon | undefined): boolean {
+	if (icon?.image === "on") return true;
+	if (icon?.image === "off") return false;
+	return supportsKittyImage();
 }
 
 /** Whether we should draw the dark (white) or light (black) mark. */
@@ -136,7 +152,7 @@ function readBadgePng(rows: number, dark: boolean): { png: string; w: number; h:
  * advance past it (transmits once, re-places on subsequent renders).
  */
 function kittyBadgeEscape(rows: number): string {
-	if (!isKittyTerminal()) return "";
+	if (!supportsKittyImage()) return "";
 	const dark = isDarkBackground();
 	const { png, w } = readBadgePng(rows, dark);
 	if (!png) return "";
@@ -281,7 +297,7 @@ export default function (pi: ExtensionAPI) {
 						if (sessionName) pwd = `${pwd} • ${sessionName}`;
 
 						const lines: string[] = [];
-						if (isKittyTerminal()) {
+						if (imageEnabled(manifest.icon)) {
 							lines.push(`${kittyBadgeEscape(rows)} ${pwd}`);
 						} else {
 							const glyph = pickGlyph(manifest.icon);
