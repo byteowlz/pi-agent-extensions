@@ -51,10 +51,10 @@ terminals that implement the **Kitty graphics protocol**, drawn from
 graphics query answered with `OK`, with DA1 as the sentinel), not by matching
 terminal names, so multiplexers that implement the protocol (e.g. herdr, which
 reports `TERM=xterm-256color`) get the image too. The badge is sized to the statusbar height via `icon.rows` (1-2,
-default 2). It is theme-aware: the white mark on dark backgrounds, the black
+default 1). It is theme-aware: the white mark on dark backgrounds, the black
 mark on light ones. On terminals that do not implement the protocol it falls
 back to a theme-aware `π` glyph (white in dark, dark in light). Override with
-`icon`: `{ "glyph": "π", "fallback": "pi", "color": "text", "rows": 2,
+`icon`: `{ "glyph": "π", "fallback": "pi", "color": "text", "rows": 1,
 "image": "auto" }`, where `image` is `auto` (detect), `on` (force the
 image), or `off` (force the glyph; also skips the query). See `statusline.schema.json` and
 `statusline.example.json`.
