@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type Style, renderCall, renderResult } from "./render.ts";
+import { type Style, renderCall, renderResult } from "./src/render.ts";
 
 const plain: Style = { fg: (_color, text) => text, bold: (text) => text };
 
