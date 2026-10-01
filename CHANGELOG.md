@@ -4,6 +4,16 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-statusline: no images inside multiplexers by default (1.24.1)
+
+- Inside herdr, tmux, zellij or screen, `"image": "auto"` now keeps the glyph
+  and skips the Kitty graphics query. The multiplexer answers the query, not
+  the terminal being viewed, and herdr forwards images to every attached
+  client: an SSH client without Kitty graphics (Terminus on iOS) printed the
+  commands (`Ga=t,f=32,...`) as text over the footer and editor. This
+  restores the pre-1.21.1 behaviour; `"image": "on"` opts back in. The project
+  icon follows the same rule.
+
 ### pi-mmry: nudge models to use the memory tool (1.24.0)
 
 - The tool sets Pi's `promptSnippet` and `promptGuidelines` (fixed text, never
