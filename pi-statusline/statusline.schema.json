@@ -18,7 +18,11 @@
 			"properties": {
 				"glyph": { "type": "string" },
 				"fallback": { "type": "string" },
-				"color": { "enum": ["accent", "success", "warning", "error", "muted", "dim", "text"] }
+				"color": { "enum": ["accent", "success", "warning", "error", "muted", "dim", "text"] },
+				"rows": {
+					"type": "integer",
+					"description": "Inline badge height in terminal rows (1-2, default 2) on Kitty terminals."
+				}
 			},
 			"additionalProperties": true
 		},

@@ -13,11 +13,12 @@ All notable changes to pi-agent-extensions will be documented in this file.
   central `statusline.json` manifest. Publisher/consumer separation: publishing
   extensions depend only on the core `setStatus` API and never import this; if
   it is not installed the built-in footer still shows their status.
-- Adds a theme-aware leading pi icon (default `π`, `text` token so it is white in
-  dark themes and dark in light themes) with an ASCII fallback for limited
-  terminals, plus a `showInactive` mode that dims tracked-but-idle segments.
-- Manifest schema + example provided; documented the kebab extension-id key
-  convention.
+- Leading icon: on **Kitty** terminals the real pi press-kit badge is drawn as an
+  inline image (assets/*.png) sized to the statusbar height (`icon.rows`, 1-2),
+  theme-aware (white mark on dark, black on light); on other terminals it falls
+  back to a theme-aware `π` glyph. Adds a `showInactive` mode that dims
+  tracked-but-idle segments. Manifest schema + example + README document the
+  kebab extension-id key convention.
 
 ### pi-herdr-tools: preset loadouts (mode/cap/kind in addition to models)
 

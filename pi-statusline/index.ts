@@ -6,21 +6,21 @@
  *     Nothing here is imported by them; the core `setStatus` call is the only coupling.
  *   - This (opt-in) extension renders those statuses as colored segments while ALSO
  *     reproducing pi's built-in footer (cwd/branch, token+cost stats, context use and
- *     the current model), so nothing the built-in footer showed is lost. It reads a
- *     central manifest (statusline.json) that maps each statusKey to a label, color and
- *     position. If this extension is not installed, extensions still work and the
- *     built-in footer shows their status on the default dim line.
+ *     the current model), so nothing the built-in footer showed is lost.
  *
- * Manifest is looked up (first match wins):
- *   1. <cwd>/.pi/statusline.json
- *   2. <cwd>/statusline.json
- *   3. ~/.pi/agent/statusline.json
- * See statusline.example.json for the shape and statusline.schema.json for validation.
+ * Leading icon:
+ *   - On terminals with the Kitty graphics protocol, the real pi press-kit badge
+ *     (assets/badge-{size}-{dark|light}.png) is drawn as an inline image sized to the
+ *     statusbar height (1-2 rows). It is theme-aware: the white mark on dark
+ *     backgrounds, the black mark on light backgrounds.
+ *   - On other terminals it falls back to a theme-aware "π" glyph (white in dark,
+ *     dark in light), or the manifest `icon` override.
  */
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
@@ -41,13 +41,14 @@ interface StatuslineIcon {
 	glyph?: string;
 	fallback?: string;
 	color?: StatusColor;
+	/** Row height of the image badge (default 2). */
+	rows?: number;
 }
 
 interface StatuslineManifest {
 	version?: number;
 	/** When true, render configured items even if no status is published (dimmed). */
 	showInactive?: boolean;
-	/** Optional leading pi icon (glyph + fallback + color). */
 	icon?: StatuslineIcon;
 	items: StatuslineItem[];
 }
@@ -86,23 +87,75 @@ function loadManifest(ctx: ExtensionContext): StatuslineManifest | undefined {
 			const obj = JSON.parse(fs.readFileSync(p, "utf8")) as Partial<StatuslineManifest>;
 			if (!obj || typeof obj !== "object" || !Array.isArray(obj.items)) continue;
 			const items = obj.items.map(parseItem).filter((x): x is StatuslineItem => x !== undefined);
-			const icon =
-				obj.icon && typeof obj.icon === "object"
-					? {
-							glyph: typeof obj.icon.glyph === "string" ? obj.icon.glyph : undefined,
-							fallback: typeof obj.icon.fallback === "string" ? obj.icon.fallback : undefined,
-							color:
-								typeof obj.icon.color === "string" && STATUS_COLORS.has(obj.icon.color as StatusColor)
-									? (obj.icon.color as StatusColor)
-									: undefined,
-						}
-					: undefined;
-			return { version: obj.version, showInactive: obj.showInactive === true, icon, items };
+			return { version: obj.version, showInactive: obj.showInactive === true, icon: obj.icon, items };
 		} catch {
 			// Ignore malformed manifest; fall through to the next candidate.
 		}
 	}
 	return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Kitty graphics protocol: draw the real pi badge as an inline image.
+// ---------------------------------------------------------------------------
+
+const ASSET_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "assets");
+const KITTY_IMAGE_ID = 7;
+const CELL_PX = 16; // assumed terminal cell height/width (adjust via icon.rows)
+let kittyTransmitted = false;
+
+function isKittyTerminal(): boolean {
+	const term = (process.env.TERM || "").toLowerCase();
+	return term.includes("kitty") || !!process.env.KITTY_WINDOW_ID;
+}
+
+/** Whether we should draw the dark (white) or light (black) mark. */
+function isDarkBackground(): boolean {
+	const cf = process.env.COLORFGBG || "";
+	const parts = cf.split(";").map(Number);
+	const bg = parts[parts.length - 1];
+	if (Number.isFinite(bg)) return bg < 8; // low palette indices are dark base colors
+	return true; // default to dark
+}
+
+function readBadgePng(rows: number, dark: boolean): { png: string; w: number; h: number } {
+	const px = Math.max(16, Math.min(32, rows * CELL_PX));
+	// Snap to available asset sizes (16/24/32).
+	const size = px <= 16 ? 16 : px <= 24 ? 24 : 32;
+	const file = path.join(ASSET_DIR, `badge-${size}-${dark ? "dark" : "light"}.png`);
+	try {
+		const buf = fs.readFileSync(file);
+		return { png: buf.toString("base64"), w: size, h: size };
+	} catch {
+		return { png: "", w: 0, h: 0 };
+	}
+}
+
+/**
+ * Return the escape sequence to draw the badge inline at the current cursor and
+ * advance past it (transmits once, re-places on subsequent renders).
+ */
+function kittyBadgeEscape(rows: number): string {
+	if (!isKittyTerminal()) return "";
+	const dark = isDarkBackground();
+	const { png, w } = readBadgePng(rows, dark);
+	if (!png) return "";
+	let out = "";
+	if (!kittyTransmitted) {
+		out += `\x1b_Ga=t,f=100,s=${w},v=${w},i=${KITTY_IMAGE_ID},m=0;${png}\x1b\\`;
+		kittyTransmitted = true;
+	}
+	const cols = Math.max(1, Math.round(w / CELL_PX));
+	out += `\x1b_Ga=p,i=${KITTY_IMAGE_ID},x=0,y=0,z=0\x1b\\\x1b[${cols}C`;
+	return out;
+}
+
+/** The icon for a non-kitty terminal: theme-aware glyph, or manifest override. */
+function pickGlyph(icon: StatuslineIcon | undefined): { glyph: string; color: StatusColor } {
+	const dark = isDarkBackground();
+	const glyph = icon?.glyph ?? "π";
+	const color = icon?.color ?? (dark ? "text" : "text");
+	return { glyph, color };
 }
 
 /** Compact token formatter matching pi's footer (1.2k, 3.4M, ...). */
@@ -194,61 +247,12 @@ function buildStatusSegments(
 	for (const item of ordered) {
 		const status = statuses.get(item.statusKey);
 		if (status === undefined || status === "") {
-			// No active status: dim the label as a standby marker so tracked items stay visible.
 			if (showInactive) segments.push(theme.fg("dim", item.label));
 			continue;
 		}
 		segments.push(`${theme.fg(item.color ?? "dim", item.label)} ${status}`);
 	}
 	return segments;
-}
-
-/** Render the pi agent logo as compact block art using its real brand colors. */
-const PI_SALMON: [number, number, number] = [240, 144, 130];
-const PI_BLUE: [number, number, number] = [77, 154, 191];
-const PI_YELLOW: [number, number, number] = [241, 190, 88];
-// Pinwheel derived from pi.dev/logo.svg paths (s=salmon, b=blue, y=yellow, ""=empty).
-const PI_LOGO_MARK: ("s" | "b" | "y" | "")[][] = [
-	["s", "s", "s", ""],
-	["b", "s", "", ""],
-	["b", "b", "", "y"],
-	["b", "", "", "y"],
-];
-const PI_COLOR: Record<string, [number, number, number]> = {
-	s: PI_SALMON,
-	b: PI_BLUE,
-	y: PI_YELLOW,
-};
-
-function renderPiLogo(): string[] {
-	return PI_LOGO_MARK.map((row) =>
-		row
-			.map((cell) => {
-				if (cell === "") return " ";
-				const [r, g, b] = PI_COLOR[cell];
-				return `\x1b[38;2;${r};${g};${b}m█\x1b[39m`;
-			})
-			.join("")
-	);
-}
-
-function terminalSupportsGlyph(): boolean {
-	const term = (process.env.TERM || "").toLowerCase();
-	return !(term === "dumb" || term === "linux" || term === "cons25");
-}
-
-/** Resolve the leading icon: the real block logo by default, or an explicit glyph override. */
-function pickIcon(icon: StatuslineIcon | undefined): { kind: "logo" } | { kind: "glyph"; glyph: string; color: StatusColor } {
-	const rich = terminalSupportsGlyph();
-	if (icon?.glyph || icon?.fallback) {
-		return {
-			kind: "glyph",
-			glyph: rich ? (icon.glyph ?? icon.fallback ?? "π") : (icon.fallback ?? "pi"),
-			color: icon?.color ?? "text",
-		};
-	}
-	if (rich) return { kind: "logo" };
-	return { kind: "glyph", glyph: "pi", color: "text" };
 }
 
 export default function (pi: ExtensionAPI) {
@@ -260,12 +264,12 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.setFooter((_tui, theme, footerData) => {
 				const ordered = [...manifest.items].sort((a, b) => (a.order ?? 1_000) - (b.order ?? 1_000));
 				const showInactive = manifest.showInactive === true;
+				const rows = Math.max(1, Math.min(2, manifest.icon?.rows ?? 2));
 				return {
 					render: (width: number) => {
 						const sm = ctx.sessionManager;
 						const home = process.env.HOME || process.env.USERPROFILE;
 						const usage = computeUsage(sm);
-						const icon = pickIcon(manifest.icon);
 						const { left: statsLeft, right: rightSide } = buildStats(ctx, usage, footerData.getAvailableProviderCount(), theme);
 
 						// --- pwd line (cwd + branch + session name) ---
@@ -277,11 +281,11 @@ export default function (pi: ExtensionAPI) {
 						if (sessionName) pwd = `${pwd} • ${sessionName}`;
 
 						const lines: string[] = [];
-						if (icon.kind === "logo") {
-							lines.push(...renderPiLogo());
-							lines.push(truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "...")));
+						if (isKittyTerminal()) {
+							lines.push(`${kittyBadgeEscape(rows)} ${pwd}`);
 						} else {
-							lines.push(truncateToWidth(`${theme.fg(icon.color, icon.glyph)} ${pwd}`, width, theme.fg("dim", "...")));
+							const glyph = pickGlyph(manifest.icon);
+							lines.push(truncateToWidth(`${theme.fg(glyph.color, glyph.glyph)} ${pwd}`, width, theme.fg("dim", "...")));
 						}
 						lines.push(theme.fg("dim", alignLeftRight(statsLeft, rightSide, width)));
 						const segments = buildStatusSegments(ordered, footerData.getExtensionStatuses(), showInactive, theme);
