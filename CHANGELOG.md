@@ -4,6 +4,12 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-mmry: readable memory tool output (1.23.0)
+
+- `memory` calls and results render as scope, short id, revision, text and
+  why/source/expiry (search collapses to five hits, ctrl+o expands) instead of
+  raw JSON. The model still receives mmry's JSON unchanged.
+
 ### pi-mmry: memory tool independent of recall (1.22.1)
 
 - The `memory` tool is available whenever `tools` is on (default), also with

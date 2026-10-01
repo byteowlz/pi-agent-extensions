@@ -15,6 +15,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
 	ATTACHED_ENTRY,
@@ -37,6 +38,7 @@ import {
 	runMmry,
 	sha256,
 } from "./src/core.js";
+import { type CallArgs, renderCall, renderResult } from "./src/render.js";
 
 const WIDGET = "mmry";
 const TOOL_NAME = "memory";
@@ -233,11 +235,15 @@ export default function piMmry(pi: ExtensionAPI) {
 		try {
 			const stdout = await runMmry(exec, state.config, ctx.cwd, args);
 			metric(ctx, { event: "tool", tool: name, ok: true });
-			return { content: [{ type: "text" as const, text: stdout.trim() }], details: { args } };
+			return { content: [{ type: "text" as const, text: stdout.trim() }], details: { action: name, args, stdout } };
 		} catch (error) {
 			metric(ctx, { event: "tool", tool: name, ok: false });
 			const message = (error as Error).message;
-			return { content: [{ type: "text" as const, text: message }], isError: true, details: { args, error: message } };
+			return {
+				content: [{ type: "text" as const, text: message }],
+				isError: true,
+				details: { action: name, args, error: message },
+			};
 		}
 	};
 
@@ -270,9 +276,21 @@ export default function piMmry(pi: ExtensionAPI) {
 		execute: (_id, params, _signal, _onUpdate, ctx) => {
 			const args = memoryArgs(params as MemoryParams);
 			if (typeof args === "string") {
-				return Promise.resolve({ content: [{ type: "text" as const, text: args }], isError: true, details: {} });
+				return Promise.resolve({
+					content: [{ type: "text" as const, text: args }],
+					isError: true,
+					details: { action: params.action, error: args },
+				});
 			}
 			return tool(params.action, args, ctx);
+		},
+		renderCall: (args, theme) => new Text(renderCall(args as CallArgs, theme), 0, 0),
+		renderResult: (result, { expanded }, theme) => {
+			const details = (result.details ?? {}) as { action?: string; stdout?: string; error?: string };
+			if (details.error) return new Text(theme.fg("error", details.error), 0, 0);
+			const pretty = details.stdout && renderResult(details.action ?? "", details.stdout, theme, expanded);
+			const fallback = result.content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
+			return new Text(pretty || fallback, 0, 0);
 		},
 	});
 }
