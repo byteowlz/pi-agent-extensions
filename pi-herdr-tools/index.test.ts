@@ -7,6 +7,8 @@ import {
 	deriveCatalogEntries,
 	isPaneBusyError,
 	loadCatalog,
+	loadoutHasContent,
+	normalizeLoadout,
 	resolveLoadoutKinds,
 	resolveLoadoutModelIds,
 } from "./index";
@@ -89,6 +91,26 @@ function sampleCatalog(): { models: TestModel[]; loadouts: Record<string, { matc
 function tmpdir2(): string {
 	return mkdtempSync(join(tmpdir(), "herdr-cat-"));
 }
+
+describe("pi-herdr-tools preset loadouts", () => {
+	test("normalizes a legacy pattern array to a models-only preset", () => {
+		expect(normalizeLoadout(["rtx6000/deepseek"])).toEqual({ models: ["rtx6000/deepseek"] });
+	});
+
+	test("normalizes a preset object, carrying mode/max/kinds", () => {
+		const def = normalizeLoadout({ models: ["a/*"], mode: "auto", max: 3, kinds: ["claude"] });
+		expect(def.models).toEqual(["a/*"]);
+		expect(def.mode).toBe("auto");
+		expect(def.max).toBe(3);
+		expect(def.kinds).toEqual(["claude"]);
+	});
+
+	test("loadoutHasContent is true when any field is present", () => {
+		expect(loadoutHasContent(normalizeLoadout(["x/*"]))).toBe(true);
+		expect(loadoutHasContent(normalizeLoadout({ models: [], kinds: ["claude"] }))).toBe(true);
+		expect(loadoutHasContent(normalizeLoadout({ models: [] }))).toBe(false);
+	});
+});
 
 describe("pi-herdr-tools catalog derive", () => {
 	const catalog = {

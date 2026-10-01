@@ -140,6 +140,25 @@ fast multi-add), **Enter on a loadout applies it** as the whole allowlist,
 /subagent models loadout list                  # show local and global loadouts
 ```
 
+Loadouts are named presets. There are **two scopes**: **global** (shared across
+sessions, stored in `~/.pi/agent/subagent-config.json`) and **local** (per
+session, stored in the session state file). A loadout is either a plain pattern
+array (`["rtx6000/deepseek"]`) or a full preset object that also pins the allow
+mode, concurrent cap and allowed kinds when applied:
+
+```json
+"loadouts": {
+  "local":  ["rtx6000/deepseek"],
+  "smart":  { "models": ["openai-codex/gpt-6.1-sol"], "mode": "auto", "max": 3, "kinds": ["pi"] },
+  "claude": { "models": [], "mode": "auto", "max": 1, "kinds": ["claude"] }
+}
+```
+
+`/subagent models loadout load <name>` (and `force`) applies the whole preset to
+the session: the allowlist, plus `mode`/`max`/`kinds` if present. Fields a
+preset omits are left at their current value. `models: []` means all models
+allowed — rely on `kinds` to gate which agent kinds may spawn.
+
 ### Catalog derivation
 
 `/subagent catalog derive [tag1,tag2]` bootstraps the model catalog from the
