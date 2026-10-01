@@ -4,6 +4,16 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-herdr-tools: subagent completion message queues safely
+
+- The background completion notification (`notifyFinished`) called
+  `pi.sendUserMessage(detail)` with no queue behavior, so a completion landing
+  while the parent session was mid-stream threw "Agent is already processing.
+  Specify streamingBehavior ('steer' or 'followUp') to queue the message."
+  Now passes `{ deliverAs: "followUp" }` (queues while streaming, delivers
+  now when idle). Applied the same fix to the send-relay response injection
+  and the reset/notify message path.
+
 ### pi-herdr-tools: spawn-confirm ask dialog now reports blocked in herdr
 
 - While the spawn-subagent ask dialog is up (allow mode confirm or timeout,
