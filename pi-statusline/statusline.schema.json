@@ -14,7 +14,7 @@
 		},
 		"icon": {
 			"type": "object",
-			"description": "Leading pi icon, theme-aware (text color: white in dark, dark in light).",
+			"description": "Optional leading icon. Omit to show the real pi logo (block art in brand colors). Set glyph/fallback to override with text.",
 			"properties": {
 				"glyph": { "type": "string" },
 				"fallback": { "type": "string" },

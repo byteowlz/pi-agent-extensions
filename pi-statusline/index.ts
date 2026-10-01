@@ -203,12 +203,52 @@ function buildStatusSegments(
 	return segments;
 }
 
-/** Render the leading pi icon, falling back for clearly limited terminals. */
-function pickIcon(icon: StatuslineIcon | undefined): { glyph: string; color: StatusColor } {
+/** Render the pi agent logo as compact block art using its real brand colors. */
+const PI_SALMON: [number, number, number] = [240, 144, 130];
+const PI_BLUE: [number, number, number] = [77, 154, 191];
+const PI_YELLOW: [number, number, number] = [241, 190, 88];
+// Pinwheel derived from pi.dev/logo.svg paths (s=salmon, b=blue, y=yellow, ""=empty).
+const PI_LOGO_MARK: ("s" | "b" | "y" | "")[][] = [
+	["s", "s", "s", ""],
+	["b", "s", "", ""],
+	["b", "b", "", "y"],
+	["b", "", "", "y"],
+];
+const PI_COLOR: Record<string, [number, number, number]> = {
+	s: PI_SALMON,
+	b: PI_BLUE,
+	y: PI_YELLOW,
+};
+
+function renderPiLogo(): string[] {
+	return PI_LOGO_MARK.map((row) =>
+		row
+			.map((cell) => {
+				if (cell === "") return " ";
+				const [r, g, b] = PI_COLOR[cell];
+				return `\x1b[38;2;${r};${g};${b}m█\x1b[39m`;
+			})
+			.join("")
+	);
+}
+
+function terminalSupportsGlyph(): boolean {
 	const term = (process.env.TERM || "").toLowerCase();
-	const richGlyph = !(term === "dumb" || term === "linux" || term === "cons25");
-	const glyph = (richGlyph ? icon?.glyph : icon?.fallback) ?? (richGlyph ? "π" : "pi");
-	return { glyph, color: icon?.color ?? "text" };
+	return !(term === "dumb" || term === "linux" || term === "cons25");
+}
+
+/** Resolve the leading icon: the real block logo by default, or an explicit glyph override. */
+function pickIcon(icon: StatuslineIcon | undefined): { kind: "logo" } | { kind: "glyph"; glyph: string; color: StatusColor } {
+	const rich = terminalSupportsGlyph();
+	if (icon?.glyph || icon?.fallback) {
+		return {
+			kind: "glyph",
+			glyph: rich ? (icon.glyph ?? icon.fallback ?? "π") : (icon.fallback ?? "pi"),
+			color: icon?.color ?? "text",
+		};
+	}
+	if (rich) return { kind: "logo" };
+	return { kind: "glyph", glyph: "pi", color: "text" };
 }
 
 export default function (pi: ExtensionAPI) {
@@ -236,10 +276,14 @@ export default function (pi: ExtensionAPI) {
 						const sessionName = sm.getSessionName();
 						if (sessionName) pwd = `${pwd} • ${sessionName}`;
 
-						const lines = [
-							truncateToWidth(`${theme.fg(icon.color, icon.glyph)} ${pwd}`, width, theme.fg("dim", "...")),
-							theme.fg("dim", alignLeftRight(statsLeft, rightSide, width)),
-						];
+						const lines: string[] = [];
+						if (icon.kind === "logo") {
+							lines.push(...renderPiLogo());
+							lines.push(truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "...")));
+						} else {
+							lines.push(truncateToWidth(`${theme.fg(icon.color, icon.glyph)} ${pwd}`, width, theme.fg("dim", "...")));
+						}
+						lines.push(theme.fg("dim", alignLeftRight(statsLeft, rightSide, width)));
 						const segments = buildStatusSegments(ordered, footerData.getExtensionStatuses(), showInactive, theme);
 						if (segments.length > 0) {
 							lines.push(truncateToWidth(segments.join(theme.fg("dim", " • ")), width, theme.fg("dim", "...")));
