@@ -59,7 +59,7 @@ pi-mmry refuses to attach anything if mmry returns a contested memory or an unkn
 
 ## Tool
 
-One `memory` tool with an `action`, available whenever `tools` is on, also with recall disabled or `/memory off`: those only stop injection. It runs mmry with `--json` in the session cwd (current repository plus general memories) and returns mmry's output or error verbatim, such as a revision mismatch. Missing fields are reported without calling mmry.
+One `memory` tool with an `action`, available whenever `tools` is on, also with recall disabled or `/memory off`: those only stop injection. It runs mmry with `--json` in the session cwd (current repository plus general memories) and returns mmry's output or error verbatim, such as a revision mismatch. Missing fields are reported without calling mmry. In the UI, calls and results are rendered as short memory lines rather than JSON; the model still gets the JSON.
 
 | `action` | Fields |
 |---|---|
