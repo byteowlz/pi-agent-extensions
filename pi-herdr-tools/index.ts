@@ -677,7 +677,9 @@ function notifyFinished(pi: ExtensionAPI, ctx: ExtensionContext, t: TrackedSubag
 		`Or just ask for it: herdr agent read ${t.name} --source recent-unwrapped --format text`,
 	].join("\n");
 	try {
-		pi.sendUserMessage(detail);
+		// deliverAs followUp so a completion landing while the parent is
+		// mid-stream queues instead of throwing "Agent is already processing".
+		pi.sendUserMessage(detail, { deliverAs: "followUp" });
 	} catch {
 		// no session to inject into (print/RPC mode)
 	}
@@ -2156,7 +2158,9 @@ async function injectResponseBack(ctx: ExtensionContext, pi: ExtensionAPI, targe
 		return;
 	}
 	const responseTail = response.length > 6000 ? `${response.slice(-6000)}\n…(truncated)` : response;
-	pi.sendUserMessage(`Response from ${target.label} (relayed from this tab's last output):\n\n${responseTail}`);
+	pi.sendUserMessage(`Response from ${target.label} (relayed from this tab's last output):\n\n${responseTail}`, {
+		deliverAs: "followUp",
+	});
 	ctx.ui.notify(`Injected ${target.label}'s response into this session.`, "info");
 }
 
@@ -2236,7 +2240,7 @@ async function resetSubagent(ctx: ExtensionContext, token: string, instruction?:
 function piNotify(ctx: ExtensionContext, text: string): void {
 	// attempt to feed a user message so the agent knows what happened
 	try {
-		piRef.sendUserMessage(text);
+		piRef.sendUserMessage(text, { deliverAs: "followUp" });
 	} catch {
 		// print/RPC mode: nothing to inject into
 		ctx.ui.notify(text, "info");
