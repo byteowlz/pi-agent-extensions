@@ -43,11 +43,13 @@ Item fields: `statusKey` (required, the key an extension publishes under),
 `id` (defaults to statusKey), `label` (short prefix, default statusKey),
 `color` (accent|success|warning|error|muted|dim|text), `position`, `order`
 (sort, ascending; default 1000). Top-level `showInactive` renders configured
-items even when idle (dimmed). `icon` renders a leading glyph: `color` uses the
-theme's `text` token by default so it is white on dark themes and dark on light
-themes, and it falls back to `fallback` on clearly limited terminals
-(`TERM=dumb|linux|cons25`). See `statusline.schema.json` and
-`statusline.example.json`.
+items even when idle (dimmed). By default the footer leads with the **real pi
+agent logo** — the pinwheel from pi.dev/logo.svg rendered as block art in its
+brand colors (salmon/blue/yellow), falling back to `pi` on clearly limited
+terminals (`TERM=dumb|linux|cons25`). To use a text glyph instead of the logo,
+set `icon`: `{ "glyph": "π", "fallback": "pi", "color": "text" }` (the
+`color` uses the theme's `text` token, so it is white on dark themes and dark
+on light themes). See `statusline.schema.json` and `statusline.example.json`.
 
 ## Status-key convention
 
