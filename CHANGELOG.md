@@ -4,6 +4,16 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-mmry: nudge models to use the memory tool (1.24.0)
+
+- The tool sets Pi's `promptSnippet` and `promptGuidelines` (fixed text, never
+  memory content): create on corrections, stated preferences, non-obvious
+  gotchas or "remember"; not for what belongs in git or an issue tracker,
+  session summaries or secrets; search before creating, supersede instead of
+  duplicating, fix wrong recalled memories right away.
+- Tool description and recall framing describe memories as persistent memories
+  for this repository and in general, and point at the tool for corrections.
+
 ### pi-mmry: readable memory tool output (1.23.0)
 
 - `memory` calls and results render as scope, short id, revision, text and

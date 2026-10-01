@@ -24,6 +24,8 @@ import {
 	type MemoryParams,
 	type MetricEvent,
 	OFF_ENTRY,
+	PROMPT_GUIDELINES,
+	PROMPT_SNIPPET,
 	type Preview,
 	RECALL_MESSAGE,
 	type RecallConfig,
@@ -250,8 +252,11 @@ export default function piMmry(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: TOOL_NAME,
 		label: "Memory",
+		promptSnippet: PROMPT_SNIPPET,
+		promptGuidelines: PROMPT_GUIDELINES,
 		description:
-			"The user's mmry memories for the current repository and general scope. " +
+			"Persistent memories (mmry) for the current repository and in general: operational knowledge that does not " +
+			"belong in git or an issue tracker. " +
 			"search: find memories (query, limit?). " +
 			"create: record a durable, operative fact for future sessions such as a working command, a gotcha, or a stated " +
 			"preference; not session notes (content, why?, source?, scope? repo|general, default repo; expires?). " +
