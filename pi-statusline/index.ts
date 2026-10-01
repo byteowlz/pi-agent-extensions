@@ -111,11 +111,22 @@ function loadManifest(ctx: ExtensionContext): StatuslineManifest | undefined {
 const ASSET_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "assets");
 const KITTY_IMAGE_ID = 7;
 
-/** Detect image-protocol support via pi's own terminal-image detection. */
+/** Detect image-protocol support: pi's detection, plus a fallback for
+e.g. our own PTY/psuedo-terminals that report TERM=screen but forward raw
+escapes to a kitty-capable outer terminal. */
 function imageProtocol(icon: StatuslineIcon | undefined): ImageProtocol {
 	if (icon?.image === "off") return null;
 	if (icon?.image === "on") return "kitty";
-	return getCapabilities().images;
+	const caps = getCapabilities();
+	if (caps.images) return caps.images;
+	// Fallback: kitty-capable outer terminal even when TERM reports a
+	// multiplexer (our herdr pty forwards the raw escapes to the real terminal).
+	const prog = (process.env.TERM_PROGRAM || "").toLowerCase();
+	if (process.env.KITTY_WINDOW_ID) return "kitty";
+	if (prog.includes("kitty") || prog.includes("ghostty") || prog.includes("wezterm")) return "kitty";
+	if (process.env.GHOSTTY_RESOURCES_DIR || process.env.GHOSTTY_STATUS_COMMAND) return "kitty";
+	if (process.env.WEZTERM_EXECUTABLE) return "kitty";
+	return null;
 }
 
 /** Resolve whether to render the image badge: auto-detect, force on, or force off. */
