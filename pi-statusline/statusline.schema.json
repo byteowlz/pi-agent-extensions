@@ -8,6 +8,20 @@
 		"version": {
 			"type": "integer"
 		},
+		"showInactive": {
+			"type": "boolean",
+			"description": "Render configured items even when no status is published (dimmed standby marker)."
+		},
+		"icon": {
+			"type": "object",
+			"description": "Leading pi icon, theme-aware (text color: white in dark, dark in light).",
+			"properties": {
+				"glyph": { "type": "string" },
+				"fallback": { "type": "string" },
+				"color": { "enum": ["accent", "success", "warning", "error", "muted", "dim", "text"] }
+			},
+			"additionalProperties": true
+		},
 		"items": {
 			"type": "array",
 			"items": {
