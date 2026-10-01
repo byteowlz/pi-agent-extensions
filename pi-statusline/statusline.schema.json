@@ -1,0 +1,47 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://byteowlz.com/schemas/pi-statusline/statusline.schema.json",
+	"title": "pi-statusline manifest",
+	"description": "Maps pi extension status keys (ctx.ui.setStatus) to styled footer segments. Optional; consumed by the pi-statusline footer extension.",
+	"type": "object",
+	"properties": {
+		"version": {
+			"type": "integer"
+		},
+		"items": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"properties": {
+					"id": {
+						"type": "string",
+						"description": "Stable segment id (defaults to statusKey)."
+					},
+					"statusKey": {
+						"type": "string",
+						"description": "The key an extension publishes with ctx.ui.setStatus(key, text)."
+					},
+					"label": {
+						"type": "string",
+						"description": "Short prefix shown before the value (defaults to statusKey)."
+					},
+					"color": {
+						"enum": ["accent", "success", "warning", "error", "muted", "dim", "text"],
+						"description": "Theme color token for the label."
+					},
+					"position": {
+						"enum": ["left", "right"],
+						"description": "Placement hint for footers that order by position."
+					},
+					"order": {
+						"type": "integer",
+						"description": "Sort order (ascending). Default 1000."
+					}
+				},
+				"required": ["statusKey"],
+				"additionalProperties": true
+			}
+		}
+	},
+	"required": ["items"]
+}

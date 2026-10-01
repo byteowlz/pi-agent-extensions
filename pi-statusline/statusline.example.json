@@ -1,0 +1,16 @@
+{
+	"version": 1,
+	"items": [
+		{ "id": "kompressor", "statusKey": "kompressor-rolling", "label": "KSP", "color": "warning", "position": "right", "order": 10 },
+		{ "id": "oqto-bridge", "statusKey": "oqto-bridge", "label": "PHASE", "color": "accent", "position": "right", "order": 20 },
+		{ "id": "history-search", "statusKey": "history-search", "label": "HIS", "color": "muted", "position": "right", "order": 30 },
+		{ "id": "observational-memory", "statusKey": "observational-memory", "label": "MEM", "color": "accent", "position": "right", "order": 40 },
+		{ "id": "crosstalk", "statusKey": "crosstalk", "label": "XTALK", "color": "dim", "position": "right", "order": 50 },
+		{ "id": "trx-picker", "statusKey": "trx-picker", "label": "TRX", "color": "muted", "position": "right", "order": 60 },
+		{ "id": "tui-rpc", "statusKey": "tui-rpc", "label": "RPC", "color": "muted", "position": "right", "order": 70 },
+		{ "id": "xlatch", "statusKey": "xlatch", "label": "XL", "color": "accent", "position": "right", "order": 80 },
+		{ "id": "azure-guard", "statusKey": "azure-guard", "label": "AZG", "color": "warning", "position": "right", "order": 90 },
+		{ "id": "markdown-export", "statusKey": "markdown-export", "label": "MD", "color": "dim", "position": "right", "order": 100 },
+		{ "id": "error-recovery", "statusKey": "error-recovery", "label": "ERR", "color": "error", "position": "right", "order": 110 }
+	]
+}

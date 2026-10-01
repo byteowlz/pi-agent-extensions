@@ -4,6 +4,16 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-statusline: optional manifest-driven status footer
+
+- New opt-in extension `pi-statusline` that renders extension statuses (
+  `ctx.ui.setStatus`) as colored segments on one line via `ctx.ui.setFooter`,
+  taking each key's label/color/position from a central `statusline.json`
+  manifest. Publisher/consumer separation: publishing extensions depend only on
+  the core `setStatus` API and never import this; if it is not installed the
+  built-in footer still shows their status. Manifest schema + example provided;
+  documented the kebab extension-id key convention.
+
 ### pi-herdr-tools: preset loadouts (mode/cap/kind in addition to models)
 
 - Loadouts can now be **full presets**, not just model-pattern arrays. A
