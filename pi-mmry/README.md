@@ -1,6 +1,6 @@
 # pi-mmry
 
-Visible session-start recall from [mmry](https://github.com/byteowlz/mmry), plus memory tools scoped to the current repository.
+Visible session-start recall from [mmry](https://github.com/byteowlz/mmry), plus a memory tool scoped to the current repository.
 
 When a session starts, pi-mmry asks mmry which memories matter for this directory and **shows you the exact text** before anything reaches the model. Your first prompt then carries that same text once, framed as untrusted observations. The system prompt is never modified, nothing is re-injected on later turns, and a resumed session is not injected again.
 
@@ -30,7 +30,7 @@ Off by default. Enable with any of:
 | `mmryBin` | `"mmry"` | Binary name or path |
 | `maxTokens` | `400` | Budget for the recalled block |
 | `limit` | `8` | Maximum memories |
-| `tools` | `true` | Give the model the `memory` tool while enabled |
+| `tools` | `true` | Give the model the `memory` tool (independent of recall) |
 | `headless` | `"off"` | Without a UI: `off`, or `report` (print the block to stderr, then attach it) |
 | `timeoutMs` | `5000` | Per mmry call |
 | `metricsPath` | `<agent dir>/mmry-recall-metrics.jsonl` | Count-only metrics; `""` disables |
@@ -59,7 +59,7 @@ pi-mmry refuses to attach anything if mmry returns a contested memory or an unkn
 
 ## Tool
 
-One `memory` tool with an `action`, available to the model only while recall is enabled and `tools` is on. It runs mmry with `--json` in the session cwd (current repository plus general memories) and returns mmry's output or error verbatim, such as a revision mismatch. Missing fields are reported without calling mmry.
+One `memory` tool with an `action`, available whenever `tools` is on, also with recall disabled or `/memory off`: those only stop injection. It runs mmry with `--json` in the session cwd (current repository plus general memories) and returns mmry's output or error verbatim, such as a revision mismatch. Missing fields are reported without calling mmry.
 
 | `action` | Fields |
 |---|---|
