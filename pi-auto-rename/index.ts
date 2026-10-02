@@ -57,7 +57,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type Api, type Model, complete } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
@@ -509,7 +509,7 @@ function generateTruncatedName(cleaned: string): string {
  * Find the cheapest available model that has an API key configured.
  * Prefers small/fast models suitable for short title generation.
  */
-async function findCheapestAvailableModel(ctx: ExtensionContext): Promise<{ model: Model<Api>; apiKey: string } | null> {
+async function findCheapestAvailableModel(ctx: ExtensionContext): Promise<{ model: Model<Api>; apiKey: string | null } | null> {
 	const allModels = ctx.modelRegistry.getAll() as Model<Api>[];
 	// Sort by total cost (input + output), cheapest first
 	const sorted = [...allModels].sort((a, b) => {
@@ -520,7 +520,7 @@ async function findCheapestAvailableModel(ctx: ExtensionContext): Promise<{ mode
 
 	for (const model of sorted) {
 		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-		if (auth.ok && auth.apiKey) return { model, apiKey: auth.apiKey };
+		if (auth.ok) return { model, apiKey: auth.apiKey ?? null };
 	}
 	return null;
 }
@@ -581,12 +581,12 @@ function debugNotify(
 	method(`[auto-rename] ${message}`);
 }
 
-async function resolveCurrentModel(ctx: ExtensionContext): Promise<{ model: Model<Api>; apiKey: string } | null> {
+async function resolveCurrentModel(ctx: ExtensionContext): Promise<{ model: Model<Api>; apiKey: string | null } | null> {
 	const currentModel = ctx.model as Model<Api> | undefined;
 	if (!currentModel) return null;
 	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(currentModel);
-	if (!auth.ok || !auth.apiKey) return null;
-	return { model: currentModel, apiKey: auth.apiKey };
+	if (!auth.ok) return null;
+	return { model: currentModel, apiKey: auth.apiKey ?? null };
 }
 
 async function resolveModelWithFallback(config: ResolvedConfig, ctx: ExtensionContext): Promise<ModelResolutionResult> {
@@ -837,7 +837,7 @@ async function tryLlmGeneration(
 		const controller = new AbortController();
 		const timeout = setTimeout(() => controller.abort(), 15000);
 
-		const response = await complete(
+		const response = await ctx.modelRegistry.complete(
 			resolution.model,
 			{
 				messages: [
@@ -848,7 +848,7 @@ async function tryLlmGeneration(
 					},
 				],
 			},
-			{ apiKey: resolution.apiKey ?? undefined, signal: controller.signal }
+			{ signal: controller.signal }
 		);
 		clearTimeout(timeout);
 

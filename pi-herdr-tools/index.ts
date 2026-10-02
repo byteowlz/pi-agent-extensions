@@ -1316,15 +1316,25 @@ function spawnConfirm(
 }
 
 /** Decide whether a spawn is allowed, honouring the session's allow mode. */
-async function approveSpawn(
+export async function approveSpawn(
 	ctx: ExtensionContext,
 	config: SubagentConfig,
 	detail: string,
 	modelEditable: boolean
 ): Promise<SpawnDecision> {
-	if (!ctx.hasUI) return { ok: true }; // print/RPC mode: cannot prompt, so allow
 	const mode = sessionAllowMode(config);
 	if (mode === "auto") return { ok: true };
+	// RPC has dialogs but no custom terminal components. Never convert a
+	// missing approval surface into permission; only explicit auto mode skips it.
+	if (!ctx.hasUI) return { ok: false };
+	if (ctx.mode === "rpc") {
+		const confirmed = await ctx.ui.confirm("Spawn subagent?", detail, {
+			signal: ctx.signal,
+			...(mode === "timeout" ? { timeout: sessionConfirmTimeout(config) } : {}),
+		});
+		return { ok: confirmed === true };
+	}
+	if (ctx.mode !== "tui") return { ok: false };
 	if (mode === "confirm") return spawnConfirm(ctx, detail, null, false, modelEditable);
 	const timeout = sessionConfirmTimeout(config);
 	const decision = sessionAutoDecision(config);
@@ -1632,6 +1642,13 @@ function runAllowlistPalette(
 }
 
 async function openModelPicker(ctx: ExtensionContext, config: SubagentConfig): Promise<boolean> {
+	if (ctx.mode !== "tui") {
+		ctx.ui.notify(
+			"The model palette requires Pi TUI; use /subagent models add <glob> or /subagent models loadout load <name> here",
+			"warning"
+		);
+		return false;
+	}
 	const registry = collectModels(ctx);
 	if (registry.length === 0) {
 		ctx.ui.notify("No models found in the registry (ctx.modelRegistry.getAvailable()).", "warning");
@@ -2164,6 +2181,10 @@ async function relayModal(
 }
 
 async function runSend(ctx: ExtensionContext, pi: ExtensionAPI): Promise<void> {
+	if (ctx.mode !== "tui") {
+		ctx.ui.notify("The relay picker requires Pi TUI; use send_to_session with an explicit target here", "warning");
+		return;
+	}
 	if (!isInHerdr()) {
 		ctx.ui.notify("Not running inside a herdr-managed pane (HERDR_ENV=1 + HERDR_SOCKET_PATH required).", "error");
 		return;

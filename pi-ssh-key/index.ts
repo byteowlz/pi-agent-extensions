@@ -575,7 +575,7 @@ function addSucceeded(res: RunResult): boolean {
 // ---------------------------------------------------------------------------
 
 async function promptPassphrase(ctx: ExtensionCommandContext, title: string, subtitle?: string): Promise<string | null> {
-	if (!ctx.hasUI) return null;
+	if (ctx.mode !== "tui") return null;
 
 	// Show the pane as blocked in herdr (detection cannot classify our custom
 	// TUI), then hand authority back once the prompt resolves.
@@ -991,8 +991,8 @@ export default function piSshKey(pi: ExtensionAPI): void {
 				}
 				keyPaths = [resolved];
 			} else {
-				if (!ctx.hasUI) {
-					ctx.ui.notify("ssh-key-load without a path requires an interactive UI for the picker", "error");
+				if (ctx.mode !== "tui") {
+					ctx.ui.notify("The key picker requires Pi TUI; use /ssh-key-load <path> in this mode", "error");
 					return;
 				}
 				const picked = await pickKeys(ctx, config.keyDir);

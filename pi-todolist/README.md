@@ -1,4 +1,4 @@
-# Oqto Todos Extension
+# pi-todolist
 
 A Pi extension that provides todo management tools compatible with Oqto's frontend todo panel.
 
@@ -68,6 +68,10 @@ The Oqto frontend automatically parses `Todo` tool calls and displays todos in t
 
 Create `oqto-todos.json` in your project root, `.pi/` directory, or `~/.pi/agent/`:
 
+The extension is named `pi-todolist`; the configuration filename and persisted
+`oqto-todos` history/widget keys intentionally remain unchanged to preserve
+existing settings and todo state.
+
 ```json
 {
   "enabled": true,
@@ -98,19 +102,19 @@ result (or check `/todos`) to see done and cancelled entries individually.
 ### Global Installation
 
 ```bash
-cp -r oqto-todos ~/.pi/agent/extensions/
+cp -r pi-todolist ~/.pi/agent/extensions/
 ```
 
 ### Project-local Installation
 
 ```bash
-cp -r oqto-todos .pi/extensions/
+cp -r pi-todolist .pi/extensions/
 ```
 
 ### Development (Symlink)
 
 ```bash
-ln -s $(pwd)/oqto-todos ~/.pi/agent/extensions/oqto-todos
+ln -s $(pwd)/pi-todolist ~/.pi/agent/extensions/pi-todolist
 ```
 
 ## Storage

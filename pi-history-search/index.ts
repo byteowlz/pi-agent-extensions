@@ -343,8 +343,8 @@ export default function historySearch(pi: ExtensionAPI): void {
 		initialQuery?: string,
 		opener?: (sessionFile: string) => Promise<void> | void
 	): Promise<void> {
-		if (!ctx.hasUI) {
-			ctx.ui.notify("History overlay needs an interactive TUI", "warning");
+		if (ctx.mode !== "tui") {
+			ctx.ui.notify("History overlay needs an interactive TUI; use HistorySearch/HistoryRead here", "warning");
 			return;
 		}
 		const config = loadConfig(ctx.cwd);

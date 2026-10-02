@@ -294,7 +294,7 @@ export function sudoGuardDecision(cmd: string): GuardDecision {
 type PasswordPromptResult = { kind: "ok"; password: string } | { kind: "cancelled" } | { kind: "timeout" };
 
 async function promptPassword(ctx: ExtensionContext, title: string, subtitle?: string): Promise<PasswordPromptResult> {
-	if (!ctx.hasUI) return { kind: "cancelled" };
+	if (ctx.mode !== "tui") return { kind: "cancelled" };
 
 	// Show the pane as blocked in herdr (detection cannot classify our custom
 	// TUI), then hand authority back once the prompt resolves.
