@@ -14,6 +14,7 @@
     "tools": { "type": "boolean", "default": true, "description": "Give the model the memory tool (search/create/supersede/deprecate) independent of recall (disabling recall only stops injection)" },
     "headless": { "enum": ["off", "report"], "default": "off", "description": "Without an interactive UI: off (no recall) or report (print the block to stderr, then attach it)" },
     "timeoutMs": { "type": "integer", "minimum": 1, "default": 5000, "description": "Timeout for each mmry call" },
-    "metricsPath": { "type": "string", "description": "Count-only metrics JSONL (default <agent dir>/mmry-recall-metrics.jsonl); empty string disables" }
+    "metricsPath": { "type": "string", "description": "Count-only metrics JSONL (default <agent dir>/mmry-recall-metrics.jsonl); empty string disables" },
+    "pullOnStart": { "type": "boolean", "default": false, "description": "Run mmry sync pull once at session start, non-blocking (best effort; warns on failure). Independent of recall." }
   }
 }

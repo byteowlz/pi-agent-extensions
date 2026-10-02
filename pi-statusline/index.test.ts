@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findProjectIcon } from "./index";
+import { findProjectIcon, insideMultiplexer } from "./index";
 
 const roots: string[] = [];
 
@@ -54,5 +54,17 @@ describe("findProjectIcon", () => {
 	test("ignores unrelated files in icon/", () => {
 		const root = makeRepo(["icon/favicon.png", "logo/x_logo_white.svg"]);
 		expect(findProjectIcon(root, "on_dark")).toBeUndefined();
+	});
+});
+
+describe("insideMultiplexer", () => {
+	test("herdr, tmux, zellij and screen count as multiplexers", () => {
+		for (const key of ["HERDR_ENV", "TMUX", "ZELLIJ", "STY"]) {
+			expect(insideMultiplexer({ [key]: "1" })).toBe(true);
+		}
+	});
+
+	test("a bare terminal does not", () => {
+		expect(insideMultiplexer({ TERM: "xterm-ghostty", TERM_PROGRAM: "ghostty" })).toBe(false);
 	});
 });
