@@ -63,6 +63,7 @@ The Oqto frontend automatically parses `Todo` tool calls and displays todos in t
 
 - `/todo` - Interactive menu to add, start, complete, cancel, edit, delete, or clear todos
 - `/todos` - Display current todos in the notification area
+- `/todos expand|collapse|toggle` - Override sticky widget mode for this session; resets on session start/switch and tree navigation (no settings are written)
 
 ## Configuration
 
@@ -78,7 +79,8 @@ existing settings and todo state.
   "debug": false,
   "sessionScoped": true,
   "storagePath": ".pi/todos",
-  "tuiWidget": false
+  "tuiWidget": true,
+  "tuiWidgetCollapsed": true
 }
 ```
 
@@ -92,10 +94,14 @@ existing settings and todo state.
 | `storagePath` | string | pi session dir `todos` subdir | Directory for todo storage (defaults to `<pi-session-dir>/todos`) |
 | `tuiWidget` | boolean | `true` | Render persistent todo widget in Pi TUI (set to `false` for Oqto-only frontend usage) |
 
-The widget and the collapsed tool-result view show only active (pending /
-in-progress) todos plus a single dim `✓ N todos done` line; expand a tool
-result (or check `/todos`) to see done and cancelled entries individually.
+| `tuiWidgetCollapsed` | boolean | `true` | Keep the sticky widget to one width-bounded row; set `false` for the active task list and done count |
 | `preserveInCompaction` | boolean | `true` | After context compaction, inject the current todo list into the LLM context so the model keeps using the todo tools |
+
+The default widget shows the first in-progress task (otherwise a pending task),
+with counts when they fit. Empty or disabled widgets are cleared. Expanded widgets
+show up to eight active tasks and a done count. Tool-result expansion is independent:
+collapsed results show active tasks and a done count; expanded results include
+completed and cancelled tasks individually. See `oqto-todos.schema.json` for configuration.
 
 ## Installation
 

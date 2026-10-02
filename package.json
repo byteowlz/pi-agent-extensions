@@ -1,10 +1,12 @@
 {
 	"name": "pi-agent-extensions",
-	"version": "2.0.0",
+	"version": "2.1.0",
 	"description": "Extensions for the pi coding agent",
 	"type": "module",
 	"private": true,
-	"engines": { "node": ">=22.19.0" },
+	"engines": {
+		"node": ">=22.19.0"
+	},
 	"scripts": {
 		"check": "npm run lint && npm run typecheck",
 		"lint": "biome check .",

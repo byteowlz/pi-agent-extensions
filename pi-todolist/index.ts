@@ -25,6 +25,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { createWidgetMode, renderWidget } from "./widget.js";
 
 // ============================================================================
 // Types
@@ -51,6 +52,7 @@ interface OqtoTodosConfig {
 	storagePath?: string;
 	sessionScoped: boolean;
 	tuiWidget: boolean;
+	tuiWidgetCollapsed: boolean;
 	/** After context compaction, inject the current todo list into the LLM context so the model keeps using it. */
 	preserveInCompaction: boolean;
 }
@@ -68,6 +70,7 @@ const DEFAULT_CONFIG: OqtoTodosConfig = {
 	debug: false,
 	sessionScoped: true,
 	tuiWidget: true,
+	tuiWidgetCollapsed: true,
 	preserveInCompaction: true,
 };
 
@@ -125,7 +128,11 @@ function loadConfig(cwd: string): OqtoTodosConfig {
 			try {
 				const content = readFileSync(configPath, "utf-8");
 				const userConfig = JSON.parse(content) as Partial<OqtoTodosConfig>;
-				return { ...DEFAULT_CONFIG, ...userConfig };
+				return {
+					...DEFAULT_CONFIG,
+					...userConfig,
+					tuiWidgetCollapsed: typeof userConfig.tuiWidgetCollapsed === "boolean" ? userConfig.tuiWidgetCollapsed : true,
+				};
 			} catch {
 				// Invalid JSON, continue to next path
 			}
@@ -413,60 +420,13 @@ function renderTodoList(todos: TodoItem[], theme: Theme, expanded: boolean): str
 export default function oqtoTodosExtension(pi: ExtensionAPI) {
 	// Store reference to current todos for rendering and the TUI widget
 	let _currentTodos: TodoItem[] = [];
+	const widgetMode = createWidgetMode();
 
 	// ==========================================================================
 	// TUI Widget - persistent todo display above the editor
 	// ==========================================================================
 
 	const WIDGET_KEY = "oqto-todos";
-
-	/**
-	 * Build the widget lines for the current todos.
-	 */
-	function renderWidgetTodoLine(todo: TodoItem, theme: Theme, effectiveWidth: number): string {
-		const icon = getStatusIcon(todo.status);
-		const priorityLabel = getPriorityLabel(todo.priority);
-		const reservedSuffix = priorityLabel ? 8 : 6;
-		const contentWidth = Math.max(8, effectiveWidth - reservedSuffix);
-		const contentPreview = truncateToWidth(normalizeTodoText(todo.content), contentWidth);
-
-		let line = theme.fg(getStatusColor(todo.status), `  ${icon} ${contentPreview}`);
-		if (priorityLabel) {
-			const priorityColor = todo.priority === "high" ? "error" : "dim";
-			line += ` ${theme.fg(priorityColor, priorityLabel)}`;
-		}
-		return truncateToWidth(line, effectiveWidth);
-	}
-
-	function buildWidgetLines(todos: TodoItem[], theme: Theme, width?: number): string[] {
-		// In rare cases width may be undefined/0 during render transitions.
-		const effectiveWidth = width && width > 0 ? width : 35;
-		const maxWidgetItems = 8;
-
-		const lines: string[] = [];
-		const active = todos.filter((t) => t.status === "in_progress" || t.status === "pending");
-		const done = todos.filter((t) => t.status === "completed").length;
-
-		if (active.length > 0) {
-			lines.push(truncateToWidth(buildSummaryLine(todos, theme, false).replace(/^\d+ todos/, "Todos:"), effectiveWidth));
-			const displayItems = active.slice(0, maxWidgetItems);
-			for (const todo of displayItems) {
-				lines.push(renderWidgetTodoLine(todo, theme, effectiveWidth));
-			}
-			if (active.length > maxWidgetItems) {
-				lines.push(truncateToWidth(theme.fg("dim", `  ... ${active.length - maxWidgetItems} more`), effectiveWidth));
-			}
-		}
-		if (done > 0) {
-			lines.push(truncateToWidth(theme.fg("dim", `  ✓ ${done} todo${done === 1 ? "" : "s"} done`), effectiveWidth));
-		}
-		if (lines.length === 0 && todos.length > 0) {
-			// Only cancelled items remain.
-			lines.push(truncateToWidth(theme.fg("muted", `Todos: ${todos.length} cancelled`), effectiveWidth));
-		}
-
-		return lines;
-	}
 
 	/**
 	 * Update the persistent TUI widget showing current todos.
@@ -490,9 +450,9 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 					return {
 						render: (width: number) => {
 							try {
-								return buildWidgetLines(_currentTodos, theme, width);
+								return renderWidget(_currentTodos, theme, width, widgetMode.collapsed(config.tuiWidgetCollapsed));
 							} catch {
-								return ["[todo render error]"];
+								return [truncateToWidth("[todo render error]", Math.max(0, width))];
 							}
 						},
 						// biome-ignore lint/suspicious/noEmptyBlockStatements: widget is rebuilt on each update
@@ -501,7 +461,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 				} catch {
 					// Return a safe fallback widget if building lines fails
 					return {
-						render: () => ["[todo widget error]"],
+						render: (width: number) => [truncateToWidth("[todo widget error]", Math.max(0, width))],
 						// biome-ignore lint/suspicious/noEmptyBlockStatements: fallback widget
 						invalidate: () => {},
 					};
@@ -543,6 +503,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 	// Session event handlers are individually wrapped so one failure does not
 	// prevent the others from registering or executing.
 	pi.on("session_start", async (event, ctx) => {
+		widgetMode.reset();
 		try {
 			// Forks and clones start a new session (new id); carry the parent's
 			// todo list over so the task list survives the fork.
@@ -555,6 +516,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 		}
 	});
 	pi.on("session_tree", async (_event, ctx) => {
+		widgetMode.reset();
 		try {
 			reconstructTodos(ctx);
 		} catch (e) {
@@ -804,12 +766,17 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 	// /todos command - Show todos in UI
 	// ==========================================================================
 	pi.registerCommand("todos", {
-		description: "Show current todos",
-		handler: async (_args, ctx) => {
+		description: "Show current todos, or expand/collapse/toggle the sticky widget",
+		handler: async (args, ctx) => {
 			try {
 				const config = loadConfig(ctx.cwd);
 				const sessionId = getSessionId(ctx);
 				const store = loadTodos(ctx, config, sessionId);
+				if (widgetMode.command(args.trim(), config.tuiWidgetCollapsed)) {
+					_currentTodos = store.todos;
+					updateWidget(ctx);
+					return;
+				}
 
 				if (!ctx.hasUI) {
 					console.log(JSON.stringify(store.todos, null, 2));

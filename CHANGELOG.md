@@ -4,6 +4,15 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-todolist: collapsed sticky widget (2.1.0)
+
+- Default the native sticky widget to one width-bounded progress/task row.
+  `tuiWidgetCollapsed: false` restores the expanded default; `/todos expand`,
+  `/todos collapse` and `/todos toggle` override it until the session changes.
+  Existing todo persistence, tool-result expansion, config filename and Oqto
+  panel payloads are unchanged. No user config or running install is modified.
+
+
 - Archive the explicitly selected `pi-crosstalk`, `pi-observational-memory`,
   `pi-acpx`, `pi-inline-macros` and `pi-message-timestamps` under `archive/`.
   Preserve source/history but exclude them from maintained discovery, checks
