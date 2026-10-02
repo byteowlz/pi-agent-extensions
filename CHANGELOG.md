@@ -11,6 +11,23 @@ All notable changes to pi-agent-extensions will be documented in this file.
   failure (e.g. store not connected for git sync) only warns; local writes are
   never dropped. Independent of recall: fires even when recall is disabled.
 
+### pi-xlatch-session: status label drops the redundant `xlatch:` prefix (1.25.0)
+
+- The footer status value is now just the slot (`test` instead of
+  `xlatch:test`); the statusline maps the `xlatch` key to the `XL` label, so
+  the branding lives in the statusline rather than being duplicated in the
+  value.
+
+### pi-statusline: no images inside multiplexers by default (1.24.1)
+
+- Inside herdr, tmux, zellij or screen, `"image": "auto"` now keeps the glyph
+  and skips the Kitty graphics query. The multiplexer answers the query, not
+  the terminal being viewed, and herdr forwards images to every attached
+  client: an SSH client without Kitty graphics (Terminus on iOS) printed the
+  commands (`Ga=t,f=32,...`) as text over the footer and editor. This
+  restores the pre-1.21.1 behaviour; `"image": "on"` opts back in. The project
+  icon follows the same rule.
+
 ### pi-mmry: nudge models to use the memory tool (1.24.0)
 
 - The tool sets Pi's `promptSnippet` and `promptGuidelines` (fixed text, never

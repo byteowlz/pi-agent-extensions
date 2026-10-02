@@ -80,7 +80,7 @@ supersession by re-registration is the mechanism.
 | `/xlatch <slot>` | Connect this session to `<slot>` directly |
 | `/xlatch off` | Disconnect (closes socket, drops the claim) |
 
-While connected, the footer shows `xlatch:<slot>` and a received count.
+While connected, the footer shows `XL <slot>` (the statusline label is `XL`) and a received count.
 
 ## Files, images, and notes
 
