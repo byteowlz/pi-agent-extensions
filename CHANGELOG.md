@@ -4,6 +4,39 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+- Archive the explicitly selected `pi-crosstalk`, `pi-observational-memory`,
+  `pi-acpx`, `pi-inline-macros` and `pi-message-timestamps` under `archive/`.
+  Preserve source/history but exclude them from maintained discovery, checks
+  and tests. All six unresolved extensions remain active, including both read
+  guards. Installed user extensions/configuration are not modified.
+
+- Rename `pi-oqto-todos` to `pi-todolist`. Tool names, commands, configuration
+  filename and persisted todo/history identifiers remain unchanged. Update
+  installation paths with the corresponding immutable distribution snapshot.
+
+### Pi 1.0.0 baseline migration (2.0.0)
+
+- Pi 1.0.0 is the supported baseline, not an optional candidate. Pin Pi SDK
+  development packages exactly; require Node.js 22.19 or newer. The major
+  version explicitly drops the pre-1.0 host compatibility promise.
+- Move auto-rename, observational memory and crosstalk nested completions to
+  the session ModelRegistry, retaining request-time credentials and provider
+  headers. Crosstalk now supplies a leading system message, not the removed
+  Context.systemPrompt field. Reflector errors/aborts cannot erase observations.
+- Use the actual host mode: RPC has dialogs but no custom terminal components.
+  Subagent approval uses RPC confirm, fails closed without an approval surface
+  unless explicit auto mode is selected, and never auto-allows an RPC timeout.
+  Native pickers/masked password prompts advertise their TUI-only boundary;
+  history/export/key/issue workflows retain explicit non-picker alternatives.
+- Oqto bridge emits RPC telemetry despite hasUI=true and clears run phase only
+  at agent_settled. Its legacy count-based input binding still needs the
+  coordinated runner/bridge identity migration; this entry does not claim it
+  has been repaired.
+- Add exhaustive named-value-import checks (including ts-nocheck files),
+  completion/approval/settlement regressions, and a real Pi 1.0 catalog/startup
+  smoke for the active catalog (23 extensions after the approved archival). This is not physical TUI, provider, grant,
+  or every-tool-callback acceptance.
+
 ### pi-mmry: nudge models to use the memory tool (1.24.0)
 
 - The tool sets Pi's `promptSnippet` and `promptGuidelines` (fixed text, never

@@ -1,5 +1,5 @@
 /**
- * Oqto Todos Extension for Pi
+ * pi-todolist — Todo list management for Pi
  *
  * Provides a single unified `Todo` tool that integrates with Oqto's frontend
  * todo panel. It supports write/read/add/update/remove/clear actions so the
@@ -59,6 +59,7 @@ interface OqtoTodosConfig {
 // Constants
 // ============================================================================
 
+// Persisted configuration/history identifiers stay stable across the extension rename.
 const CONFIG_FILENAME = "oqto-todos.json";
 const TODOS_FILENAME = "todos.json";
 

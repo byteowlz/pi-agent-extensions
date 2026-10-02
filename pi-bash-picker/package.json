@@ -1,6 +1,6 @@
 {
   "name": "@byteowlz/pi-bash-picker",
-  "version": "1.0.1",
+  "version": "2.0.0",
   "description": "bash-picker",
   "type": "module",
   "keywords": [
@@ -31,10 +31,10 @@
     "directory": "pi-bash-picker"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "*",
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-agent-core": "1.0.0",
+    "@earendil-works/pi-ai": "1.0.0",
+    "@earendil-works/pi-coding-agent": "1.0.0",
+    "@earendil-works/pi-tui": "1.0.0"
   },
   "license": "MIT"
 }

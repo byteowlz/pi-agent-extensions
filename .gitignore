@@ -1,7 +1,9 @@
 pi-session-exports/
 CLAUDE.md
 benchmarks/
-scripts/
+scripts/*
+!scripts/test-pi-1-catalog.mjs
+!scripts/pi-1-imports.test.ts
 # ---- ignr (detected: linux,node) @ 2026-01-30 ----
 
 # === linux ===

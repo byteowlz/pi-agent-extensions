@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -240,6 +240,35 @@ describe("pi-auto-rename rename_session tool", () => {
 		expect(suffixCount).toBe(1);
 		expect(name.startsWith("Fix Auth Bug")).toBe(true);
 	});
+});
+
+describe("Pi 1.0 auto-rename registry authentication", () => {
+	for (const modelSelection of ["current", "cheapest"]) {
+		test(`${modelSelection} selection accepts header-only auth and delegates completion to the registry`, async () => {
+			const { pi, runCommand, getSessionName } = buildMockExtensionAPI();
+			autoRename(pi);
+			const base = buildMockCtx(tmpCwd(), "synthetic-session", { enabled: true, modelSelection });
+			const model = { provider: "fixture", id: "fixture", api: "openai-completions" };
+			const complete = mock(async (_model: unknown, _context: unknown, _options?: unknown) => ({
+				stopReason: "stop",
+				content: [{ type: "text", text: "Registry Title" }],
+			}));
+			const ctx = {
+				...base,
+				model,
+				modelRegistry: {
+					...base.modelRegistry,
+					getAll: () => [model],
+					getApiKeyAndHeaders: async () => ({ ok: true, headers: { Authorization: "synthetic" } }),
+					complete,
+				},
+			} as unknown as ExtensionContext;
+			await runCommand("regen", ctx);
+			expect(complete).toHaveBeenCalledTimes(1);
+			expect(complete.mock.calls[0][2]).not.toHaveProperty("apiKey");
+			expect(getSessionName()).toContain("Registry Title");
+		});
+	}
 });
 
 describe("pi-auto-rename fork readable-id regeneration", () => {

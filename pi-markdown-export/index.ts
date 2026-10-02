@@ -112,6 +112,10 @@ function exportAll(ctx: ExtensionContext, config: MarkdownExportConfig, args: st
 // ── Interactive picker ───────────────────────────────────────────────
 
 async function exportPick(ctx: ExtensionCommandContext, config: MarkdownExportConfig, args: string): Promise<void> {
+	if (ctx.mode !== "tui") {
+		ctx.ui.notify("The export picker requires Pi TUI; use /export-md [filename.md] in this mode", "warning");
+		return;
+	}
 	const includeSubdirs = config.includeSubdirs || /(^|\s)--subdirs(\s|$)/.test(args);
 	const base = resolveSessionsBase(config);
 

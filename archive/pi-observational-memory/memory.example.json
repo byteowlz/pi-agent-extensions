@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/observational-memory/memory.schema.json",
+  "observer": {
+    "provider": "openai",
+    "model": "gpt-5-nano",
+    "messageTokenThreshold": 30000,
+    "temperature": 0.3,
+    "maxOutputTokens": 100000
+  },
+  "reflector": {
+    "provider": "openai",
+    "model": "gpt-5-nano",
+    "observationTokenThreshold": 40000,
+    "temperature": 0,
+    "maxOutputTokens": 100000
+  }
+}

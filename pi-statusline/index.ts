@@ -444,7 +444,7 @@ function buildStatusSegments(
 
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
-		if (!ctx.hasUI) return; // print/RPC mode: no footer to build
+		if (ctx.mode !== "tui") return; // RPC has dialogs, but no native footer
 		const manifest = loadManifest(ctx);
 		if (!manifest || manifest.items.length === 0) return; // no manifest -> keep built-in footer
 		try {

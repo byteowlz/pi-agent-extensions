@@ -23,7 +23,7 @@
  *
  * The runner's state machine rules:
  *   - agent_start  -> working("generating")
- *   - agent_end    -> idle
+ *   - agent_settled -> idle (agent_end can be followed by retry/recovery)
  *   - oqto_phase=X -> refine phase within working state (never transitions to idle)
  *   - oqto_phase=  -> clear phase, fall back to native event inference
  */
@@ -97,11 +97,6 @@ type InputMeta = {
 const QUEUE_EVENT_KEY = "oqto_queue_event";
 const META_TAG_REGEX = /\s*\[\[oqto_meta:(\{[\s\S]*\})\]\]\s*$/;
 
-function detectRpcMode(): boolean {
-	const argv = process.argv.join(" ");
-	return argv.includes("--mode rpc") || argv.includes("--mode=rpc");
-}
-
 function parseInputMeta(text: string): {
 	cleanText: string;
 	meta?: InputMeta;
@@ -130,7 +125,7 @@ function parseInputMeta(text: string): {
 function emitQueueEvent(ctx: ExtensionContext, eventType: string, payload: Record<string, unknown>): void {
 	// Keep queue telemetry out of interactive TUI status line.
 	// It is only needed for machine-consumed RPC streams.
-	if (ctx.hasUI) return;
+	if (ctx.mode !== "rpc") return;
 	ctx.ui.setStatus(
 		QUEUE_EVENT_KEY,
 		JSON.stringify({
@@ -143,13 +138,12 @@ function emitQueueEvent(ctx: ExtensionContext, eventType: string, payload: Recor
 }
 
 export default function oqtoBridge(pi: ExtensionAPI) {
-	const rpcMode = detectRpcMode();
 	let agentRunning = false;
 	let queueSeq = 0;
 	const pendingQueue: QueueEntry[] = [];
 
 	pi.on("input", (event, ctx) => {
-		if (!rpcMode || event.source !== "rpc") {
+		if (ctx.mode !== "rpc" || event.source !== "rpc") {
 			return { action: "continue" as const };
 		}
 
@@ -189,11 +183,13 @@ export default function oqtoBridge(pi: ExtensionAPI) {
 		setPhase(ctx, "generating");
 	});
 
-	pi.on("agent_end", (event, ctx) => {
+	pi.on("agent_settled", (_event, ctx) => {
 		agentRunning = false;
 		clearPhase(ctx);
+	});
 
-		if (!rpcMode) return;
+	pi.on("agent_end", (event, ctx) => {
+		if (ctx.mode !== "rpc") return;
 
 		const userMessageCount = event.messages.filter((msg) => msg.role.toLowerCase() === "user").length;
 

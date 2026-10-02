@@ -1,6 +1,6 @@
 {
   "name": "@byteowlz/pi-edit-agent",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Edit an assistant (agent) message and continue from there — like /tree, but you can edit the agent message",
   "type": "module",
   "keywords": [
@@ -31,9 +31,9 @@
     "directory": "pi-edit-agent"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "*",
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-agent-core": "1.0.0",
+    "@earendil-works/pi-ai": "1.0.0",
+    "@earendil-works/pi-coding-agent": "1.0.0"
   },
   "license": "MIT"
 }
