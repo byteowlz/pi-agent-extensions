@@ -27,6 +27,12 @@ deployment, full callback qualification or upstream publication.
 
 ## Evidence and remaining gates
 
+After incorporating main merge `32ac8c3` (mmry pull-on-start plus upstream
+statusline/xlatch fixes): **222 maintained tests pass**, typecheck passes,
+**23 individual extensions plus the combined catalog pass** exact Pi 1.0.0
+startup smoke. Full check exits successfully with **36 retained lint warnings**;
+this is not the warning-free parent acceptance gate.
+
 Local evidence: `/tmp/oqto-pi-1-evidence/extensions-*.log`. Run:
 
 ```sh

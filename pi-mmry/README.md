@@ -34,6 +34,7 @@ Off by default. Enable with any of:
 | `headless` | `"off"` | Without a UI: `off`, or `report` (print the block to stderr, then attach it) |
 | `timeoutMs` | `5000` | Per mmry call |
 | `metricsPath` | `<agent dir>/mmry-recall-metrics.jsonl` | Count-only metrics; `""` disables |
+| `pullOnStart` | `false` | Run `mmry sync pull` once at session start, non-blocking (best effort; warns on failure). Independent of recall. |
 
 Which memories are chosen (repository before general, newest first, budget, expiry, machine-specific ones, contested ones withheld) is decided by mmry, not by this extension; see mmry's "Harness integration" section.
 

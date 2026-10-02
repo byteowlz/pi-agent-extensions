@@ -49,8 +49,12 @@ The leading icon uses the **real pi press-kit badge** as an inline image on
 terminals that implement the **Kitty graphics protocol**, drawn from
 `assets/*.png`. Support is detected by asking the terminal at startup (a Kitty
 graphics query answered with `OK`, with DA1 as the sentinel), not by matching
-terminal names, so multiplexers that implement the protocol (e.g. herdr, which
-reports `TERM=xterm-256color`) get the image too. The badge is sized to the statusbar height via `icon.rows` (1-2,
+terminal names. Inside a multiplexer (herdr, tmux, zellij, screen) `auto` keeps
+the glyph and skips the query: the multiplexer answers it, not the terminal you
+are looking at, and herdr forwards images to every attached client, so an SSH
+client without Kitty graphics (e.g. Terminus on iOS) would print the commands
+as text. Set `"image": "on"` to opt in when every client you attach with
+supports Kitty graphics. The project icon follows the same rule. The badge is sized to the statusbar height via `icon.rows` (1-2,
 default 1). It is theme-aware: the white mark on dark backgrounds, the black
 mark on light ones. On terminals that do not implement the protocol it falls
 back to a theme-aware `π` glyph (white in dark, dark in light). Override with

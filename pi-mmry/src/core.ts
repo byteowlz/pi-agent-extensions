@@ -36,6 +36,8 @@ export interface RecallConfig {
 	timeoutMs: number;
 	/** Metrics JSONL path, or "" to disable. Contains counts only, never memory content. */
 	metricsPath: string;
+	/** Run `mmry sync pull` once at session start, non-blocking (best effort, warns on failure). */
+	pullOnStart: boolean;
 }
 
 export function agentDir(): string {
@@ -51,6 +53,7 @@ export const DEFAULT_CONFIG: RecallConfig = {
 	headless: "off",
 	timeoutMs: 5000,
 	metricsPath: join(agentDir(), "mmry-recall-metrics.jsonl"),
+	pullOnStart: false,
 };
 
 function readJson(path: string): Record<string, unknown> {
@@ -82,6 +85,7 @@ function sanitize(raw: Record<string, unknown>): Partial<RecallConfig> {
 		...pick(raw, "headless", (v) => v === "off" || v === "report"),
 		...pick(raw, "timeoutMs", positive),
 		...pick(raw, "metricsPath", (v) => typeof v === "string"),
+		...pick(raw, "pullOnStart", (v) => typeof v === "boolean"),
 	};
 }
 
@@ -158,6 +162,11 @@ export async function runMmry(exec: Exec, config: RecallConfig, cwd: string, arg
 
 export function previewArgs(config: RecallConfig, cwd: string): string[] {
 	return ["preview", "--json", "--cwd", cwd, "--max-tokens", String(config.maxTokens), "--limit", String(config.limit)];
+}
+
+/** argv for `mmry sync pull` (git merge of the central store; no-op unless sync is set up). */
+export function pullArgs(): string[] {
+	return ["sync", "pull"];
 }
 
 /**
@@ -328,6 +337,7 @@ export type MetricEvent =
 	| { event: "attached"; entries: number; tokens: number }
 	| { event: "tool"; tool: string; ok: boolean }
 	| { event: "off" }
+	| { event: "pull"; ok: boolean }
 	| { event: "disabled"; reason: "unavailable" | "headless" };
 
 /** Append one count-only record. Never throws: metrics must not break a session. */
