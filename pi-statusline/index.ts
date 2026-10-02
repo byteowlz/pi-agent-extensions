@@ -178,10 +178,21 @@ function probeKittyGraphics(tui: TUI): void {
 	}
 }
 
+/**
+ * Inside a multiplexer the graphics query is answered by the multiplexer, not by
+ * the terminal the user is looking at. herdr forwards images to every attached
+ * client, so a client without Kitty graphics (e.g. a phone SSH app) prints the
+ * commands as text. Auto-detection therefore stays off here; "image": "on" opts in.
+ */
+export function insideMultiplexer(env: NodeJS.ProcessEnv = process.env): boolean {
+	return Boolean(env.HERDR_ENV || env.TMUX || env.ZELLIJ || env.STY);
+}
+
 /** Resolve whether to render the image badge: manifest override, then detection. */
 function imageEnabled(icon: StatuslineIcon | undefined): boolean {
 	if (icon?.image === "off") return false;
 	if (icon?.image === "on") return true;
+	if (insideMultiplexer()) return false;
 	return getCapabilities().images === "kitty" || kittyProbe === true;
 }
 
@@ -449,7 +460,8 @@ export default function (pi: ExtensionAPI) {
 		if (!manifest || manifest.items.length === 0) return; // no manifest -> keep built-in footer
 		try {
 			ctx.ui.setFooter((tui, theme, footerData) => {
-				if (manifest.icon?.image !== "on" && manifest.icon?.image !== "off" && !getCapabilities().images) {
+				const autoImage = manifest.icon?.image !== "on" && manifest.icon?.image !== "off";
+				if (autoImage && !insideMultiplexer() && !getCapabilities().images) {
 					probeKittyGraphics(tui);
 				}
 				const ordered = [...manifest.items].sort((a, b) => (a.order ?? 1_000) - (b.order ?? 1_000));

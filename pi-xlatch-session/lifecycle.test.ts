@@ -28,10 +28,10 @@ extension({ on: (event, handler) => events.set(event, handler), registerCommand:
 await events.get('session_start')({ reason: 'new' }, ctx);
 await command('test', ctx);
 const socket = process.env.HOME + '/.pi/agent/xlatch-pi/slots/test.sock';
-assert.equal(status, 'xlatch:test');
+assert.equal(status, 'test');
 fs.unlinkSync(socket);
 await command('status', ctx);
-assert.equal(status, 'xlatch:test');
+assert.equal(status, 'test');
 assert.equal(fs.lstatSync(socket).isSymbolicLink(), true);
 const reply = await new Promise((resolve, reject) => {
  const c = net.connect(socket); c.once('error', reject);

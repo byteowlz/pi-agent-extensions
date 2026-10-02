@@ -25,7 +25,7 @@
 				},
 				"image": {
 					"enum": ["auto", "on", "off"],
-					"description": "auto (query the terminal for Kitty graphics), on (force the image), off (force the glyph)."
+					"description": "auto (query the terminal for Kitty graphics; glyph inside herdr, tmux, zellij or screen, whose answer does not describe the attached client), on (force the image), off (force the glyph)."
 				}
 			},
 			"additionalProperties": true
