@@ -6,5 +6,6 @@
   "limit": 8,
   "tools": true,
   "headless": "off",
-  "timeoutMs": 5000
+  "timeoutMs": 5000,
+  "pullOnStart": false
 }

@@ -4,6 +4,13 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-mmry: non-blocking sync pull on start (1.24.1)
+
+- New `pullOnStart` config (default false): runs `mmry sync pull` once at
+  session start, fire-and-forget so it never delays startup. Best effort — a
+  failure (e.g. store not connected for git sync) only warns; local writes are
+  never dropped. Independent of recall: fires even when recall is disabled.
+
 ### pi-mmry: nudge models to use the memory tool (1.24.0)
 
 - The tool sets Pi's `promptSnippet` and `promptGuidelines` (fixed text, never
