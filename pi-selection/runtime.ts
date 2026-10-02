@@ -10,6 +10,7 @@ export type PresentationMode = "auto" | "tui" | "browser" | "host" | "none";
 export interface SelectionRequest {
 	action: "ask" | "create" | "get" | "open" | "close";
 	id?: string;
+	revision?: number;
 	spec?: unknown;
 	presentation?: PresentationMode;
 	bindingId?: string;
@@ -110,7 +111,7 @@ export class SelectionRuntime {
 		}
 		guard();
 		if (request.action === "close") {
-			record = await this.store.cancel(record.id, scope, record.revision);
+			record = await this.store.cancel(record.id, scope, request.revision ?? record.revision);
 			guard();
 			await this.closeBrowser(record.id);
 			guard();

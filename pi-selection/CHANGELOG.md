@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2.2.1: close controls accept caller-observed revision CAS; stale views cannot cancel a newer saved draft when the host forwards the observed revision.
+
 - Content-only version 1 Questions and Review specs, shared validated results and private scoped revision-CAS store.
 - Native TUI with search/groups/final review, text/notes and browser switch; protected tailnet-first browser with explicit token-protected LAN opt-in.
 - Durable skipped/unsure deferrals, blank optional text and confirmed empty multi distinguish explicit input from unanswered.

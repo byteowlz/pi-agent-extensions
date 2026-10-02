@@ -37,9 +37,12 @@ function requestFromControl(body: Record<string, unknown>, action: SelectionRequ
 		throw new Error("Unknown presentation mode");
 	if (body.id !== undefined && typeof body.id !== "string") throw new Error("Invalid review id");
 	if (body.bindingId !== undefined && typeof body.bindingId !== "string") throw new Error("Invalid binding id");
+	if (body.revision !== undefined && (!Number.isSafeInteger(body.revision) || Number(body.revision) < 0))
+		throw new Error("Invalid revision");
 	return {
 		action,
 		id: body.id as string | undefined,
+		revision: body.revision as number | undefined,
 		spec: body.spec,
 		presentation: body.presentation as SelectionRequest["presentation"],
 		bindingId: body.bindingId as string | undefined,
@@ -126,6 +129,7 @@ export default function selection(pi: ExtensionAPI): void {
 				id: Type.Optional(Type.String()),
 				presentation: Type.Optional(Type.String({ enum: [...modes] })),
 				bindingId: Type.Optional(Type.String()),
+				revision: Type.Optional(Type.Integer({ minimum: 0 })),
 			},
 			{ additionalProperties: false }
 		),
