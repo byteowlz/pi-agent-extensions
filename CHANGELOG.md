@@ -4,6 +4,13 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-xlatch-session: status label drops the redundant `xlatch:` prefix (1.25.0)
+
+- The footer status value is now just the slot (`test` instead of
+  `xlatch:test`); the statusline maps the `xlatch` key to the `XL` label, so
+  the branding lives in the statusline rather than being duplicated in the
+  value.
+
 ### pi-statusline: no images inside multiplexers by default (1.24.1)
 
 - Inside herdr, tmux, zellij or screen, `"image": "auto"` now keeps the glyph

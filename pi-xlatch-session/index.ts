@@ -262,7 +262,7 @@ export default function xlatchSession(pi: ExtensionAPI) {
 	const setStatus = () => {
 		ctxRef?.ui.setStatus(
 			"xlatch",
-			boundSlot ? `xlatch:${boundSlot}${healthy ? "" : " (offline)"}${received ? ` (${received})` : ""}` : undefined
+			boundSlot ? `${boundSlot}${healthy ? "" : " (offline)"}${received ? ` (${received})` : ""}` : undefined
 		);
 	};
 
