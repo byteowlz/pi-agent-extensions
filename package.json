@@ -1,6 +1,6 @@
 {
 	"name": "pi-agent-extensions",
-	"version": "2.1.0",
+	"version": "2.2.0",
 	"description": "Extensions for the pi coding agent",
 	"type": "module",
 	"private": true,
@@ -13,7 +13,9 @@
 		"lint:fix": "biome check --write .",
 		"typecheck": "tsgo --config tsconfig.json",
 		"test": "bun test ./pi-* ./scripts/pi-1-imports.test.ts",
-		"test:pi-1": "node scripts/test-pi-1-catalog.mjs"
+		"test:pi-1": "node scripts/test-pi-1-catalog.mjs",
+		"test:selection-rpc": "node scripts/test-selection-rpc.mjs",
+		"test:selection-tool": "node scripts/test-selection-tool.mjs"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.4",

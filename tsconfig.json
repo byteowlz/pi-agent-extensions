@@ -12,6 +12,6 @@
 		"isolatedModules": true,
 		"verbatimModuleSyntax": true
 	},
-	"include": ["*/index.ts", "**/src/**/*.ts"],
+	"include": ["*/index.ts", "**/src/**/*.ts", "pi-selection/cli.ts"],
 	"exclude": ["node_modules", "**/node_modules", "archive/**"]
 }
