@@ -288,6 +288,32 @@ describe("session-start recall", () => {
 		await env.start();
 		expect((await env.prompt())?.message.content).toBe(FRAMING + RENDERED);
 	});
+
+	test("pullOnStart runs mmry sync pull once, non-blocking and independent of recall", async () => {
+		const h = harness({ cwd: project("app", { enabled: false, pullOnStart: true }) });
+		await h.start();
+		// pull is fire-and-forget; give the background exec a tick to land.
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		const pulls = calls().filter((call) => call.args[0] === "sync" && call.args[1] === "pull");
+		expect(pulls).toHaveLength(1);
+		expect(pulls[0].cwd).toBe(h.ctx.cwd);
+		expect(calls().some((call) => call.args[0] === "preview")).toBe(false);
+	});
+
+	test("pullOnStart defaults to off: no sync call at session start", async () => {
+		const h = harness({ cwd: project("app") });
+		await h.start();
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(calls().some((call) => call.args[0] === "sync")).toBe(false);
+	});
+
+	test("a failing sync pull only warns and does not break the session", async () => {
+		writeFileSync(join(fakeDir, "sync.stderr"), "remote not configured\n");
+		const h = harness({ cwd: project("app", { enabled: false, pullOnStart: true }) });
+		await h.start();
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(h.notices.some((notice) => notice.message.includes("sync pull failed"))).toBe(true);
+	});
 });
 
 describe("memory tool", () => {

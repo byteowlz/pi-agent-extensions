@@ -35,6 +35,7 @@ import {
 	loadConfig,
 	memoryArgs,
 	previewLines,
+	pullArgs,
 	recallContent,
 	recordMetric,
 	runMmry,
@@ -89,6 +90,17 @@ export default function piMmry(pi: ExtensionAPI) {
 	const notify = (ctx: ExtensionContext, message: string, type: "info" | "warning" | "error" = "info") => {
 		if (ctx.hasUI) ctx.ui.notify(message, type);
 		else process.stderr.write(`pi-mmry: ${message}\n`);
+	};
+
+	/** Run `mmry sync pull` once at session start, non-blocking (never delays startup). */
+	const pullOnStart = (ctx: ExtensionContext) => {
+		if (!state.config.pullOnStart) return;
+		runMmry(exec, state.config, ctx.cwd, pullArgs())
+			.then(() => metric(ctx, { event: "pull", ok: true }))
+			.catch((error) => {
+				metric(ctx, { event: "pull", ok: false });
+				notify(ctx, `mmry sync pull failed: ${(error as Error).message}`, "warning");
+			});
 	};
 
 	const setTools = (active: boolean) => {
@@ -160,6 +172,8 @@ export default function piMmry(pi: ExtensionAPI) {
 		state.attached = new Set(customEntries<AttachedMarker>(ctx, ATTACHED_ENTRY).map((marker) => marker.cwd));
 		// The tool is independent of recall: /memory off and disabled recall only stop injection.
 		setTools(state.config.tools);
+		// Best-effort, non-blocking git pull of the store; independent of recall.
+		pullOnStart(ctx);
 		if (!state.enabled) return;
 		// Resumed sessions already carry their recall; do not fetch or show again.
 		if (state.attached.has(ctx.cwd)) {
