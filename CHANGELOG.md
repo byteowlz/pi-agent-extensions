@@ -4,6 +4,20 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-selection and pi-capabilities (2.2.0)
+
+- Add content-only Questions/Review, native TUI and protected tailnet-first
+  browser, shared durable scoped CAS results, text/Other/notes and a Bun CLI.
+  Keep answered, blank/none, skipped/unsure, draft, submitted and cancelled
+  distinct. Selection input never authorizes downstream actions.
+- Add optional versioned presentation advertisements with expiry and lifecycle
+  cleanup; the selection contract import is type-only. Host transports must
+  authenticate users and authorize session scope before forwarding controls.
+- Exact Pi 1.0 startup, no-chat/history control and synthetic provider/tool
+  callback gates, real disposable Chromium reload/races, crash-lock/CAS and
+  lifecycle tests pass. New files are warning-free; legacy collection warnings
+  remain. Authenticated Oqto renderer and deployment acceptance are not claimed.
+
 ### pi-todolist: collapsed sticky widget (2.1.0)
 
 - Default the native sticky widget to one width-bounded progress/task row.

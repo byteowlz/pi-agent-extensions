@@ -3,6 +3,8 @@ CLAUDE.md
 benchmarks/
 scripts/*
 !scripts/test-pi-1-catalog.mjs
+!scripts/test-selection-rpc.mjs
+!scripts/test-selection-tool.mjs
 !scripts/pi-1-imports.test.ts
 # ---- ignr (detected: linux,node) @ 2026-01-30 ----
 

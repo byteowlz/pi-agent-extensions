@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "mode": "questions",
+  "title": "Deployment decisions",
+  "questions": [
+    { "id": "target", "header": "Target", "title": "Where should we deploy?", "kind": "single", "required": true, "allowOther": true, "options": [{ "id": "staging", "label": "Staging", "recommended": true }, { "id": "unsure", "label": "Unsure" }], "note": { "label": "Reason", "multiline": true, "maxLength": 2000 } },
+    { "id": "checks", "title": "Which checks?", "kind": "multiple", "minSelections": 1, "maxSelections": 2, "options": [{ "id": "unit", "label": "Unit tests" }, { "id": "smoke", "label": "Smoke test" }] },
+    { "id": "message", "title": "Release message", "kind": "text", "multiline": true, "maxLength": 4000 }
+  ]
+}
