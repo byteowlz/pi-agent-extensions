@@ -1357,6 +1357,14 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "rename_session",
 		label: "Rename Session",
+		outputSchema: Type.Union([
+			Type.Object({ ok: Type.Literal(true), action: Type.Literal("rename"), previous: Type.String(), name: Type.String() }),
+			Type.Object({
+				ok: Type.Literal(false),
+				action: Type.Literal("rename"),
+				error: Type.Object({ code: Type.String(), message: Type.String() }),
+			}),
+		]),
 		description:
 			"Set the current session's display name to a concise, descriptive title. " +
 			"Use this when you accomplish something meaningful or the session's focus shifts, " +
@@ -1370,12 +1378,25 @@ export default function (pi: ExtensionAPI) {
 					"The readable-id suffix is appended automatically and should not be provided.",
 			}),
 		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(
+			_toolCallId,
+			params,
+			_signal,
+			_onUpdate,
+			ctx
+		): Promise<import("@earendil-works/pi-coding-agent").AgentToolResult<unknown>> {
+			_signal?.throwIfAborted();
 			const config = loadConfig(ctx.cwd);
 			if (!config.enabled) {
 				return {
 					content: [{ type: "text", text: "Auto-rename extension is disabled; cannot rename the session." }],
 					details: { action: "rename", error: "disabled" },
+					isError: true,
+					structuredContent: {
+						ok: false,
+						action: "rename",
+						error: { code: "disabled", message: "Auto-rename extension is disabled" },
+					},
 				};
 			}
 
@@ -1384,6 +1405,8 @@ export default function (pi: ExtensionAPI) {
 				return {
 					content: [{ type: "text", text: "Could not rename: empty session name." }],
 					details: { action: "rename", error: "empty-name" },
+					isError: true,
+					structuredContent: { ok: false, action: "rename", error: { code: "empty_name", message: "Empty session name" } },
 				};
 			}
 
@@ -1393,6 +1416,7 @@ export default function (pi: ExtensionAPI) {
 			return {
 				content: [{ type: "text", text: `Session renamed to "${name}".` }],
 				details: { action: "rename", previous, name },
+				structuredContent: { ok: true, action: "rename", previous, name },
 			};
 		},
 	});

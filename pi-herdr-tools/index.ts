@@ -81,6 +81,7 @@ import {
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { subagentOutputSchema, subagentResult } from "./output.js";
 
 /** A named subagent profile: model allowlist plus optional mode/cap/kind. */
 export interface PresetLoadout {
@@ -2372,199 +2373,247 @@ export default function herdrTools(pi: ExtensionAPI) {
 			"Manage subagents. Default action 'spawn' delegates a task to a NEW subagent in a fresh herdr tab (kind + model + optional loadout). 'list' shows this session's subagents. 'info' returns the available compute/cost/privacy catalog. Spawning is gated by config (enabled/model/kind/allowance) and per-session settings (allow mode).",
 		promptSnippet: "subagent: spawn a subagent (default), list this session's subagents, or get available compute/cost/privacy.",
 		parameters: SubagentToolParamsSchema,
+		outputSchema: subagentOutputSchema,
 		executionMode: "sequential",
 
-		async execute(_toolCallId, params: SubagentToolParams, _signal, _onUpdate, ctx) {
+		async execute(
+			_toolCallId,
+			params: SubagentToolParams,
+			_signal,
+			_onUpdate,
+			ctx
+		): Promise<import("@earendil-works/pi-coding-agent").AgentToolResult<unknown>> {
 			const action = params.action ?? "spawn";
-			ensureSessionState(ctx);
-			const config = loadConfig();
-			const catalog = loadCatalog(ctx.cwd);
-
-			if (action === "info") {
-				const digest = buildCatalogDigest(catalog);
-				const names = Object.keys(catalog.loadouts ?? {}).join(", ");
-				return {
-					content: [
-						{
-							type: "text",
-							text: digest
-								? `Available compute:\n${digest}${names ? `\n\nLoadouts: ${names}` : ""}`
-								: "No model catalog configured.",
-						},
-					],
-					details: { action },
-				};
-			}
-
-			if (action === "list") {
-				const subs = currentState ? Object.values(currentState.subagents) : [];
-				const lines = subs.length
-					? subs.map((t) => `  ${t.name} — ${t.status ?? "unknown"}${t.model ? ` (${t.model})` : ""}`).join("\n")
-					: "No subagents spawned by this session.";
-				return {
-					content: [{ type: "text", text: `Subagents (${subs.length}):\n${lines}` }],
-					details: { action, subagents: subs },
-				};
-			}
-
-			// ---- spawn ----
-			if (!isInHerdr()) {
-				return {
-					content: [
-						{ type: "text", text: "Error: not running inside a herdr-managed pane (HERDR_ENV=1 + HERDR_SOCKET_PATH required)." },
-					],
-					details: { spawned: false },
-				};
-			}
-			if (!config.enabled) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: "Error: subagent spawning is DISABLED (config 'enabled' is false). Run /subagent on to allow it.",
-						},
-					],
-					details: { spawned: false },
-				};
-			}
-			if (!params.task) {
-				return { content: [{ type: "text", text: "Error: 'task' is required to spawn." }], details: { spawned: false } };
-			}
-
-			const kind = params.kind ?? catalog.policy?.defaultKind ?? "pi";
-			let model = params.model;
-
-			if (params.loadout) {
-				const ids = new Set(resolveLoadoutModelIds(catalog, params.loadout));
-				const kinds = new Set(resolveLoadoutKinds(catalog, params.loadout));
-				if (!model) model = `${ctx.model?.provider ?? ""}/${ctx.model?.id ?? ""}`;
-				const allowed = kind === "pi" ? ids.has(model) : ids.size === 0 ? kinds.has(kind) : false;
-				if (!allowed) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: (model "${model}", kind "${kind}") not allowed by loadout "${params.loadout}". Allowed models: ${[...ids].join(", ") || "(none)"}; kinds: ${[...kinds].join(", ") || "(none)"}.`,
-							},
-						],
-						details: { spawned: false },
-					};
-				}
-			} else {
-				if (!model) model = `${ctx.model?.provider ?? ""}/${ctx.model?.id ?? ""}`;
-				const eff = effectiveAllowlist(config);
-				if (!allowedBy(eff.patterns, model)) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: model "${model}" is not in the allowlist (${eff.source}). Allowed: ${eff.patterns.join(", ") || "(none)"}.`,
-							},
-						],
-						details: { spawned: false },
-					};
-				}
-				if (kind !== "pi" && !sessionAllowedKinds(config).includes(kind)) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: kind "${kind}" is not allowed (allowedKinds: ${sessionAllowedKinds(config).join(", ")}). Add it to subagent-config.json or pick a loadout.`,
-							},
-						],
-						details: { spawned: false },
-					};
-				}
-			}
-
-			const maxN = sessionMaxSubagents(config);
-			const active = await countSubagents();
-			if (maxN > 0 && active >= maxN) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Error: subagent allowance reached (${active}/${maxN}). Run /subagent max <n> to raise it, or /subagent close <name> to free a slot.`,
-						},
-					],
-					details: { spawned: false },
-				};
-			}
-
-			const cwd = params.cwd ?? ctx.cwd;
-			const label = params.tabLabel ?? (params.task.replace(/\s+/g, " ").slice(0, 28).trim() || "subagent");
-			const detail = `Tab: ${label}\nKind: ${kind}\nModel: ${model}\nCwd: ${cwd}\n\nTask:\n${params.task.slice(0, 400)}${params.task.length > 400 ? "\n…" : ""}`;
-			const approval = await approveSpawn(ctx, config, detail, kind === "pi");
-			if (!approval.ok) {
-				return { content: [{ type: "text", text: "Spawn cancelled by the user." }], details: { spawned: false } };
-			}
-			if (approval.model) model = approval.model;
-
-			const name = randomName();
-			let paneId: string | undefined;
-			let tabId: string | undefined;
-			let startRes: { error?: unknown; result?: { agent?: { name?: string } } } | undefined;
-			try {
-				const tabRes = await herdr(["tab", "create", "--label", label, "--cwd", cwd, "--no-focus"]);
-				paneId = tabRes?.result?.root_pane?.pane_id;
-				tabId = tabRes?.result?.tab?.tab_id;
-				if (!paneId) {
-					return {
-						content: [
-							{ type: "text", text: `Error: herdr tab create failed. Response: ${JSON.stringify(tabRes).slice(0, 500)}` },
-						],
-						details: { spawned: false },
-					};
-				}
-
-				// A fresh root pane is only startable once its shell sits at its
-				// interactive prompt; herdr rejects too-early attempts with
-				// agent_pane_busy. startAgentWithRetry absorbs that race.
-				const startArgs = kind === "pi" ? ["--", "--model", model] : [];
-				startRes = await startAgentWithRetry(["agent", "start", name, "--kind", kind, "--pane", paneId, ...startArgs]);
-			} catch (err) {
-				const e = err as Error & { stderr?: string };
-				const detail = e?.stderr?.trim() || e?.message || "unknown error";
-				return {
-					content: [{ type: "text", text: `Error: herdr agent start failed after retries: ${detail.slice(0, 500)}` }],
-					details: { spawned: false },
-				};
-			}
-			if (!paneId || startRes?.error || !startRes?.result?.agent?.name) {
-				return {
-					content: [
-						{ type: "text", text: `Error: herdr agent start failed. Response: ${JSON.stringify(startRes).slice(0, 500)}` },
-					],
-					details: { spawned: false },
-				};
-			}
-
-			trackSubagent(ctx, { name, paneId, tabId, model, kind, label, cwd, spawnedAt: Date.now(), status: "idle" });
-
-			const promptRes = await herdr(["agent", "prompt", name, params.task]);
-			const promptOk = !promptRes?.error;
-			startNotifyTimer(pi, ctx);
-			if (!promptOk) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Subagent started but prompt submit reported an error (${JSON.stringify(promptRes).slice(0, 300)}). It may still be idle; read it via: herdr agent read ${name}`,
-						},
-					],
-					details: { spawned: true, name, tabId, paneId, kind, model },
-				};
-			}
-
-			return {
-				content: [
-					{
-						type: "text",
-						text: `Subagent spawned and task submitted.\n\n  agent: ${name}\n  kind: ${kind}\n  model: ${model}\n  tab:  ${tabId}\n  pane: ${paneId}\n  cwd:  ${cwd}\n\nYou will be notified here automatically when it finishes.\nMonitor: herdr agent read ${name} --format text\nWait:   herdr agent wait ${name} --until idle`,
-					},
-				],
-				details: { spawned: true, name, tabId, paneId, kind, model },
+			const sessionId = ctx.sessionManager.getSessionId();
+			let partialEffects = false;
+			let partialChild: { name: string; paneId: string; tabId?: string; model: string; kind: string } | undefined;
+			let didStart = false;
+			const assertActive = () => {
+				_signal?.throwIfAborted();
+				if (currentState?.sessionId !== sessionId) throw new Error("Subagent session changed; retry in the current session");
 			};
+			async function run(): Promise<import("@earendil-works/pi-coding-agent").AgentToolResult<unknown>> {
+				ensureSessionState(ctx);
+				assertActive();
+				const config = loadConfig();
+				const catalog = loadCatalog(ctx.cwd);
+
+				if (action === "info") {
+					const digest = buildCatalogDigest(catalog);
+					const names = Object.keys(catalog.loadouts ?? {}).join(", ");
+					return {
+						content: [
+							{
+								type: "text",
+								text: digest
+									? `Available compute:\n${digest}${names ? `\n\nLoadouts: ${names}` : ""}`
+									: "No model catalog configured.",
+							},
+						],
+						details: { action, catalog },
+					};
+				}
+
+				if (action === "list") {
+					const subs = currentState ? Object.values(currentState.subagents) : [];
+					const lines = subs.length
+						? subs.map((t) => `  ${t.name} — ${t.status ?? "unknown"}${t.model ? ` (${t.model})` : ""}`).join("\n")
+						: "No subagents spawned by this session.";
+					return {
+						content: [{ type: "text", text: `Subagents (${subs.length}):\n${lines}` }],
+						details: { action, subagents: subs },
+					};
+				}
+
+				// ---- spawn ----
+				if (!isInHerdr()) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: "Error: not running inside a herdr-managed pane (HERDR_ENV=1 + HERDR_SOCKET_PATH required).",
+							},
+						],
+						details: { spawned: false },
+					};
+				}
+				if (!config.enabled) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: "Error: subagent spawning is DISABLED (config 'enabled' is false). Run /subagent on to allow it.",
+							},
+						],
+						details: { spawned: false },
+					};
+				}
+				if (!params.task) {
+					return { content: [{ type: "text", text: "Error: 'task' is required to spawn." }], details: { spawned: false } };
+				}
+
+				const kind = params.kind ?? catalog.policy?.defaultKind ?? "pi";
+				let model = params.model;
+
+				if (params.loadout) {
+					const ids = new Set(resolveLoadoutModelIds(catalog, params.loadout));
+					const kinds = new Set(resolveLoadoutKinds(catalog, params.loadout));
+					if (!model) model = `${ctx.model?.provider ?? ""}/${ctx.model?.id ?? ""}`;
+					const allowed = kind === "pi" ? ids.has(model) : ids.size === 0 ? kinds.has(kind) : false;
+					if (!allowed) {
+						return {
+							content: [
+								{
+									type: "text",
+									text: `Error: (model "${model}", kind "${kind}") not allowed by loadout "${params.loadout}". Allowed models: ${[...ids].join(", ") || "(none)"}; kinds: ${[...kinds].join(", ") || "(none)"}.`,
+								},
+							],
+							details: { spawned: false },
+						};
+					}
+				} else {
+					if (!model) model = `${ctx.model?.provider ?? ""}/${ctx.model?.id ?? ""}`;
+					const eff = effectiveAllowlist(config);
+					if (!allowedBy(eff.patterns, model)) {
+						return {
+							content: [
+								{
+									type: "text",
+									text: `Error: model "${model}" is not in the allowlist (${eff.source}). Allowed: ${eff.patterns.join(", ") || "(none)"}.`,
+								},
+							],
+							details: { spawned: false },
+						};
+					}
+					if (kind !== "pi" && !sessionAllowedKinds(config).includes(kind)) {
+						return {
+							content: [
+								{
+									type: "text",
+									text: `Error: kind "${kind}" is not allowed (allowedKinds: ${sessionAllowedKinds(config).join(", ")}). Add it to subagent-config.json or pick a loadout.`,
+								},
+							],
+							details: { spawned: false },
+						};
+					}
+				}
+
+				const maxN = sessionMaxSubagents(config);
+				const active = await countSubagents();
+				if (maxN > 0 && active >= maxN) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Error: subagent allowance reached (${active}/${maxN}). Run /subagent max <n> to raise it, or /subagent close <name> to free a slot.`,
+							},
+						],
+						details: { spawned: false },
+					};
+				}
+
+				const cwd = params.cwd ?? ctx.cwd;
+				const label = params.tabLabel ?? (params.task.replace(/\s+/g, " ").slice(0, 28).trim() || "subagent");
+				const detail = `Tab: ${label}\nKind: ${kind}\nModel: ${model}\nCwd: ${cwd}\n\nTask:\n${params.task.slice(0, 400)}${params.task.length > 400 ? "\n…" : ""}`;
+				assertActive();
+				const approval = await approveSpawn(ctx, config, detail, kind === "pi");
+				assertActive();
+				if (!approval.ok) {
+					return { content: [{ type: "text", text: "Spawn cancelled by the user." }], details: { spawned: false } };
+				}
+				if (approval.model) model = approval.model;
+
+				const name = randomName();
+				let paneId: string | undefined;
+				let tabId: string | undefined;
+				let startRes: { error?: unknown; result?: { agent?: { name?: string } } } | undefined;
+				try {
+					assertActive();
+					const tabRes = await herdr(["tab", "create", "--label", label, "--cwd", cwd, "--no-focus"]);
+					partialEffects = true;
+					paneId = tabRes?.result?.root_pane?.pane_id;
+					tabId = tabRes?.result?.tab?.tab_id;
+					if (!paneId) {
+						return {
+							content: [
+								{ type: "text", text: `Error: herdr tab create failed. Response: ${JSON.stringify(tabRes).slice(0, 500)}` },
+							],
+							details: { spawned: false },
+						};
+					}
+
+					// A fresh root pane is only startable once its shell sits at its
+					// interactive prompt; herdr rejects too-early attempts with
+					// agent_pane_busy. startAgentWithRetry absorbs that race.
+					const startArgs = kind === "pi" ? ["--", "--model", model] : [];
+					assertActive();
+					partialChild = { name, paneId, tabId, model, kind };
+					startRes = await startAgentWithRetry(["agent", "start", name, "--kind", kind, "--pane", paneId, ...startArgs]);
+					didStart = !startRes?.error && Boolean(startRes?.result?.agent?.name);
+				} catch (err) {
+					const e = err as Error & { stderr?: string };
+					const detail = e?.stderr?.trim() || e?.message || "unknown error";
+					return {
+						content: [{ type: "text", text: `Error: herdr agent start failed after retries: ${detail.slice(0, 500)}` }],
+						details: { spawned: false },
+					};
+				}
+				if (!paneId || startRes?.error || !startRes?.result?.agent?.name) {
+					return {
+						content: [
+							{ type: "text", text: `Error: herdr agent start failed. Response: ${JSON.stringify(startRes).slice(0, 500)}` },
+						],
+						details: { spawned: false },
+					};
+				}
+
+				assertActive();
+				trackSubagent(ctx, { name, paneId, tabId, model, kind, label, cwd, spawnedAt: Date.now(), status: "idle" });
+
+				const promptRes = await herdr(["agent", "prompt", name, params.task]);
+				const promptOk = !promptRes?.error;
+				startNotifyTimer(pi, ctx);
+				if (!promptOk) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Subagent started but prompt submit reported an error (${JSON.stringify(promptRes).slice(0, 300)}). It may still be idle; read it via: herdr agent read ${name}`,
+							},
+						],
+						details: { spawned: true, promptSubmitted: false, name, tabId, paneId, kind, model },
+					};
+				}
+
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Subagent spawned and task submitted.\n\n  agent: ${name}\n  kind: ${kind}\n  model: ${model}\n  tab:  ${tabId}\n  pane: ${paneId}\n  cwd:  ${cwd}\n\nYou will be notified here automatically when it finishes.\nMonitor: herdr agent read ${name} --format text\nWait:   herdr agent wait ${name} --until idle`,
+						},
+					],
+					details: { spawned: true, promptSubmitted: true, name, tabId, paneId, kind, model },
+				};
+			}
+			try {
+				const result = await run();
+				if (partialEffects && result.details && typeof result.details === "object")
+					result.details = {
+						...result.details,
+						partialEffects,
+						...(partialChild ? { partialChild } : {}),
+						...(didStart ? { spawned: true, ...partialChild } : {}),
+					};
+				return subagentResult(action, result);
+			} catch (error) {
+				if (action !== "spawn") throw error;
+				return subagentResult(action, {
+					content: [
+						{ type: "text", text: (error instanceof Error ? error.message : "Subagent operation failed").slice(0, 1600) },
+					],
+					details: { spawned: didStart, partialEffects, ...(partialChild ? { partialChild, ...partialChild } : {}) },
+				});
+			}
 		},
 	});
 

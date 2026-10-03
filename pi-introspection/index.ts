@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { boundReflection, reflectionOutputSchema } from "./output.js";
 
 // Use unknown + optional chaining instead of any
 interface SessionManagerLike {
@@ -137,7 +138,7 @@ function collectSessionInfo(ctx: ExtensionContext, pi: ExtensionAPI): Record<str
 function collectExtensionsInfo(ctx: ExtensionContext, pi: ExtensionAPI): Record<string, unknown> {
 	const activeTools = pi.getActiveTools?.() ?? [];
 	const allTools = pi.getAllTools?.()?.map((t) => ({ name: t.name, description: t.description })) ?? [];
-	const commands = pi.getCommands?.() ?? [];
+	const commands = (pi.getCommands?.() ?? []).map((command) => ({ name: command.name, description: command.description }));
 	const installed = discoverExtensions(ctx.cwd);
 
 	return {
@@ -161,6 +162,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "self_reflection",
 		label: "Self Reflection",
+		outputSchema: reflectionOutputSchema,
 		description:
 			"Query information about the current pi session, including the active model, context usage, and configuration. " +
 			"Use this when you need to know which model you are, what your capabilities are, or session metadata.",
@@ -190,9 +192,18 @@ export default function (pi: ExtensionAPI) {
 				result.extensions = collectExtensionsInfo(ctx, pi);
 			}
 
+			const bounded = boundReflection(result);
 			return {
-				content: [{ type: "text", text: formatResult(result, infoType) }],
-				details: result,
+				content: [
+					{
+						type: "text",
+						text:
+							formatResult(bounded, infoType) +
+							(bounded.truncated ? "\n[Lists/text truncated to 200 items/4000 characters.]" : ""),
+					},
+				],
+				details: bounded,
+				structuredContent: { info: infoType, ...bounded },
 			};
 		},
 	});

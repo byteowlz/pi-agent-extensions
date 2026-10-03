@@ -18,7 +18,7 @@ import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@ea
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type HistorySearchConfig, loadConfig, resolveSessionsBase } from "./config.js";
-import { type GuardOutcome, applyGuard, computeBudget } from "./context-guard.js";
+import { computeBudget } from "./context-guard.js";
 import {
 	type GrepResult,
 	type HistoryHit,
@@ -36,6 +36,7 @@ import {
 	rebuildProjectIndex,
 	updateProjectIndex,
 } from "./indexer.js";
+import { historyFailure, historyOutputSchemas, historyResult } from "./output.js";
 import { HistoryOverlay } from "./overlay.js";
 import { type RecallParams, type RecallReport, formatRecall, searchRecall } from "./recall.js";
 
@@ -242,22 +243,8 @@ export function formatGrep(r: GrepResult, maxTotalChars = 3000): string {
 	return JSON.stringify(result);
 }
 
-/** Compact, stable summary of a guard outcome for tool `details`. */
-function guardMeta(g: GuardOutcome): Record<string, unknown> {
-	return {
-		truncated: g.truncated,
-		origChars: g.origChars,
-		budgetChars: g.budgetChars,
-		remainingTokens: g.remainingTokens,
-		contextWindow: g.contextWindow,
-	};
-}
-
 function disabled(action: string): AgentToolResult<unknown> {
-	return {
-		content: [{ type: "text", text: "pi-history-search is disabled (set enabled=true in history-search.json)." }],
-		details: { action, error: "disabled" },
-	};
+	return historyFailure(action, "disabled", "pi-history-search is disabled (set enabled=true in history-search.json).");
 }
 
 // ── Search execution ─────────────────────────────────────────────────
@@ -397,25 +384,20 @@ export default function historySearch(pi: ExtensionAPI): void {
 			"A HistorySearch miss is not proof of absence: check scope, filters, and attempts; use mode='grep' for a literal-first scan that bypasses stale indexes.",
 		],
 		parameters: HistorySearchParams,
+		outputSchema: historyOutputSchemas.search,
 
 		async execute(_id, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
 			const config = loadConfig(ctx.cwd);
 			if (!config.enabled) return disabled("search");
 			try {
+				_signal?.throwIfAborted();
 				const report = await runSearchReport(ctx, config, params);
-				const text = formatRecall(report, params.maxTotalChars);
-				const outcome = applyGuard(text, ctx, config.contextGuard, "HistorySearch");
-				const emitted = JSON.parse(text) as RecallReport;
-				return {
-					content: [{ type: "text", text: outcome.text }],
-					details: { action: "search", ...emitted, count: emitted.hits.length, contextGuard: guardMeta(outcome) },
-				};
+				_signal?.throwIfAborted();
+				const emitted = JSON.parse(formatRecall(report, params.maxTotalChars)) as RecallReport;
+				return historyResult("search", emitted, ctx, config, params.maxTotalChars ?? 3000);
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
-				return {
-					content: [{ type: "text", text: `History search failed: ${msg}` }],
-					details: { action: "search", error: msg },
-				};
+				return historyFailure("search", _signal?.aborted ? "aborted" : "search_failed", `History search failed: ${msg}`);
 			}
 		},
 
@@ -440,6 +422,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 		description:
 			"List branches in the current session tree (or whole project) with mechanical metadata only: ids, parent/root, fork msg, previews, files, and commands.",
 		parameters: HistoryBranchesParams,
+		outputSchema: historyOutputSchemas.branches,
 		async execute(_id, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
 			const config = loadConfig(ctx.cwd);
 			if (!config.enabled) return disabled("branches");
@@ -472,13 +455,13 @@ export default function historySearch(pi: ExtensionAPI): void {
 						.includes(grep)
 				);
 			}
+			_signal?.throwIfAborted();
 			const limit = params.limit ?? 50;
+			const truncated = branches.length > limit;
 			branches = branches.slice(0, limit);
-			const outcome = applyGuard(formatBranches(branches, scope), ctx, config.contextGuard, "HistoryBranches");
-			return {
-				content: [{ type: "text", text: outcome.text }],
-				details: { action: "branches", scope, count: branches.length, branches, contextGuard: guardMeta(outcome) },
-			};
+			return historyResult("branches", { scope, branches, truncated }, ctx, config, 60000, (data) =>
+				formatBranches(data.branches, scope)
+			);
 		},
 	});
 
@@ -492,6 +475,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 			"session, which defaults to a compact `outline` (user+assistant only, tool noise dropped) — set view='transcript' " +
 			"for everything. Pass matchPosition from a search hit to reach evidence deep inside a long message. Identify the session with `sessionId` from a HistorySearch result.",
 		parameters: HistoryReadParams,
+		outputSchema: historyOutputSchemas.read,
 
 		async execute(_id, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
 			const config = loadConfig(ctx.cwd);
@@ -499,19 +483,14 @@ export default function historySearch(pi: ExtensionAPI): void {
 			try {
 				const id = params.branchId ?? params.sessionId;
 				if (!id) {
-					return {
-						content: [{ type: "text", text: "Provide either sessionId or branchId." }],
-						details: { action: "read", error: "missing id" },
-					};
+					return historyFailure("read", "missing_id", "Provide either sessionId or branchId.");
 				}
 				const base = resolveSessionsBase(config);
 				const filePath = findSessionPath(base, id, projectDir(base, ctx.cwd));
 				if (!filePath) {
-					return {
-						content: [{ type: "text", text: `No accessible session/branch found with id "${id}".` }],
-						details: { action: "read", error: "not found" },
-					};
+					return historyFailure("read", "not_found", `No accessible session/branch found with id "${id}".`);
 				}
+				_signal?.throwIfAborted();
 				const r = readSession(filePath, {
 					query: params.query,
 					around: params.around,
@@ -526,23 +505,17 @@ export default function historySearch(pi: ExtensionAPI): void {
 					// context budget so a huge session clips at message boundaries, not mid-stream.
 					maxTotalChars: params.maxTotalChars ?? computeBudget(ctx, config.contextGuard).budgetChars,
 				});
-				const outcome = applyGuard(formatRead(r), ctx, config.contextGuard, "HistoryRead");
-				return {
-					content: [{ type: "text", text: outcome.text }],
-					details: {
-						action: "read",
-						sessionId: r.sessionId,
-						mode: r.mode,
-						returned: r.messages.length,
-						contextGuard: guardMeta(outcome),
-					},
-				};
+				return historyResult(
+					"read",
+					{ ...r, roleFilter: params.roleFilter ?? (params.view === "transcript" ? "all" : "conversation") },
+					ctx,
+					config,
+					params.maxTotalChars ?? 16000,
+					formatRead
+				);
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
-				return {
-					content: [{ type: "text", text: `History read failed: ${msg}` }],
-					details: { action: "read", error: msg },
-				};
+				return historyFailure("read", _signal?.aborted ? "aborted" : "read_failed", `History read failed: ${msg}`);
 			}
 		},
 
@@ -573,26 +546,22 @@ export default function historySearch(pi: ExtensionAPI): void {
 			"Typical flow: HistorySearch finds the session, then HistoryGrep extracts the exact lines. Identify the session with sessionId from a HistorySearch result.",
 		promptSnippet: "HistoryGrep — fast exact/regex search inside one past session (msgIndex-precise).",
 		parameters: HistoryGrepParams,
+		outputSchema: historyOutputSchemas.grep,
 
 		async execute(_id, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
 			const config = loadConfig(ctx.cwd);
 			if (!config.enabled) return disabled("grep");
 			const id = params.branchId ?? params.sessionId;
 			if (!id) {
-				return {
-					content: [{ type: "text", text: "Provide either sessionId or branchId." }],
-					details: { action: "grep", error: "missing id" },
-				};
+				return historyFailure("grep", "missing_id", "Provide either sessionId or branchId.");
 			}
 			const base = resolveSessionsBase(config);
 			const filePath = findSessionPath(base, id, projectDir(base, ctx.cwd));
 			if (!filePath) {
-				return {
-					content: [{ type: "text", text: `No accessible session/branch found with id "${id}".` }],
-					details: { action: "grep", error: "not found" },
-				};
+				return historyFailure("grep", "not_found", `No accessible session/branch found with id "${id}".`);
 			}
 			try {
+				_signal?.throwIfAborted();
 				const r = grepSession(filePath, {
 					pattern: params.pattern,
 					regex: params.regex,
@@ -604,26 +573,16 @@ export default function historySearch(pi: ExtensionAPI): void {
 					maxMatches: params.maxMatches,
 					maxChars: params.maxChars,
 				});
-				const outcome = applyGuard(formatGrep(r, params.maxTotalChars), ctx, config.contextGuard, "HistoryGrep");
-				return {
-					content: [{ type: "text", text: outcome.text }],
-					details: {
-						action: "grep",
-						sessionId: r.sessionId,
-						pattern: r.pattern,
-						attempts: r.attempts,
-						warnings: r.warnings,
-						matchedMessages: r.matchedMessages,
-						matches: r.matches.length,
-						contextGuard: guardMeta(outcome),
-					},
-				};
+				return historyResult(
+					"grep",
+					JSON.parse(formatGrep(r, params.maxTotalChars)) as object,
+					ctx,
+					config,
+					params.maxTotalChars ?? 3000
+				);
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
-				return {
-					content: [{ type: "text", text: `History grep failed: ${msg}` }],
-					details: { action: "grep", error: msg },
-				};
+				return historyFailure("grep", _signal?.aborted ? "aborted" : "grep_failed", `History grep failed: ${msg}`);
 			}
 		},
 

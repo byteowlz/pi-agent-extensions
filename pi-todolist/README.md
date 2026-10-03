@@ -62,8 +62,10 @@ The Oqto frontend automatically parses `Todo` tool calls and displays todos in t
 ## Commands
 
 - `/todo` - Interactive menu to add, start, complete, cancel, edit, delete, or clear todos
-- `/todos` - Display current todos in the notification area
-- `/todos expand|collapse|toggle` - Override sticky widget mode for this session; resets on session start/switch and tree navigation (no settings are written)
+- `/todo list` - Display current todos in the notification area
+- `/todo expand|collapse|toggle` - Override sticky widget mode for this session; resets on session start/switch and tree navigation (no settings are written)
+
+`/todo` is the single command; the former `/todos` command has been removed.
 
 ## Configuration
 
