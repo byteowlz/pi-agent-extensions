@@ -23,13 +23,13 @@ import errno
 import json
 import os
 import re
+import shutil
 import socket
 import sys
 
 CONNECT_TIMEOUT_S = 5.0
 REPLY_TIMEOUT_S = 15.0
 MAX_REPLY_BYTES = 64 * 1024
-MAX_FILE_BYTES = 8 * 1024 * 1024  # xlatch caps shared files at 4 MiB; stay tolerant
 SAFE_CHARS = re.compile(r"[^A-Za-z0-9._-]")
 
 
@@ -73,9 +73,10 @@ def save_file(directory, name, data_b64):
         emit({"ok": False, "text": "pi bridge: shared file was not valid base64."})
     if not blob:
         emit({"ok": False, "text": "pi bridge: shared file was empty."})
-    if len(blob) > MAX_FILE_BYTES:
-        emit({"ok": False, "text": "pi bridge: shared file is too large."})
+    return write_file(directory, name, blob=blob)
 
+
+def write_file(directory, name, blob=None, source=None):
     try:
         os.makedirs(directory, mode=0o700, exist_ok=True)
     except OSError:
@@ -94,10 +95,29 @@ def save_file(directory, name, data_b64):
             if exc.errno == errno.EACCES:
                 emit({"ok": False, "text": "pi bridge: permission denied writing the shared file."})
             emit({"ok": False, "text": "pi bridge: could not write the shared file."})
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(blob)
-        return candidate, len(blob)
+        try:
+            with os.fdopen(fd, "wb") as destination:
+                if source is not None:
+                    with open(source, "rb") as incoming:
+                        shutil.copyfileobj(incoming, destination, length=1024 * 1024)
+                else:
+                    destination.write(blob)
+            return candidate, os.path.getsize(candidate)
+        except OSError:
+            try:
+                os.unlink(candidate)
+            except OSError:
+                pass
+            emit({"ok": False, "text": "pi bridge: could not copy the shared file."})
     emit({"ok": False, "text": "pi bridge: too many name collisions in the destination directory."})
+
+
+def copy_file(directory, name, source):
+    if not isinstance(source, str) or not os.path.isabs(source):
+        emit({"ok": False, "text": "pi bridge: executor did not provide a valid file path."})
+    if not os.path.isfile(source):
+        emit({"ok": False, "text": "pi bridge: uploaded file is no longer available."})
+    return write_file(directory, name, source=source)
 
 
 def read_input():
@@ -129,7 +149,10 @@ def build_payload(doc, directory):
     if isinstance(file_obj, dict):
         if not directory:
             emit({"ok": False, "text": "pi bridge: this action is not configured to accept files."})
-        path, size = save_file(directory, file_obj.get("name"), file_obj.get("data_base64"))
+        if isinstance(file_obj.get("path"), str):
+            path, size = copy_file(directory, file_obj.get("name"), file_obj.get("path"))
+        else:
+            path, size = save_file(directory, file_obj.get("name"), file_obj.get("data_base64"))
         fmime = file_obj.get("mime_type")
         payload["kind"] = "file"
         payload["path"] = path
