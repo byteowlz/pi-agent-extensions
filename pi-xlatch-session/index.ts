@@ -42,6 +42,7 @@ const SLOT_DIR = path.join(ROOT, "slots");
 const INCOMING = path.join(os.homedir(), "xlatch", "incoming");
 const MANIFEST_DIR = path.join(ROOT, "manifests");
 const ADAPTER = path.join(ROOT, "adapter.py");
+const BUNDLED_ADAPTER = fileURLToPath(new URL("./adapter.py", import.meta.url));
 const CLAIMS = path.join(ROOT, "claims.json");
 const ICON = fileURLToPath(new URL("./assets/pi-coding-agent.svg", import.meta.url));
 const ICON_DARK = fileURLToPath(new URL("./assets/pi-coding-agent-dark.svg", import.meta.url));
@@ -108,12 +109,37 @@ function adapterSha256(): string {
 	return createHash("sha256").update(fs.readFileSync(ADAPTER)).digest("hex");
 }
 
+function installAdapter(): void {
+	const bundled = fs.readFileSync(BUNDLED_ADAPTER);
+	fs.mkdirSync(ROOT, { recursive: true, mode: 0o700 });
+	try {
+		if (fs.readFileSync(ADAPTER).equals(bundled)) {
+			fs.chmodSync(ADAPTER, 0o700);
+			return;
+		}
+	} catch {
+		// Missing or unreadable adapters are replaced atomically below.
+	}
+	const temporary = path.join(ROOT, `.adapter-${process.pid}-${Date.now()}.tmp`);
+	try {
+		fs.writeFileSync(temporary, bundled, { flag: "wx", mode: 0o700 });
+		fs.renameSync(temporary, ADAPTER);
+	} finally {
+		try {
+			fs.unlinkSync(temporary);
+		} catch {
+			// rename already consumed the temporary file.
+		}
+	}
+}
+
 function buildManifest(slot: string) {
 	return {
 		id: `pi.send.${slot}`,
 		title: `Send to pi (${slot})`,
-		description: `Deliver shared text or a link to the pi session currently connected to the ${slot} slot.`,
-		accepts: ["text/plain", "text/uri-list", "image/*", "audio/*", "video/*", "application/pdf", "application/octet-stream"],
+		description: `Deliver shared text, links, or files to the pi session currently connected to the ${slot} slot. Files are copied to the target machine and Pi receives their local path.`,
+		accepts: ["*/*"],
+		file_input: "path",
 		input_schema: {
 			type: "object",
 			required: ["mime_type"],
@@ -122,12 +148,15 @@ function buildManifest(slot: string) {
 				mime_type: { type: "string" },
 				file: {
 					type: "object",
-					required: ["name", "data_base64"],
+					required: ["name", "mime_type"],
 					properties: {
 						name: { type: "string" },
 						mime_type: { type: "string" },
 						data_base64: { type: "string" },
+						artifact_id: { type: "string" },
+						size: { type: "integer", minimum: 0 },
 					},
+					oneOf: [{ required: ["data_base64"] }, { required: ["artifact_id", "size"] }],
 					additionalProperties: false,
 				},
 			},
@@ -248,6 +277,7 @@ function createShareServer(handle: (payload: SharePayload) => unknown): net.Serv
 }
 
 export default function xlatchSession(pi: ExtensionAPI) {
+	installAdapter();
 	let server: net.Server | undefined;
 	let boundSlot: string | undefined;
 	let ctxRef: ExtensionContext | undefined;

@@ -1,7 +1,7 @@
 # xlatch-session
 
-Share text or a link from your iPhone straight into **one specific running pi
-session**. The session appears in the iOS share sheet as a normal xlatch action.
+Share text, links, or files from your iPhone straight into **one specific running
+pi session**. The session appears in the iOS share sheet as a normal xlatch action.
 Pi targets use the Pi Coding Agent mark supplied by this extension. xlatch
 embeds the icon into each registered action for offline rendering; users may
 still replace it with a per-device icon override.
@@ -72,6 +72,10 @@ The practical consequence: after editing the adapter, reconnect the slot and
 approve the new revision. There is no `xlatch unregister`/`deactivate` command;
 supersession by re-registration is the mechanism.
 
+The extension atomically installs its bundled adapter into
+`~/.pi/agent/xlatch-pi/adapter.py` when it loads, so updating the extension and
+running `/reload` cannot leave an older adapter behind.
+
 ## Commands
 
 | command | effect |
@@ -108,13 +112,13 @@ phone. Filenames from the phone are reduced to a safe basename
 (`../../../evil photo.png` becomes `evil_photo.png`), and existing files are
 never overwritten — collisions get a numeric suffix via `O_EXCL`.
 
-### Size limit
+### Large files
 
-xlatch caps a shared file at **4 MiB** (requests 8 MiB, results 6 MiB). The
-manifest advertises `video/*` and `audio/*` so they appear in the share sheet,
-but anything above that cap is rejected by the broker before it ever reaches the
-adapter. For large media, share with the built-in `save.incoming` action
-instead and hand pi the path.
+The action accepts every MIME type. Small files may arrive inline; larger files
+use xlatch's resumable upload path. The broker supplies the approved executor a
+private temporary path, and the adapter streams a copy into
+`~/xlatch/incoming` before returning. The maximum file size is therefore the
+server's upload policy rather than a limit in this extension.
 
 ## Delivery while idle or busy
 
@@ -169,9 +173,8 @@ grant. That is the intended trust behavior, not a bug.
 
 ## Scope
 
-- `accepts` advertises only `text/plain` and `text/uri-list`, which is what the
-  bridge really delivers. The adapter defensively parses a `file` payload but the
-  extension rejects it rather than pretend to support it.
+- `accepts: ["*/*"]` makes arbitrary file types available in the share sheet.
+  Files are copied locally and represented to Pi only by their path and MIME type.
 - Commands are **trusted host execution**, not a sandbox. They run as the daemon's
   user with a cleared environment and fixed PATH, which is why the adapter uses
   the absolute system interpreter `/usr/bin/python3` and an absolute socket path.
