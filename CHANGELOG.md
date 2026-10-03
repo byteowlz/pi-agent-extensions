@@ -4,6 +4,18 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Structured codemode outputs (2.3.0)
+
+- Add explicit structured results to history, memory, Todo, introspection,
+  rename, xlatch, subagent and privileged execution tools while retaining
+  human-readable output. Audit maintained registrations with a coverage manifest.
+- Preserve secret redaction through bash streaming, structured objects and
+  spill files; add native exact Pi 1 codemode composition and abort probes.
+- Consolidate todo display controls under `/todo list|expand|collapse|toggle`.
+- Reconcile main's arbitrary-file xlatch delivery without downgrading Pi 1 pins.
+- Optional introspection contributors and history UI-thread isolation remain
+  separate follow-up work; these output contracts do not claim to fix UI stalls.
+
 ### pi-selection and pi-capabilities (2.2.0)
 
 - Add content-only Questions/Review, native TUI and protected tailnet-first

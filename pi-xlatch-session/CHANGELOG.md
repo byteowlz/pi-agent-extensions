@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.0
+
+- Accept every MIME type, including PDFs and document formats.
+- Use xlatch's executor-provided file path for resumable uploads, copy files of any configured size into `~/xlatch/incoming`, and send only the resulting local path to Pi.
+
 ## 1.3.0
 
 - Include successful typed Save for Later preparation results as cached context alongside the original content.

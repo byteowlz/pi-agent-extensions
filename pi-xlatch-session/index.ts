@@ -33,6 +33,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { Type } from "typebox";
 
 import { type ParkedContent, type ParkedItem, formatParkedContent, formatParkedList } from "./src/later.js";
+import { checkedContent, checkedItems, itemOutput, laterOutputSchema, readOutput } from "./src/output.js";
 import { SlotEndpoint, removeDeadSocket, socketLive } from "./src/slot.js";
 
 const execFileAsync = promisify(execFile);
@@ -42,6 +43,7 @@ const SLOT_DIR = path.join(ROOT, "slots");
 const INCOMING = path.join(os.homedir(), "xlatch", "incoming");
 const MANIFEST_DIR = path.join(ROOT, "manifests");
 const ADAPTER = path.join(ROOT, "adapter.py");
+const BUNDLED_ADAPTER = fileURLToPath(new URL("./adapter.py", import.meta.url));
 const CLAIMS = path.join(ROOT, "claims.json");
 const ICON = fileURLToPath(new URL("./assets/pi-coding-agent.svg", import.meta.url));
 const ICON_DARK = fileURLToPath(new URL("./assets/pi-coding-agent-dark.svg", import.meta.url));
@@ -108,12 +110,37 @@ function adapterSha256(): string {
 	return createHash("sha256").update(fs.readFileSync(ADAPTER)).digest("hex");
 }
 
+function installAdapter(): void {
+	const bundled = fs.readFileSync(BUNDLED_ADAPTER);
+	fs.mkdirSync(ROOT, { recursive: true, mode: 0o700 });
+	try {
+		if (fs.readFileSync(ADAPTER).equals(bundled)) {
+			fs.chmodSync(ADAPTER, 0o700);
+			return;
+		}
+	} catch {
+		// Missing or unreadable adapters are replaced atomically below.
+	}
+	const temporary = path.join(ROOT, `.adapter-${process.pid}-${Date.now()}.tmp`);
+	try {
+		fs.writeFileSync(temporary, bundled, { flag: "wx", mode: 0o700 });
+		fs.renameSync(temporary, ADAPTER);
+	} finally {
+		try {
+			fs.unlinkSync(temporary);
+		} catch {
+			// rename already consumed the temporary file.
+		}
+	}
+}
+
 function buildManifest(slot: string) {
 	return {
 		id: `pi.send.${slot}`,
 		title: `Send to pi (${slot})`,
-		description: `Deliver shared text or a link to the pi session currently connected to the ${slot} slot.`,
-		accepts: ["text/plain", "text/uri-list", "image/*", "audio/*", "video/*", "application/pdf", "application/octet-stream"],
+		description: `Deliver shared text, links, or files to the pi session currently connected to the ${slot} slot. Files are copied to the target machine and Pi receives their local path.`,
+		accepts: ["*/*"],
+		file_input: "path",
 		input_schema: {
 			type: "object",
 			required: ["mime_type"],
@@ -122,12 +149,15 @@ function buildManifest(slot: string) {
 				mime_type: { type: "string" },
 				file: {
 					type: "object",
-					required: ["name", "data_base64"],
+					required: ["name", "mime_type"],
 					properties: {
 						name: { type: "string" },
 						mime_type: { type: "string" },
 						data_base64: { type: "string" },
+						artifact_id: { type: "string" },
+						size: { type: "integer", minimum: 0 },
 					},
+					oneOf: [{ required: ["data_base64"] }, { required: ["artifact_id", "size"] }],
 					additionalProperties: false,
 				},
 			},
@@ -198,20 +228,21 @@ async function staleRegistrations(): Promise<string[]> {
 	}
 }
 
-async function laterList(): Promise<ParkedItem[]> {
-	const { stdout } = await execFileAsync("xlatch", ["later", "list", "--json"], { maxBuffer: 4 * 1024 * 1024 });
-	return JSON.parse(stdout) as ParkedItem[];
+async function laterList(signal?: AbortSignal): Promise<ParkedItem[]> {
+	const { stdout } = await execFileAsync("xlatch", ["later", "list", "--json"], { maxBuffer: 4 * 1024 * 1024, signal });
+	return checkedItems(JSON.parse(stdout));
 }
 
-async function laterRead(id: string): Promise<ParkedContent> {
+async function laterRead(id: string, signal?: AbortSignal): Promise<ParkedContent> {
 	const { stdout } = await execFileAsync("xlatch", ["later", "read", id, "--directory", INCOMING, "--json"], {
 		maxBuffer: 4 * 1024 * 1024,
+		signal,
 	});
-	return JSON.parse(stdout) as ParkedContent;
+	return checkedContent(JSON.parse(stdout));
 }
 
-async function laterRemove(id: string): Promise<void> {
-	await execFileAsync("xlatch", ["later", "remove", id, "--json"], { maxBuffer: 4 * 1024 * 1024 });
+async function laterRemove(id: string, signal?: AbortSignal): Promise<void> {
+	await execFileAsync("xlatch", ["later", "remove", id, "--json"], { maxBuffer: 4 * 1024 * 1024, signal });
 }
 
 function createShareServer(handle: (payload: SharePayload) => unknown): net.Server {
@@ -248,6 +279,7 @@ function createShareServer(handle: (payload: SharePayload) => unknown): net.Serv
 }
 
 export default function xlatchSession(pi: ExtensionAPI) {
+	installAdapter();
 	let server: net.Server | undefined;
 	let boundSlot: string | undefined;
 	let ctxRef: ExtensionContext | undefined;
@@ -570,32 +602,57 @@ export default function xlatchSession(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "xlatch_later",
 		label: "xlatch Save for Later",
+		outputSchema: laterOutputSchema,
 		description:
 			"List, read, or remove content parked in xlatch Save for Later. This works without connecting the current Pi session to an xlatch live-share slot. Read is non-destructive; remove only after the content has been handled.",
 		parameters: Type.Object({
 			action: Type.Optional(Type.String({ enum: ["list", "read", "remove"], default: "list" })),
 			id: Type.Optional(Type.String({ description: "Parked item id, required for read or remove" })),
 		}),
-		async execute(_toolCallId, params) {
+		async execute(_toolCallId, params, signal): Promise<import("@earendil-works/pi-coding-agent").AgentToolResult<unknown>> {
 			try {
 				const action = params.action ?? "list";
 				if (action === "list") {
-					const items = await laterList();
-					return { content: [{ type: "text" as const, text: formatParkedList(items) }], details: null };
+					signal?.throwIfAborted();
+					const all = await laterList(signal);
+					const items = all.slice(0, 100).map(itemOutput);
+					const truncated = all.length > 100 || JSON.stringify(all.slice(0, 100)) !== JSON.stringify(items);
+					return {
+						content: [
+							{ type: "text" as const, text: formatParkedList(items) + (truncated ? "\n[Truncated list/metadata.]" : "") },
+						],
+						details: null,
+						structuredContent: { ok: true, action, items, total: all.length, truncated },
+					};
 				}
 				const id = params.id?.trim();
 				if (!id) throw new Error(`id is required for ${action}`);
 				if (action === "read") {
-					const content = await laterRead(id);
-					return { content: [{ type: "text" as const, text: formatParkedContent(content) }], details: null };
+					signal?.throwIfAborted();
+					const result = readOutput(await laterRead(id, signal));
+					return {
+						content: [{ type: "text" as const, text: result.text + (result.truncated ? "\n[Truncated content.]" : "") }],
+						details: null,
+						structuredContent: result,
+					};
 				}
-				await laterRemove(id);
-				return { content: [{ type: "text" as const, text: `Removed parked item ${id}.` }], details: null };
+				signal?.throwIfAborted();
+				await laterRemove(id, signal);
+				return {
+					content: [{ type: "text" as const, text: `Removed parked item ${id}.` }],
+					details: null,
+					structuredContent: { ok: true, action, id, removed: true },
+				};
 			} catch (error) {
 				return {
-					content: [{ type: "text" as const, text: errorMessage(error) }],
+					content: [{ type: "text" as const, text: errorMessage(error).slice(0, 1600) }],
 					isError: true as const,
 					details: null,
+					structuredContent: {
+						ok: false,
+						action: params.action ?? "list",
+						error: { code: signal?.aborted ? "aborted" : "xlatch_failed", message: errorMessage(error).slice(0, 1600) },
+					},
 				};
 			}
 		},

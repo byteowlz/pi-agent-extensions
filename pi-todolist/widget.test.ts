@@ -69,7 +69,8 @@ test("mock lifecycle: default/config false, toggle, reset, empty and disabled cl
 			renderResult = definition.renderResult;
 		},
 		registerCommand: (name: string, definition: { handler: typeof command }) => {
-			if (name === "todos") command = definition.handler;
+			if (name === "todo") command = definition.handler;
+			expect(name).not.toBe("todos");
 		},
 	} as unknown as ExtensionAPI;
 	const ctx = {
@@ -95,7 +96,7 @@ test("mock lifecycle: default/config false, toggle, reset, empty and disabled cl
 		expect(renderResult?.({ details: { todos } }, { expanded: true }, theme).render(160).join("\n")).toContain("Abandoned");
 		await handlers.get("session_start")?.({}, ctx);
 		expect(rows()).toBe(1);
-		await command?.("", ctx);
+		await command?.("list", ctx);
 		expect(notifications[0]).toContain("4 todos");
 		await command?.("expand", ctx);
 		expect(rows()).toBe(4);

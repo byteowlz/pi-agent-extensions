@@ -25,6 +25,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { todoOutputSchema, todoSnapshot } from "./output.js";
 import { createWidgetMode, renderWidget } from "./widget.js";
 
 // ============================================================================
@@ -570,6 +571,8 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 		return {
 			content: [{ type: "text" as const, text: `Error: ${message}` }],
 			details: { action, error: message },
+			isError: true as const,
+			structuredContent: { ok: false, action, error: { code: "invalid_request", message } },
 		};
 	}
 
@@ -584,9 +587,22 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 		saveTodos(ctx, config, todos, sessionId);
 		_currentTodos = todos;
 		updateWidget(ctx);
+		return todoResult(todos, action, extra);
+	}
+
+	function todoResult(
+		todos: TodoItem[],
+		action: string,
+		extra: { added?: TodoItem; updated?: TodoItem; removed?: TodoItem } = {}
+	) {
+		const snapshot = todoSnapshot(todos);
+		const boundedExtra = Object.fromEntries(
+			Object.entries(extra).map(([key, todo]) => [key, { ...todo, content: todo.content.slice(0, 4000) }])
+		);
 		return {
-			content: [{ type: "text" as const, text: JSON.stringify({ todos }, null, 2) }],
-			details: { action, todos, ...extra },
+			content: [{ type: "text" as const, text: JSON.stringify(snapshot, null, 2) }],
+			details: { action, ...snapshot, ...boundedExtra },
+			structuredContent: { ok: true, action, ...snapshot, ...boundedExtra },
 		};
 	}
 
@@ -652,19 +668,14 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 		return todoSaveAndReturn([], "clear", {}, config, sessionId, ctx);
 	}
 
-	function todoActionRead(
-		todos: TodoItem[],
-		params: { filter?: { status?: TodoStatus; priority?: TodoPriority } },
-		config: OqtoTodosConfig,
-		sessionId: string | undefined,
-		ctx: ExtensionContext
-	) {
+	function todoActionRead(todos: TodoItem[], params: { filter?: { status?: TodoStatus; priority?: TodoPriority } }) {
 		let next = todos;
 		if (params.filter) {
 			if (params.filter.status) next = next.filter((t) => t.status === params.filter?.status);
 			if (params.filter.priority) next = next.filter((t) => t.priority === params.filter?.priority);
 		}
-		return todoSaveAndReturn(next, "read", {}, config, sessionId, ctx);
+		// A filtered read is a view, never a replacement of the persisted list.
+		return todoResult(next, "read");
 	}
 
 	pi.registerTool({
@@ -678,13 +689,22 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 			"IMPORTANT: Always update todo status as you work. Set tasks to 'in_progress' when starting " +
 			"and 'completed' when done. The user relies on this panel to see your progress.",
 		parameters: TodoParams,
+		outputSchema: todoOutputSchema,
+		executionMode: "sequential",
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			_signal?.throwIfAborted();
 			const config = loadConfig(ctx.cwd);
 			if (!config.enabled) {
 				return {
 					content: [{ type: "text", text: "Todos extension is disabled" }],
 					details: { action: params.action, error: "disabled" },
+					isError: true,
+					structuredContent: {
+						ok: false,
+						action: params.action,
+						error: { code: "disabled", message: "Todos extension is disabled" },
+					},
 				};
 			}
 
@@ -704,7 +724,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 				case "clear":
 					return todoActionClear(config, sessionId, ctx);
 				default:
-					return todoActionRead(todos, params, config, sessionId, ctx);
+					return todoActionRead(todos, params);
 			}
 		},
 
@@ -763,54 +783,60 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 		},
 	});
 	// ==========================================================================
-	// /todos command - Show todos in UI
+	// /todo display actions
 	// ==========================================================================
-	pi.registerCommand("todos", {
-		description: "Show current todos, or expand/collapse/toggle the sticky widget",
-		handler: async (args, ctx) => {
-			try {
-				const config = loadConfig(ctx.cwd);
-				const sessionId = getSessionId(ctx);
-				const store = loadTodos(ctx, config, sessionId);
-				if (widgetMode.command(args.trim(), config.tuiWidgetCollapsed)) {
-					_currentTodos = store.todos;
-					updateWidget(ctx);
-					return;
-				}
-
-				if (!ctx.hasUI) {
-					console.log(JSON.stringify(store.todos, null, 2));
-					return;
-				}
-
-				if (store.todos.length === 0) {
-					ctx.ui.notify("No todos", "info");
-					return;
-				}
-
-				const summary = {
-					pending: store.todos.filter((t) => t.status === "pending").length,
-					in_progress: store.todos.filter((t) => t.status === "in_progress").length,
-					completed: store.todos.filter((t) => t.status === "completed").length,
-					cancelled: store.todos.filter((t) => t.status === "cancelled").length,
-				};
-
-				ctx.ui.notify(
-					`${store.todos.length} todos: ${summary.in_progress} in progress, ${summary.pending} pending, ${summary.completed} done`,
-					"info"
-				);
-			} catch (e) {
-				console.error("[oqto-todos] /todos command error:", e);
+	const showTodos = async (args: string, ctx: ExtensionContext) => {
+		try {
+			const config = loadConfig(ctx.cwd);
+			const sessionId = getSessionId(ctx);
+			const store = loadTodos(ctx, config, sessionId);
+			if (widgetMode.command(args.trim(), config.tuiWidgetCollapsed)) {
+				_currentTodos = store.todos;
+				updateWidget(ctx);
+				return;
 			}
-		},
-	});
+
+			if (!ctx.hasUI) {
+				console.log(JSON.stringify(store.todos, null, 2));
+				return;
+			}
+
+			if (store.todos.length === 0) {
+				ctx.ui.notify("No todos", "info");
+				return;
+			}
+
+			const summary = {
+				pending: store.todos.filter((t) => t.status === "pending").length,
+				in_progress: store.todos.filter((t) => t.status === "in_progress").length,
+				completed: store.todos.filter((t) => t.status === "completed").length,
+				cancelled: store.todos.filter((t) => t.status === "cancelled").length,
+			};
+
+			ctx.ui.notify(
+				`${store.todos.length} todos: ${summary.in_progress} in progress, ${summary.pending} pending, ${summary.completed} done`,
+				"info"
+			);
+		} catch (e) {
+			console.error("[oqto-todos] /todo display action error:", e);
+		}
+	};
 
 	// ==========================================================================
 	// /todo command - Interactive todo manipulation
 	// ==========================================================================
 	pi.registerCommand("todo", {
-		description: "Interactively list, add, start, complete, cancel, edit, delete, or clear todos",
-		handler: async (_args, ctx) => {
+		description: "Manage todos interactively; /todo list | collapse | expand | toggle",
+		handler: async (args, ctx) => {
+			const action = args.trim();
+			if (["list", "collapse", "expand", "toggle"].includes(action)) {
+				await showTodos(action === "list" ? "" : action, ctx);
+				return;
+			}
+			if (action) {
+				ctx.ui.notify("Use /todo, /todo list, /todo collapse, /todo expand, or /todo toggle", "warning");
+				return;
+			}
 			try {
 				const config = loadConfig(ctx.cwd);
 				const sessionId = getSessionId(ctx);

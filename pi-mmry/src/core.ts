@@ -140,15 +140,26 @@ export interface ExecResult {
 	killed: boolean;
 }
 
-export type Exec = (command: string, args: string[], options: { cwd: string; timeout: number }) => Promise<ExecResult>;
+export type Exec = (
+	command: string,
+	args: string[],
+	options: { cwd: string; timeout: number; signal?: AbortSignal }
+) => Promise<ExecResult>;
 
 export class MmryError extends Error {}
 
 /** Run mmry and return stdout, or throw with mmry's own message. */
-export async function runMmry(exec: Exec, config: RecallConfig, cwd: string, args: string[]): Promise<string> {
+export async function runMmry(
+	exec: Exec,
+	config: RecallConfig,
+	cwd: string,
+	args: string[],
+	signal?: AbortSignal
+): Promise<string> {
+	signal?.throwIfAborted();
 	let result: ExecResult;
 	try {
-		result = await exec(config.mmryBin, args, { cwd, timeout: config.timeoutMs });
+		result = await exec(config.mmryBin, args, { cwd, timeout: config.timeoutMs, signal });
 	} catch (error) {
 		throw new MmryError(`cannot run ${config.mmryBin}: ${(error as Error).message}`);
 	}
