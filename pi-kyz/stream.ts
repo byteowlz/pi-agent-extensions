@@ -17,6 +17,10 @@ export function secretStream(secrets: readonly SecretValue[], emit: (data: Buffe
 				index = pending.indexOf(needle, index + 1);
 			}
 		}
+		// StringDecoder preserves UTF-8, but a UTF-16 slice can still split an emoji.
+		const previous = pending.charCodeAt(cut - 1);
+		const next = pending.charCodeAt(cut);
+		if (previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) cut--;
 		if (cut > 0) emit(Buffer.from(scrubText(pending.slice(0, cut), secrets)));
 		pending = pending.slice(cut);
 	}
