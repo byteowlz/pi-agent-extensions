@@ -4,6 +4,23 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Structured-output review fixes (2.3.1)
+
+- Scrub standard JSON-escaped known credentials (up to three nested encodings)
+  before streaming accumulation/spill and final structured/native history output.
+  This is not arbitrary-encoding DLP or a sandbox boundary.
+- Fence each subagent retry against abort/session changes; bound and cancel CLI
+  calls, propagate approval cancellation, and distinguish cancelled receipts.
+- Mark dispatched tab creation as potentially committed before awaiting its
+  response; lost responses never assert no effects or trigger a blind replay.
+- Cap catalog/list/read structured receipts at 32,000 UTF-8 JSON bytes, report
+  lossy metadata/list projections, and preserve opaque identities. Over-budget
+  single-item identity metadata fails explicitly rather than changing its ID.
+- Add private-HOME lifecycle and projection regressions plus exact Node/Pi1
+  checks of raw/JSON credentials in codemode, native JSONL and actual spill files.
+- Budget helpers are extension-local so standalone packaging does not depend
+  on another optional extension. Authoritative state is never truncated.
+
 ### Structured codemode outputs (2.3.0)
 
 - Add explicit structured results to history, memory, Todo, introspection,

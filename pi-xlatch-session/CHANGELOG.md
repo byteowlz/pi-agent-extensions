@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.1
+
+- Bound Save for Later list/read structured projections to 32,000 UTF-8 JSON
+  bytes, advertise metadata truncation and omitted entries, and preserve opaque
+  item/preparation IDs. Reject oversized identity metadata without altering it.
+- Keep the budget implementation within this standalone package; persisted
+  parked content is unchanged and agent reads remain non-destructive.
+
 ## 1.4.0
 
 - Accept every MIME type, including PDFs and document formats.
