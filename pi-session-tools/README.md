@@ -1,4 +1,20 @@
-# pi-herdr-tools
+# pi-session-tools
+
+Session ownership and terminal presentation are separate. `/side` and `/btw`
+validate the current backend: Herdr wins inside tmux; plain tmux opens a detached
+window with `pi --fork`. Failed active-context validation never falls through.
+Oqto-managed sessions block local spawning until an authorized runner adapter is
+bound. Subagent lifecycle, navigation and messaging currently remain Herdr-only;
+tmux side-window support does **not** imply those capabilities are implemented.
+
+Optional introspection contributes route owner/presentation/reason and effective
+spawn policy to `self_reflection { info: "all" }` through a versioned event query.
+No credentials, prompts or private transcripts are contributed.
+
+This source rename does not migrate existing live extension installs. The
+`subagent-config.json` and persisted session-state locations are retained because
+they describe the feature rather than a backend. Update explicit extension paths
+and manifests when deploying; do not load both the old and renamed entry points.
 
 Herdr-flavored tools for pi: delegate a task to a new pi subagent in a fresh
 herdr tab, and fork the current session into its own named tab to steer it in a
@@ -14,13 +30,13 @@ before each spawn unless you turn it off.
 The extension lives in the global auto-discovery directory:
 
 ```
-~/.pi/agent/extensions/pi-herdr-tools/index.ts
+~/.pi/agent/extensions/pi-session-tools/index.ts
 ```
 
 Reload pi (`/reload`) to pick it up. It works in any herdr-managed pi session.
 
 (The published source lives in the `pi-agent-extensions` repo under
-`pi-herdr-tools/`; `~/.pi/agent/extensions/pi-herdr-tools` is a deployed copy
+`pi-session-tools/`; `~/.pi/agent/extensions/pi-session-tools` is a deployed copy
 of it.)
 
 ## Tool
