@@ -1,13 +1,11 @@
 import { StringDecoder } from "node:string_decoder";
-import { type SecretValue, scrubText } from "./scrub.js";
+import { type SecretValue, scrubText, secretNeedles } from "./scrub.js";
 
 /** Redact before host accumulation/spill files, including matches across chunk boundaries. */
 export function secretStream(secrets: readonly SecretValue[], emit: (data: Buffer) => void) {
 	const decoder = new StringDecoder("utf8");
-	const needles = secrets
-		.flatMap((secret) => [secret.value, Buffer.from(secret.value).toString("base64"), encodeURIComponent(secret.value)])
-		.filter(Boolean);
-	const hold = Math.max(1, ...needles.map((value) => value.length));
+	const needles = secretNeedles(secrets);
+	const hold = needles.reduce((max, value) => Math.max(max, value.length), 1);
 	let pending = "";
 	function flush(final: boolean) {
 		let cut = final ? pending.length : Math.max(0, pending.length - hold);

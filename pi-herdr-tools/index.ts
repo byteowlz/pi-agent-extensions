@@ -67,6 +67,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -553,8 +554,13 @@ function isInHerdr(): boolean {
 	return process.env.HERDR_ENV === "1" && !!process.env.HERDR_SOCKET_PATH;
 }
 
-async function herdr(args: string[], opts?: { timeout?: number }): Promise<any> {
-	const { stdout } = await execFileAsync("herdr", args, { maxBuffer: 8 * 1024 * 1024, ...opts });
+async function herdr(args: string[], opts?: { timeout?: number; signal?: AbortSignal }): Promise<any> {
+	const { stdout } = await execFileAsync("herdr", args, {
+		maxBuffer: 8 * 1024 * 1024,
+		timeout: 30_000,
+		killSignal: "SIGKILL",
+		...opts,
+	});
 	const text = stdout.trim();
 	if (!text) return {};
 	try {
@@ -587,15 +593,22 @@ const AGENT_START_BACKOFF_MS = 500;
  * is only startable once its shell sits at an interactive prompt, and herdr
  * rejects too-early attempts with `agent_pane_busy`. Retries only that error
  * (400/800/1600ms backoff); anything else fails immediately. */
-async function startAgentWithRetry(args: string[], attempts = AGENT_START_ATTEMPTS): Promise<any> {
+async function startAgentWithRetry(
+	args: string[],
+	attempts = AGENT_START_ATTEMPTS,
+	activity?: { signal?: AbortSignal; assertActive: () => void }
+): Promise<any> {
 	let lastErr: unknown;
 	for (let attempt = 0; attempt < attempts; attempt++) {
+		activity?.assertActive();
 		if (attempt > 0) {
-			await new Promise((resolve) => setTimeout(resolve, AGENT_START_BACKOFF_MS * 2 ** (attempt - 1)));
+			await delay(AGENT_START_BACKOFF_MS * 2 ** (attempt - 1), undefined, { signal: activity?.signal });
 		}
+		activity?.assertActive();
 		try {
-			return await herdr(args);
+			return await herdr(args, { signal: activity?.signal });
 		} catch (err) {
+			activity?.assertActive();
 			lastErr = err;
 			if (!isPaneBusyError(err)) throw err;
 		}
@@ -2390,7 +2403,8 @@ export default function herdrTools(pi: ExtensionAPI) {
 			let didStart = false;
 			const assertActive = () => {
 				_signal?.throwIfAborted();
-				if (currentState?.sessionId !== sessionId) throw new Error("Subagent session changed; retry in the current session");
+				if (currentState?.sessionId !== sessionId || ctx.sessionManager.getSessionId() !== sessionId)
+					throw new Error("Subagent session changed; retry in the current session");
 			};
 			async function run(): Promise<import("@earendil-works/pi-coding-agent").AgentToolResult<unknown>> {
 				ensureSessionState(ctx);
@@ -2516,7 +2530,7 @@ export default function herdrTools(pi: ExtensionAPI) {
 				const label = params.tabLabel ?? (params.task.replace(/\s+/g, " ").slice(0, 28).trim() || "subagent");
 				const detail = `Tab: ${label}\nKind: ${kind}\nModel: ${model}\nCwd: ${cwd}\n\nTask:\n${params.task.slice(0, 400)}${params.task.length > 400 ? "\n…" : ""}`;
 				assertActive();
-				const approval = await approveSpawn(ctx, config, detail, kind === "pi");
+				const approval = await approveSpawn({ ...ctx, signal: _signal ?? ctx.signal }, config, detail, kind === "pi");
 				assertActive();
 				if (!approval.ok) {
 					return { content: [{ type: "text", text: "Spawn cancelled by the user." }], details: { spawned: false } };
@@ -2529,8 +2543,9 @@ export default function herdrTools(pi: ExtensionAPI) {
 				let startRes: { error?: unknown; result?: { agent?: { name?: string } } } | undefined;
 				try {
 					assertActive();
-					const tabRes = await herdr(["tab", "create", "--label", label, "--cwd", cwd, "--no-focus"]);
+					// Once dispatched, a lost response cannot establish effects:none.
 					partialEffects = true;
+					const tabRes = await herdr(["tab", "create", "--label", label, "--cwd", cwd, "--no-focus"], { signal: _signal });
 					paneId = tabRes?.result?.root_pane?.pane_id;
 					tabId = tabRes?.result?.tab?.tab_id;
 					if (!paneId) {
@@ -2548,13 +2563,17 @@ export default function herdrTools(pi: ExtensionAPI) {
 					const startArgs = kind === "pi" ? ["--", "--model", model] : [];
 					assertActive();
 					partialChild = { name, paneId, tabId, model, kind };
-					startRes = await startAgentWithRetry(["agent", "start", name, "--kind", kind, "--pane", paneId, ...startArgs]);
+					startRes = await startAgentWithRetry(
+						["agent", "start", name, "--kind", kind, "--pane", paneId, ...startArgs],
+						AGENT_START_ATTEMPTS,
+						{ signal: _signal, assertActive }
+					);
 					didStart = !startRes?.error && Boolean(startRes?.result?.agent?.name);
 				} catch (err) {
 					const e = err as Error & { stderr?: string };
 					const detail = e?.stderr?.trim() || e?.message || "unknown error";
 					return {
-						content: [{ type: "text", text: `Error: herdr agent start failed after retries: ${detail.slice(0, 500)}` }],
+						content: [{ type: "text", text: `Error: herdr subagent dispatch failed: ${detail.slice(0, 500)}` }],
 						details: { spawned: false },
 					};
 				}
@@ -2570,7 +2589,8 @@ export default function herdrTools(pi: ExtensionAPI) {
 				assertActive();
 				trackSubagent(ctx, { name, paneId, tabId, model, kind, label, cwd, spawnedAt: Date.now(), status: "idle" });
 
-				const promptRes = await herdr(["agent", "prompt", name, params.task]);
+				assertActive();
+				const promptRes = await herdr(["agent", "prompt", name, params.task], { signal: _signal });
 				const promptOk = !promptRes?.error;
 				startNotifyTimer(pi, ctx);
 				if (!promptOk) {
@@ -2604,6 +2624,8 @@ export default function herdrTools(pi: ExtensionAPI) {
 						...(partialChild ? { partialChild } : {}),
 						...(didStart ? { spawned: true, ...partialChild } : {}),
 					};
+				if (_signal?.aborted && result.details && typeof result.details === "object")
+					result.details = { ...result.details, errorCode: "cancelled" };
 				return subagentResult(action, result);
 			} catch (error) {
 				if (action !== "spawn") throw error;
@@ -2611,7 +2633,12 @@ export default function herdrTools(pi: ExtensionAPI) {
 					content: [
 						{ type: "text", text: (error instanceof Error ? error.message : "Subagent operation failed").slice(0, 1600) },
 					],
-					details: { spawned: didStart, partialEffects, ...(partialChild ? { partialChild, ...partialChild } : {}) },
+					details: {
+						spawned: didStart,
+						partialEffects,
+						...(_signal?.aborted ? { errorCode: "cancelled" } : {}),
+						...(partialChild ? { partialChild, ...partialChild } : {}),
+					},
 				});
 			}
 		},

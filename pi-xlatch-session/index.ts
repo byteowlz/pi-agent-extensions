@@ -33,7 +33,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { Type } from "typebox";
 
 import { type ParkedContent, type ParkedItem, formatParkedContent, formatParkedList } from "./src/later.js";
-import { checkedContent, checkedItems, itemOutput, laterOutputSchema, readOutput } from "./src/output.js";
+import { checkedContent, checkedItems, laterOutputSchema, listOutput, readOutput } from "./src/output.js";
 import { SlotEndpoint, removeDeadSocket, socketLive } from "./src/slot.js";
 
 const execFileAsync = promisify(execFile);
@@ -615,14 +615,14 @@ export default function xlatchSession(pi: ExtensionAPI) {
 				if (action === "list") {
 					signal?.throwIfAborted();
 					const all = await laterList(signal);
-					const items = all.slice(0, 100).map(itemOutput);
-					const truncated = all.length > 100 || JSON.stringify(all.slice(0, 100)) !== JSON.stringify(items);
+					const result = listOutput(all);
+					const { items, truncated } = result;
 					return {
 						content: [
 							{ type: "text" as const, text: formatParkedList(items) + (truncated ? "\n[Truncated list/metadata.]" : "") },
 						],
 						details: null,
-						structuredContent: { ok: true, action, items, total: all.length, truncated },
+						structuredContent: result,
 					};
 				}
 				const id = params.id?.trim();

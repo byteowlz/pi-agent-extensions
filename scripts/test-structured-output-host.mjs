@@ -50,7 +50,7 @@ const fakeMemory = {memory_id:"mem_fixture",content:"Synthetic fact",revision:2,
 await writeFile(join(temp,"bin","mmry"),`#!/usr/bin/env node\nconst action=process.argv[2];const entry=${JSON.stringify(fakeMemory)};console.log(JSON.stringify(action==="search"?[entry]:{...entry,...(action==="rm"?{removed:true}:{})}));`,{mode:0o700});
 const parkedItem = {id:"parkedfixture",label:"Synthetic",mime_type:"text/plain",created_at:1};
 await writeFile(join(temp,"bin","xlatch"),`#!/usr/bin/env node\nconst item=${JSON.stringify(parkedItem)};const action=process.argv[3];console.log(JSON.stringify(action==="list"?[item]:action==="read"?{item,input:{text:"Synthetic parked text"}}:{}));`,{mode:0o700});
-const marker = "fake/SECRET:host-fixture";
+const marker = 'fake/SECRET:"quoted\\password\n秘密';
 await writeFile(join(temp, "bin", "kyz"), `#!/usr/bin/env node\nconst a=process.argv.slice(2); console.log(JSON.stringify(a[0]==="vault"?{unlocked:true}:a[0]==="list"?{entries:[{key:"fixture",service:"test",tags:[]}]}:{service:"test",key:"fixture",fields:{value:${JSON.stringify(marker)}}}));`, {mode:0o700});
 const code = `const good = await tools.object({});
 const dataError = await tools.error_data({});
@@ -68,6 +68,7 @@ const historyGrep = await tools.HistoryGrep({sessionId:"historyfixture",pattern:
 const historyBranches = await tools.HistoryBranches({scope:"project",limit:5});
 const deniedSudo = await tools.sudo_exec({command:"fixture",reason:"No real execution"});
 const bash = await tools.bash({command:'printf "%s" "$TEST_FIXTURE"'});
+const jsonBash = await tools.bash({command: "node -e 'process.stdout.write(JSON.stringify(process.env.TEST_FIXTURE))'"});
 const memory = await tools.memory({action:"search",query:"synthetic"});
 const memoryCreate = await tools.memory({action:"create",content:"Synthetic fact"});
 const memoryEdit = await tools.memory({action:"supersede",id:"mem_fixture",content:"New fact",reason:"fixture",expected_revision:2});
@@ -80,8 +81,8 @@ const children = await tools.subagent({action:"list"});
 const spawnDenied = await tools.subagent({task:"Must not execute"});
 const guardedText = await tools.read({});
 const guardedImage = await tools.read({image:true});
-const spill = await tools.bash({command: 'node -e \\'process.stdout.write("x".repeat(1100000)+process.env.TEST_FIXTURE)\\''});
-text({good,dataError,plain,redacted,renamed,reflectionInfo:reflection.info,todo,history:history.map(r=>({ok:r.ok,hits:r.hits,completeness:r.completeness})),evidence:evidence.map(r=>r.messages),grepMatches:historyGrep.matches,branchIds:historyBranches.branches.map(b=>b.branchId),deniedSudo,bash,memory,memoryCreate,memoryEdit,memoryRemove,parked,parkedRead,parkedRemove,catalog,children,spawnDenied,guardedText,guardedImage,spillPath:spill.full_output_path,failures:failures.map(r => ({status:r.status,message:r.reason?.message}))});`;
+const spill = await tools.bash({command: 'node -e \\'process.stdout.write("x".repeat(1100000)+JSON.stringify(process.env.TEST_FIXTURE)+process.env.TEST_FIXTURE)\\''});
+text({good,dataError,plain,redacted,renamed,reflectionInfo:reflection.info,todo,history:history.map(r=>({ok:r.ok,hits:r.hits,completeness:r.completeness})),evidence:evidence.map(r=>r.messages),grepMatches:historyGrep.matches,branchIds:historyBranches.branches.map(b=>b.branchId),deniedSudo,bash,jsonBash,memory,memoryCreate,memoryEdit,memoryRemove,parked,parkedRead,parkedRemove,catalog,children,spawnDenied,guardedText,guardedImage,spillPath:spill.full_output_path,failures:failures.map(r => ({status:r.status,message:r.reason?.message}))});`;
 let calls = 0;
 const server = createServer(async (req, res) => {
  const chunks = []; for await (const c of req) chunks.push(c);
@@ -128,6 +129,7 @@ try {
  assert.equal(data.deniedSudo.ok,false);
  assert.equal(data.deniedSudo.effects,"none");
  assert.equal(data.bash.output,"[REDACTED]");
+ assert.equal(JSON.parse(data.jsonBash.output),"[REDACTED]");
  assert.equal(data.memory.entries[0].memory_id,"mem_fixture");
  assert.equal(data.memoryCreate.entry.revision,2);
  assert.equal(data.memoryEdit.ok,true);
@@ -143,13 +145,16 @@ try {
  assert.match(data.guardedText,/read-file-guard/);
  assert.equal(typeof data.guardedImage,"string");
  assert.match(data.guardedImage,/read-image-guard/);
- assert(!JSON.stringify(rows).includes(marker), "Secret must not survive protocol/persistable results");
+ const representations = [marker];
+ for(let depth=0;depth<3;depth++) representations.push(JSON.stringify(representations.at(-1)).slice(1,-1));
+ const containsSecret = text => representations.some(value=>text.includes(value));
+ assert(!containsSecret(JSON.stringify(rows)), "Secret must not survive protocol/persistable results");
  assert(data.spillPath, "fixture must exercise host spill file");
- assert(!(await readFile(data.spillPath,"utf8")).includes(marker), "Secrets must be scrubbed before host spills output");
+ assert(!containsSecret(await readFile(data.spillPath,"utf8")), "Secrets must be scrubbed before host spills output");
  await rm(data.spillPath);
  const sessions = join(agent,"sessions");
  const persisted = await readdir(sessions,{recursive:true});
- for (const file of persisted.filter(name=>name.endsWith(".jsonl"))) assert(!(await readFile(join(sessions,file),"utf8")).includes(marker), "Secret in persisted session");
+ for (const file of persisted.filter(name=>name.endsWith(".jsonl"))) assert(!containsSecret(await readFile(join(sessions,file),"utf8")), "Secret in persisted session");
  assert.equal(data.redacted,"safe replacement");
  assert.deepEqual(data.failures.map(r=>r.status),["rejected","rejected"]);
  assert.match(data.failures[0].message,/fixture throw/);
