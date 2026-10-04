@@ -29,6 +29,8 @@ export const subagentOutputSchema = Type.Union([
 		summary: Type.String({ maxLength: 16000 }),
 		models: Type.Array(catalogModel, { maxItems: 100 }),
 		loadouts: Type.Array(Type.String(), { maxItems: 100 }),
+		totalModels: Type.Optional(Type.Integer()),
+		totalLoadouts: Type.Optional(Type.Integer()),
 		truncated: Type.Boolean(),
 	}),
 	Type.Object({
@@ -99,7 +101,16 @@ function catalogResult(
 	});
 	const names = Object.keys(record(catalog.loadouts));
 	const summary = clipped(text, 8000);
-	const envelope = { ok: true, action, summary, models: [], loadouts: [], truncated: false };
+	const envelope = {
+		ok: true,
+		action,
+		summary,
+		models: [],
+		loadouts: [],
+		totalModels: all.length,
+		totalLoadouts: names.length,
+		truncated: false,
+	};
 	const models = fitEntries(projected, envelope);
 	const loadouts = fitEntries(names.slice(0, 100), { ...envelope, models });
 	const truncated = shortened || models.length !== all.length || loadouts.length !== names.length;
@@ -107,7 +118,7 @@ function catalogResult(
 		...result,
 		content: [{ type: "text", text: text.slice(0, 16000) + (truncated ? "\n[Truncated catalog.]" : "") }],
 		details: { action },
-		structuredContent: { ok: true, action, summary, models, loadouts, truncated },
+		structuredContent: { ...envelope, models, loadouts, truncated },
 	};
 }
 function listResult(result: AgentToolResult<unknown>, details: Record<string, unknown>): AgentToolResult<unknown> {

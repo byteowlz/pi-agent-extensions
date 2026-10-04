@@ -81,18 +81,32 @@ describe("review regressions", () => {
 		stream.end();
 		expect(Buffer.concat(parts).toString()).toBe("prefix [REDACTED] suffix");
 	});
+	test("stream retains unrelated emoji at its moving source boundary", () => {
+		const value = "known-password";
+		const input = "😀".repeat(100) + value + "😀".repeat(100);
+		const parts: Buffer[] = [];
+		const stream = secretStream([{ name: "fixture", value }], (b) => parts.push(b));
+		for (const byte of Buffer.from(input)) stream.write(Buffer.from([byte]));
+		stream.end();
+		expect(Buffer.concat(parts).toString()).toBe(input.replace(value, "[REDACTED]"));
+	});
 	test("nested JSON encodings and malformed Unicode do not bypass or crash scrubbing", () => {
 		const value = 'fixture\\password"\n秘密';
-		const secrets = [{name:"fixture",value}];
+		const secrets = [{ name: "fixture", value }];
 		let encoded = value;
-		for(let depth=0; depth<3; depth++) {
-			encoded = JSON.stringify(encoded).slice(1,-1);
-			expect(scrubText(encoded,secrets)).toBe("[REDACTED]");
+		for (let depth = 0; depth < 3; depth++) {
+			encoded = JSON.stringify(encoded).slice(1, -1);
+			expect(scrubText(encoded, secrets)).toBe("[REDACTED]");
 		}
-		expect(scrubText("bad\ud800",[{name:"fixture",value:"bad\ud800"}])).toBe("[REDACTED]");
+		expect(scrubText("bad\ud800", [{ name: "fixture", value: "bad\ud800" }])).toBe("[REDACTED]");
 	});
 	test("oversized opaque read identity is rejected, never shortened", () => {
-		expect(()=>readOutput({item:{id:"x".repeat(40000),label:"label",mime_type:"text/plain",created_at:1},input:{text:"short"}})).toThrow("identity metadata");
+		expect(() =>
+			readOutput({
+				item: { id: "x".repeat(40000), label: "label", mime_type: "text/plain", created_at: 1 },
+				input: { text: "short" },
+			})
+		).toThrow("identity metadata");
 	});
 	test("catalog fits a whole receipt budget", () => {
 		const result = subagentResult("info", {
