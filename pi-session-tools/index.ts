@@ -1,5 +1,5 @@
 /**
- * pi-herdr-tools — herdr-flavored tools: delegate a task to a new pi subagent
+ * pi-session-tools — route-aware tools: delegate a task to a new pi subagent
  * in a fresh herdr tab, and fork the current session into its own named tab.
  *
  * The current agent calls the `subagent` tool (action=spawn); the user stays in
@@ -82,6 +82,8 @@ import {
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { STATUS_QUERY, type StatusQuery } from "../pi-introspection/contributions.js";
+import { openTmuxSide, resolveRoute } from "./backend.js";
 import { subagentOutputSchema, subagentResult } from "./output.js";
 
 /** A named subagent profile: model allowlist plus optional mode/cap/kind. */
@@ -132,7 +134,7 @@ const execFileAsync = promisify(execFile);
 // herdr blocked-state reporting (best-effort; only inside a herdr pane)
 // ---------------------------------------------------------------------------
 
-const HERDR_SOURCE = "pi-herdr-tools";
+const HERDR_SOURCE = "pi-session-tools";
 let herdrSeq = 0;
 
 function herdrReport(state: "blocked" | "working", message?: string): void {
@@ -555,6 +557,8 @@ function isInHerdr(): boolean {
 }
 
 async function herdr(args: string[], opts?: { timeout?: number; signal?: AbortSignal }): Promise<any> {
+	const route = await resolveRoute(process.env, undefined, opts?.signal);
+	if (!route.ready || route.owner !== "herdr") throw new Error(route.reason);
 	const { stdout } = await execFileAsync("herdr", args, {
 		maxBuffer: 8 * 1024 * 1024,
 		timeout: 30_000,
@@ -572,6 +576,8 @@ async function herdr(args: string[], opts?: { timeout?: number; signal?: AbortSi
 
 /** Run `herdr <args>` and return the raw stdout as a string, without JSON parsing. */
 async function herdrRaw(args: string[], opts?: { timeout?: number }): Promise<string> {
+	const route = await resolveRoute(process.env);
+	if (!route.ready || route.owner !== "herdr") throw new Error(route.reason);
 	const { stdout } = await execFileAsync("herdr", args, { maxBuffer: 16 * 1024 * 1024, ...opts });
 	return stdout;
 }
@@ -850,7 +856,7 @@ async function emitGvnrEvent(entry: SubagentHistoryEntry): Promise<void> {
 		version: "0.1.0",
 		kind: "event",
 		causation: {
-			origin: causation.agentAddress ?? "pi-herdr-tools",
+			origin: causation.agentAddress ?? "pi-session-tools",
 			machine: causation.machine ?? "",
 			purpose: "subagent-closure",
 		},
@@ -1052,6 +1058,19 @@ async function openSideTab(opts: {
 
 	const name = randomSideName();
 	const cwd = opts.cwd ?? opts.ctx.sessionManager.getCwd() ?? opts.ctx.cwd;
+	const route = await resolveRoute(process.env);
+	if (!route.ready) throw new Error(route.reason);
+	if (route.owner === "tmux") {
+		return openTmuxSide({
+			pane: process.env.TMUX_PANE!,
+			label: opts.label,
+			cwd,
+			sessionFile,
+			model: opts.model,
+			instruction: opts.instruction,
+		});
+	}
+	if (route.owner !== "herdr") throw new Error("Side windows require an active Herdr or tmux session.");
 
 	const tabRes = await herdr(["tab", "create", "--label", opts.label, "--cwd", cwd, "--no-focus"]);
 	const paneId = tabRes?.result?.root_pane?.pane_id;
@@ -2360,8 +2379,9 @@ function piNotify(ctx: ExtensionContext, text: string): void {
 
 let piRef: ExtensionAPI;
 
-export default function herdrTools(pi: ExtensionAPI) {
+export default function sessionTools(pi: ExtensionAPI) {
 	piRef = pi;
+	let unsubscribeStatus: (() => void) | undefined;
 
 	pi.on("session_start", async (_event, ctx) => {
 		stopNotifyTimer();
@@ -2372,11 +2392,50 @@ export default function herdrTools(pi: ExtensionAPI) {
 		}
 		startNotifyTimer(pi, ctx);
 		startEventSubscriber(pi);
+		unsubscribeStatus?.();
+		const sessionId = ctx.sessionManager.getSessionId();
+		unsubscribeStatus = pi.events?.on(STATUS_QUERY, (data: unknown) => {
+			const query = data as StatusQuery;
+			if (
+				query?.version !== 1 ||
+				query.sessionId !== sessionId ||
+				typeof query.reply !== "function" ||
+				!query.signal ||
+				query.signal.aborted
+			)
+				return;
+			query.reply(
+				(async () => {
+					const route = await resolveRoute(process.env, undefined, query.signal);
+					if (currentState?.sessionId !== sessionId) throw new Error("Session changed during status query");
+					const config = loadConfig();
+					return {
+						id: "pi-session-tools",
+						version: 1 as const,
+						status: route.ready ? ("ok" as const) : ("unavailable" as const),
+						details: {
+							owner: route.owner,
+							presentation: route.presentation,
+							routeReason: route.reason,
+							spawnEnabled: config.enabled,
+							maxSubagents: currentState?.maxSubagents ?? config.maxSubagents,
+							loadout: currentState?.forceLoadout ?? null,
+							allowedKinds: (currentState?.allowedKinds ?? config.allowedKinds ?? []).join(", ").slice(0, 1000),
+							allowMode: currentState?.allowMode ?? config.allowMode ?? "confirm",
+							trackedSubagents: currentState ? Object.keys(currentState.subagents).length : 0,
+							spawnBackend: route.owner === "herdr" && route.ready ? "herdr" : "unavailable",
+						},
+					};
+				})()
+			);
+		});
 	});
 
 	pi.on("session_shutdown", async () => {
 		stopNotifyTimer();
 		stopEventSubscriber();
+		unsubscribeStatus?.();
+		unsubscribeStatus = undefined;
 	});
 
 	pi.registerTool({
@@ -2440,6 +2499,14 @@ export default function herdrTools(pi: ExtensionAPI) {
 				}
 
 				// ---- spawn ----
+				const route = await resolveRoute(process.env, undefined, _signal);
+				if (!route.ready || route.owner !== "herdr") {
+					throw new Error(
+						!route.ready
+							? route.reason
+							: `Subagent lifecycle is not yet implemented for ${route.owner}; no backend fallback was attempted.`
+					);
+				}
 				if (!isInHerdr()) {
 					return {
 						content: [
@@ -3002,7 +3069,7 @@ export default function herdrTools(pi: ExtensionAPI) {
 	// ---- /side and /btw: open the current session in its own new tab ----
 	const registerSide = (name: string) => {
 		pi.registerCommand(name, {
-			description: `Fork the CURRENT session into a new named herdr tab and open pi there, so you can steer it in a different direction (like Claude /btw or Codex /side, but in its own tab). Usage: /${name} [label] [--model M] [instruction...].`,
+			description: `Fork the CURRENT session into a new Herdr tab or plain tmux window using the validated session route. Usage: /${name} [label] [--model M] [instruction...].`,
 			handler: async (args, ctx) => {
 				// parse: optional --model M, first bare token = label, rest = instruction
 				const tokens = (args ?? "").trim().split(/\s+/).filter(Boolean);

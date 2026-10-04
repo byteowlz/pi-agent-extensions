@@ -11,7 +11,7 @@ import { DEFAULT_CONFIG } from "../pi-history-search/config.js";
 import { historyOutputSchemas, historyResult } from "../pi-history-search/output.js";
 import { memoryOutputSchema, parseMemoryOutput } from "../pi-mmry/src/output.js";
 import { checkedContent, checkedItems, laterOutputSchema, readOutput } from "../pi-xlatch-session/src/output.js";
-import { subagentOutputSchema, subagentResult } from "../pi-herdr-tools/output.js";
+import { subagentOutputSchema, subagentResult } from "../pi-session-tools/output.js";
 import { scrubText, scrubValue } from "../pi-kyz/scrub.js";
 import manifest from "../docs/structured-output-manifest.json";
 

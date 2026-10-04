@@ -9,7 +9,7 @@
     "pi-edit-agent": {},
     "pi-env-ctx": {},
     "pi-error-recovery": {},
-    "pi-herdr-tools": { "subagent": "implemented" },
+    "pi-session-tools": { "subagent": "implemented" },
     "pi-history-search": { "HistorySearch": "implemented", "HistoryBranches": "implemented", "HistoryRead": "implemented", "HistoryGrep": "implemented" },
     "pi-introspection": { "self_reflection": "implemented" },
     "pi-kyz": { "bash": "host-schema-preserving-wrapper" },

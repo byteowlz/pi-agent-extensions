@@ -3,9 +3,9 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { subagentResult } from "../pi-herdr-tools/output.js";
 import { scrubText } from "../pi-kyz/scrub.js";
 import { secretStream } from "../pi-kyz/stream.js";
+import { subagentResult } from "../pi-session-tools/output.js";
 import { listOutput, readOutput } from "../pi-xlatch-session/src/output.js";
 
 function lifecycle(scenario: string) {

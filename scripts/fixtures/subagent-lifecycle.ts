@@ -6,6 +6,10 @@ const scenario = process.env.REVIEW_SCENARIO ?? "abort";
 const old = { ...process.env };
 process.env.HOME = root;
 process.env.HERDR_ENV = "1";
+process.env.HERDR_PANE_ID = "fixture-pane";
+delete process.env.OQTO_SESSION_ID;
+delete process.env.AGENT_CTX_PLATFORM;
+delete process.env.AGENT_CTX_PLATFORM_SESSION_ID;
 process.env.HERDR_SOCKET_PATH = join(root, "synthetic.sock");
 mkdirSync(join(root, ".pi/agent"), { recursive: true });
 mkdirSync(join(root, "bin"));
@@ -20,13 +24,14 @@ writeFileSync(
 const fs=require('fs'),path=require('path');const a=process.argv.slice(2),r=process.env.HOME;
 fs.appendFileSync(path.join(r,'calls.jsonl'),JSON.stringify({args:a,time:Date.now(),afterAbort:fs.existsSync(path.join(r,'aborted'))})+'\\n');
 if(a[0]==='tab'&&a[1]==='create') {if(process.env.REVIEW_SCENARIO==='uncertain'){fs.writeFileSync(path.join(r,'tab-was-created'),'yes');console.error('lost response');process.exitCode=1;}else console.log(JSON.stringify({result:{root_pane:{pane_id:'fixture-pane'},tab:{tab_id:'fixture-tab'}}}));}
+else if(a[0]==='pane'&&a[1]==='get') console.log(JSON.stringify({result:{pane:{pane_id:'fixture-pane'}}}));
 else if(a[0]==='agent'&&a[1]==='start') {const p=path.join(r,'first-start');if(!fs.existsSync(p)){fs.writeFileSync(p,'yes');console.error('agent_pane_busy');process.exitCode=1;}else console.log(JSON.stringify({result:{agent:{name:a[2]}}}));}
 else console.log('{}');
 `,
 	{ mode: 0o700 }
 );
 try {
-	const { default: factory } = await import("../../pi-herdr-tools/index.js");
+	const { default: factory } = await import("../../pi-session-tools/index.js");
 	const tools = new Map<string, import("@earendil-works/pi-coding-agent").ToolDefinition>();
 	const hooks = new Map<string, () => unknown>();
 	const api = new Proxy(

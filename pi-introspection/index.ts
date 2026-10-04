@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { collectContributions } from "./contributions.js";
 import { boundReflection, reflectionOutputSchema } from "./output.js";
 
 // Use unknown + optional chaining instead of any
@@ -189,7 +190,10 @@ export default function (pi: ExtensionAPI) {
 				result.context = ctx.getContextUsage?.() ?? null;
 			}
 			if (infoType === "all") {
-				result.extensions = collectExtensionsInfo(ctx, pi);
+				result.extensions = {
+					...collectExtensionsInfo(ctx, pi),
+					contributions: await collectContributions(pi, ctx.sessionManager.getSessionId(), _signal),
+				};
 			}
 
 			const bounded = boundReflection(result);
@@ -307,6 +311,12 @@ function formatExtensionsSection(extInfo: Record<string, unknown>): string[] {
 	const activeTools = extInfo.activeTools as string[];
 	lines.push("**Active Tools:**");
 	lines.push(`  ${activeTools.join(", ")}`);
+	const contributions = extInfo.contributions as { id: string; status: string; details: Record<string, unknown> }[] | undefined;
+	if (contributions?.length) {
+		lines.push("", "**Extension Status:**");
+		for (const contribution of contributions)
+			lines.push(`  ${contribution.id} (${contribution.status}): ${JSON.stringify(contribution.details)}`);
+	}
 	lines.push("");
 	return lines;
 }

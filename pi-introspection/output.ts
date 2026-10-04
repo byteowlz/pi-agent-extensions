@@ -38,6 +38,20 @@ const context = Type.Union([
 	Type.Object({ tokens: nullableNumber, contextWindow: Type.Number(), percent: nullableNumber }),
 ]);
 const extensions = Type.Object({
+	contributions: Type.Optional(
+		Type.Array(
+			Type.Object({
+				id: Type.String({ maxLength: 64 }),
+				version: Type.Literal(1),
+				status: Type.Union([Type.Literal("ok"), Type.Literal("unavailable")]),
+				details: Type.Record(
+					Type.String({ maxLength: 64 }),
+					Type.Union([Type.String({ maxLength: 1000 }), Type.Number(), Type.Boolean(), Type.Null()])
+				),
+			}),
+			{ maxItems: 16 }
+		)
+	),
 	installed: Type.Array(Type.Object({ name: string, description: Type.Optional(string) }), { maxItems: 200 }),
 	activeTools: Type.Array(string, { maxItems: 200 }),
 	allTools: Type.Array(Type.Object({ name: string, description: string }), { maxItems: 200 }),

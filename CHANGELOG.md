@@ -4,6 +4,20 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Session backend foundation (2.4.0)
+
+- Rename maintained `pi-herdr-tools` source to `pi-session-tools`; update
+  active references/manifests and test fixtures. Live installs are not migrated.
+- Validate session ownership before routing. Active Herdr wins over outer tmux;
+  stale contexts and runner-managed ownership never silently fall through.
+- Add plain-tmux `/side` and `/btw` forks in detached windows, shell-safe argv,
+  stable caller targeting and isolated-server integration tests.
+- Add optional bounded, deadline/cancellation-aware introspection contributions;
+  session tools contribute effective policy, loadout and route explanation.
+- Runner lifecycle adapter, tmux subagent lifecycle/navigation/messaging and
+  backend-aware naming remain follow-up work; unavailable operations are not
+  represented as implemented capabilities.
+
 ### Structured-output review fixes (2.3.1)
 
 - Scrub standard JSON-escaped known credentials (up to three nested encodings)
