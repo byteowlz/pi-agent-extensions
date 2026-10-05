@@ -962,6 +962,19 @@ function sanitizeAgentTitle(input: string): string {
  * generates the readable-id suffix. If `readableIdSuffix` is enabled, the canonical
  * suffix for the current session is appended (never duplicated).
  */
+/** Spawn-time naming: use the CHILD id, never an inherited parent's readable-id override. */
+export function buildSubagentSessionName(title: string, sessionId: string, cwd: string): string {
+	const config = loadConfig(cwd);
+	const wordlist = loadWordlist(config, cwd);
+	if (!wordlist) throw new Error("Cannot name subagent: readable-id wordlist unavailable");
+	const cleaned = sanitizeAgentTitle(title)
+		.replace(/^(?:\[sub\]\s*)+/i, "")
+		.replace(/\p{Cc}/gu, "")
+		.trim();
+	const base = enforceNameLength(cleaned || "Subagent", 80);
+	return `[sub] ${base} [${readableIdFromSessionId(sessionId, wordlist)}]`;
+}
+
 function buildAgentSessionName(title: string, config: ResolvedConfig, ctx: ExtensionContext): string {
 	const cleaned = sanitizeAgentTitle(title);
 	if (!cleaned) return "";

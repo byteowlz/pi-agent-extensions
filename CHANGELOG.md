@@ -4,6 +4,21 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Named subagents in their spawning workspace (2.6.0)
+
+- Assign spawned Pi sessions a fresh UUID and `[sub] Title [readable-id]` at
+  launch. The spawning agent's `tabLabel` supplies the title; the suffix uses the
+  child's id and canonical naming wordlist, never the parent's environment id.
+  Herdr labels and tool receipts carry the same assigned name.
+- Target tab creation explicitly at the validated calling pane's live workspace,
+  recheck after approval, and refuse missing/changed workspace identity instead
+  of falling back to whichever workspace the user is viewing.
+- Add isolated-HOME real spawn-path regressions for naming, argv, focus retention,
+  workspace targeting and missing-workspace denial. No worktree required.
+- Installed Herdr protocol 22 has no parent/subagent nesting API. This guarantees
+  membership under the spawning workspace, not a dedicated subtree under the
+  parent agent. Issue: piext-nz1c.
+
 ### Live subagent settings and introspection (2.5.0)
 
 - `/subagent mode auto`, `noconfirm`, and explicitly applied auto-mode loadouts
