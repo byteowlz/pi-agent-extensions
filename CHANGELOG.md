@@ -4,6 +4,21 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-oqto-todos: background-safe truncation and width-aware result renderer (1.25.1)
+
+- Fixed the dark "strip" that appeared on the right of truncated Todo tool-result
+  rows (e.g. the `LATER:` / `PINNED:` lines). `truncateToWidth` terminates a
+  truncated run with a full `\x1b[0m` reset, which also cleared the `toolSuccessBg`
+  background that the tool-result shell paints onto each line. New
+  `truncateToWidthBgSafe()` rewrites those full resets to a foreground-only
+  `\x1b[39m`, so the success background survives across the ellipsis while the
+  ellipsis and the priority marker (`v`/`!`) keep their colour. The renderer
+  stays theme-agnostic — it never hardcodes the success background.
+- Made the Todo tool result a width-aware `TodoResultComponent` that renders at
+  the actual available width instead of a hard-coded 80/120 columns, so
+  truncation always matches the panel. Used in both the expanded and collapsed
+  views; the widget renderer uses the same background-safe truncation.
+
 ### pi-mmry: non-blocking sync pull on start (1.24.1)
 
 - New `pullOnStart` config (default false): runs `mmry sync pull` once at
