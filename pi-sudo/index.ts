@@ -35,6 +35,7 @@ import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-c
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { Key, Text, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { SUDO_OUTPUT_CHARS, sudoOutputSchema } from "./output.js";
 
 // ---------------------------------------------------------------------------
 // Configuration (pi-sudo.json: ./ , ./.pi/ , ~/.pi/agent/ — first match wins)
@@ -293,8 +294,13 @@ export function sudoGuardDecision(cmd: string): GuardDecision {
 
 type PasswordPromptResult = { kind: "ok"; password: string } | { kind: "cancelled" } | { kind: "timeout" };
 
-async function promptPassword(ctx: ExtensionContext, title: string, subtitle?: string): Promise<PasswordPromptResult> {
-	if (!ctx.hasUI) return { kind: "cancelled" };
+async function promptPassword(
+	ctx: ExtensionContext,
+	title: string,
+	subtitle?: string,
+	signal?: AbortSignal
+): Promise<PasswordPromptResult> {
+	if (signal?.aborted || ctx.mode !== "tui") return { kind: "cancelled" };
 
 	// Show the pane as blocked in herdr (detection cannot classify our custom
 	// TUI), then hand authority back once the prompt resolves.
@@ -308,12 +314,22 @@ async function promptPassword(ctx: ExtensionContext, title: string, subtitle?: s
 			let settled = false;
 			let timer: ReturnType<typeof setInterval> | null = null;
 
+			const cleanup = () => {
+				if (timer) clearInterval(timer);
+				signal?.removeEventListener("abort", onAbort);
+				buf = "";
+				cachedLines = undefined;
+			};
 			const finish = (v: PasswordPromptResult): void => {
 				if (settled) return;
 				settled = true;
-				if (timer) clearInterval(timer);
+				cleanup();
 				done(v);
 			};
+			function onAbort() {
+				finish({ kind: "cancelled" });
+			}
+			signal?.addEventListener("abort", onAbort, { once: true });
 
 			const refresh = (): void => {
 				cachedLines = undefined;
@@ -383,6 +399,7 @@ async function promptPassword(ctx: ExtensionContext, title: string, subtitle?: s
 
 			return {
 				render,
+				dispose: cleanup,
 				invalidate: (): void => {
 					cachedLines = undefined;
 				},
@@ -402,6 +419,8 @@ async function promptPassword(ctx: ExtensionContext, title: string, subtitle?: s
 interface SudoRunResult {
 	stdout: string;
 	stderr: string;
+	omittedStdoutChars: number;
+	omittedStderrChars: number;
 	exitCode: number;
 	authFailed: boolean;
 	cancelled: boolean;
@@ -412,13 +431,24 @@ interface SudoRunResult {
 const AUTH_FAIL_RE = /\b(incorrect password|try again|authentication failure|Sorry, try again)\b/i;
 const PROMPT_LINE_RE = /^\[sudo\] password for [^\n]*\n?/;
 
-function runPrivileged(
+export function runPrivileged(
 	program: string,
 	args: string[],
 	password: string,
 	signal: AbortSignal | undefined,
 	timeoutMs: number
 ): Promise<SudoRunResult> {
+	if (signal?.aborted)
+		return Promise.resolve({
+			stdout: "",
+			stderr: "",
+			omittedStdoutChars: 0,
+			omittedStderrChars: 0,
+			exitCode: -1,
+			authFailed: false,
+			cancelled: true,
+			timedOut: false,
+		});
 	return new Promise((resolve) => {
 		const child = spawn(program, args, {
 			stdio: ["pipe", "pipe", "pipe"],
@@ -430,18 +460,25 @@ function runPrivileged(
 		let timedOut = false;
 		let cancelled = false;
 		let settled = false;
+		let omittedStdoutChars = 0;
+		let omittedStderrChars = 0;
+		let escalation: ReturnType<typeof setTimeout> | undefined;
+		const terminate = () => {
+			child.kill("SIGTERM");
+			if (!escalation)
+				escalation = setTimeout(() => {
+					if (!settled) child.kill("SIGKILL");
+				}, 2000);
+		};
 
 		const killTimer = setTimeout(() => {
 			timedOut = true;
-			child.kill("SIGTERM");
-			setTimeout(() => {
-				if (!child.killed) child.kill("SIGKILL");
-			}, 2000).unref();
+			terminate();
 		}, timeoutMs);
 
 		const onAbort = (): void => {
 			cancelled = true;
-			child.kill("SIGTERM");
+			terminate();
 		};
 		if (signal) {
 			if (signal.aborted) onAbort();
@@ -457,16 +494,23 @@ function runPrivileged(
 		child.stdin.end();
 
 		child.stdout.on("data", (d: Buffer) => {
-			stdout = `${stdout}${d.toString("utf8")}`;
+			const text = d.toString("utf8");
+			const available = SUDO_OUTPUT_CHARS - stdout.length;
+			stdout += text.slice(0, available);
+			omittedStdoutChars += Math.max(0, text.length - available);
 		});
 		child.stderr.on("data", (d: Buffer) => {
-			stderr = `${stderr}${d.toString("utf8")}`;
+			const text = d.toString("utf8");
+			const available = SUDO_OUTPUT_CHARS - stderr.length;
+			stderr += text.slice(0, available);
+			omittedStderrChars += Math.max(0, text.length - available);
 		});
 
 		const finish = (code: number): void => {
 			if (settled) return;
 			settled = true;
 			clearTimeout(killTimer);
+			if (escalation) clearTimeout(escalation);
 			if (signal) signal.removeEventListener("abort", onAbort);
 
 			// Strip any leftover "[sudo] password for …" echo.
@@ -474,8 +518,14 @@ function runPrivileged(
 			const authFailed = code !== 0 && AUTH_FAIL_RE.test(cleanStderr);
 
 			resolve({
-				stdout,
-				stderr: cleanStderr,
+				stdout: (password ? stdout.replaceAll(password, "[REDACTED]") : stdout).slice(0, SUDO_OUTPUT_CHARS),
+				stderr: (password ? cleanStderr.replaceAll(password, "[REDACTED]") : cleanStderr).slice(0, SUDO_OUTPUT_CHARS),
+				omittedStdoutChars:
+					omittedStdoutChars +
+					Math.max(0, (password ? stdout.replaceAll(password, "[REDACTED]") : stdout).length - SUDO_OUTPUT_CHARS),
+				omittedStderrChars:
+					omittedStderrChars +
+					Math.max(0, (password ? cleanStderr.replaceAll(password, "[REDACTED]") : cleanStderr).length - SUDO_OUTPUT_CHARS),
 				exitCode: code,
 				authFailed,
 				cancelled,
@@ -492,13 +542,13 @@ function runPrivileged(
 // Ensure we have a working password, prompting + retrying as needed
 // ---------------------------------------------------------------------------
 
-type EnsureOutcome = SudoRunResult | { error: string };
+type EnsureOutcome = SudoRunResult | { error: string; code: string; cancelled?: boolean; timedOut?: boolean };
 
 async function ensurePasswordAndRun(
 	command: string,
 	reason: string | undefined,
 	_timeoutMs: number,
-	_signal: AbortSignal | undefined,
+	signal: AbortSignal | undefined,
 	ctx: ExtensionContext,
 	scope: string,
 	runner: (password: string) => Promise<SudoRunResult>
@@ -511,12 +561,18 @@ async function ensurePasswordAndRun(
 			const subtitle = reason
 				? `${reason} — will run: ${truncateForDisplay(command, 80)}`
 				: `will run: ${truncateForDisplay(command, 80)}`;
-			const prompted = await promptPassword(ctx, title, subtitle);
+			if (signal?.aborted)
+				return { error: "Privileged execution aborted before authorization", code: "aborted", cancelled: true };
+			const prompted = await promptPassword(ctx, title, subtitle, signal);
 			if (prompted.kind === "timeout") {
-				return { error: `sudo: password prompt timed out after ${Math.round(config.promptTimeoutMs / 1000)}s with no answer` };
+				return {
+					error: `sudo: password prompt timed out after ${Math.round(config.promptTimeoutMs / 1000)}s with no answer`,
+					code: "prompt_timeout",
+					timedOut: true,
+				};
 			}
 			if (prompted.kind === "cancelled") {
-				return { error: "User cancelled password prompt" };
+				return { error: "User cancelled password prompt", code: signal?.aborted ? "aborted" : "cancelled", cancelled: true };
 			}
 			if (prompted.password.length === 0) {
 				attempts = attempts + 1;
@@ -546,7 +602,7 @@ async function ensurePasswordAndRun(
 		return result;
 	}
 
-	return { error: `sudo: too many incorrect password attempts (${config.maxPromptAttempts})` };
+	return { error: `sudo: too many incorrect password attempts (${config.maxPromptAttempts})`, code: "authentication_failed" };
 }
 
 // ---------------------------------------------------------------------------
@@ -699,14 +755,33 @@ export default function pisudo(pi: ExtensionAPI): void {
 			cancelled: false,
 			timedOut: false,
 		};
-		const errorResult = (errorMessage: string) => ({
-			content: [{ type: "text" as const, text: errorMessage }],
-			details: { ...baseDetails, errorMessage },
-			isError: true,
-		});
+		const errorResult = (errorMessage: string, code = "authorization_failed", cancelled = false, timedOut = false) => {
+			const message = errorMessage.slice(0, 1600);
+			return {
+				content: [{ type: "text" as const, text: message }],
+				details: { ...baseDetails, errorMessage: message, cancelled, timedOut },
+				isError: true,
+				structuredContent: {
+					ok: false,
+					scope: host ? "remote" : "local",
+					...(host ? { host } : {}),
+					exitCode: -1,
+					stdout: "",
+					stderr: "",
+					cancelled: cancelled || (signal?.aborted ?? false),
+					timedOut,
+					truncated: errorMessage.length > 1600,
+					omittedStdoutChars: 0,
+					omittedStderrChars: 0,
+					error: { code: signal?.aborted ? "aborted" : code, message },
+					effects: "none",
+				},
+			};
+		};
+		if (signal?.aborted) return errorResult("Privileged execution aborted before authorization");
 
 		if (!ctx.hasUI) {
-			return errorResult("sudo_exec requires an interactive UI to prompt for the password");
+			return errorResult("sudo_exec requires an interactive UI to prompt for the password", "ui_unavailable");
 		}
 
 		let sshArgs: string[] = [];
@@ -726,7 +801,7 @@ export default function pisudo(pi: ExtensionAPI): void {
 		);
 
 		if ("error" in outcome) {
-			return errorResult(outcome.error);
+			return errorResult(outcome.error, outcome.code, outcome.cancelled, outcome.timedOut);
 		}
 
 		const details: SudoExecDetails = {
@@ -748,18 +823,35 @@ export default function pisudo(pi: ExtensionAPI): void {
 		if (outcome.stdout) parts.push(`stdout:\n${outcome.stdout}`);
 		if (outcome.stderr) parts.push(`stderr:\n${outcome.stderr}`);
 		const body = parts.join("\n");
-		const text = body ? `${header}\n\n${body}` : header;
+		const truncated = outcome.omittedStdoutChars > 0 || outcome.omittedStderrChars > 0;
+		const text =
+			(body ? `${header}\n\n${body}` : header) + (truncated ? "\n[Output truncated to 32000 characters per stream.]" : "");
 
 		return {
 			content: [{ type: "text" as const, text }],
 			details,
 			isError: outcome.exitCode !== 0 || outcome.cancelled || outcome.timedOut,
+			structuredContent: {
+				ok: outcome.exitCode === 0 && !outcome.cancelled && !outcome.timedOut,
+				scope: host ? "remote" : "local",
+				...(host ? { host } : {}),
+				exitCode: outcome.exitCode,
+				stdout: outcome.stdout,
+				stderr: outcome.stderr,
+				cancelled: outcome.cancelled,
+				timedOut: outcome.timedOut,
+				truncated,
+				omittedStdoutChars: outcome.omittedStdoutChars,
+				omittedStderrChars: outcome.omittedStderrChars,
+				effects: "possible",
+			},
 		};
 	}
 
 	pi.registerTool({
 		name: "sudo_exec",
 		label: "sudo",
+		outputSchema: sudoOutputSchema,
 		description:
 			"Run a shell command with sudo — locally by default, or on a remote machine over SSH when `host` is given. Prompts the user for the password through pi's UI on first use and caches it per machine for the session's sudo timestamp window. Use this whenever you need elevated privileges instead of calling `sudo` directly from the bash tool.",
 		promptSnippet: "Run a shell command under sudo (local, or remote via `host`) with interactive password prompting",
@@ -784,6 +876,7 @@ export default function pisudo(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "remote_sudo_exec",
 		label: "remote sudo",
+		outputSchema: sudoOutputSchema,
 		description:
 			"Deprecated alias of `sudo_exec` with `host`. Use `sudo_exec({ host, command })` instead. Runs a shell command with sudo on a remote machine over ssh; the remote sudo password is cached separately from local sudo.",
 		promptSnippet: "Deprecated: use sudo_exec with `host` instead",

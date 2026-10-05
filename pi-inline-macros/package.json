@@ -1,7 +1,0 @@
-{
-  "name": "@byteowlz/pi-inline-macros",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "description": "Composable inline prompt macros (::name) for pi"
-}

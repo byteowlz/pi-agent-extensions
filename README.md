@@ -2,25 +2,40 @@
 
 Custom extensions for the [pi coding agent](https://github.com/badlogic/pi-mono).
 
-## Extensions
+## Maintained extensions
 
-| Extension | Description |
-|-----------|-------------|
-| [auto-rename](./auto-rename/) | Automatically generate session names based on first user query |
-| [bash-picker](./bash-picker/) | Pick bash snippets from recent messages and copy to clipboard |
-| [crosstalk](./crosstalk/) | Inter-session control socket and messaging (adapted from Armin Ronacher) |
-| [pi-mmry](./pi-mmry/) | Shows mmry memories at session start, attaches exactly that text to the first prompt, and adds scoped memory tools |
-| [pi-env-ctx](./pi-env-ctx/) | Exports Pi-native `AGENT_CTX_*` metadata (harness/session/model) to child processes |
-| [oqto-todos](./oqto-todos/) | Todo management tools for Oqto frontend integration (drop-in replacement for OpenCode todowrite/todoread) |
-| [read-image-guard](./read-image-guard/) | Replaces oversized `read` image payloads to prevent provider request-body overflows |
-| [ssh-key](./pi-ssh-key/) | Load an SSH private key into a session-scoped ssh-agent (masked passphrase prompt, timeout, unload) |
-| [sudo](./pi-sudo/) | First-class `sudo_exec` tool with masked password prompt and `pam_faillock` lockout guard |
-| [trx-picker](./trx-picker/) | Browse, filter, and multi-select trx issues from an overlay, dispatch to current or new tmux session |
-| [inline-macros](./pi-inline-macros/) | Expand inline `::name` prompt macros using loaded prompt templates |
-| [markdown-export](./pi-markdown-export/) | Export current session transcripts to Markdown via `/export-md` |
-| [message-timestamps](./pi-message-timestamps/) | Show local time/date prefixes for user+assistant transcript messages in TUI |
-| [xlatch-session](./pi-xlatch-session/) | Bind a running session to an xlatch share slot so a phone can send text, links and files straight into it |
-| [history-search](./pi-history-search/) | `HistorySearch`/`HistoryRead` tools letting the agent search its own past sessions via a colocated SQLite FTS5 index (no external LLM; works with and without oqto) |
+The 2.2.0 collection targets **Pi 1.0.0**. Pre-1.0 host compatibility is no
+longer promised. There are 25 active extensions: 17 selected to keep, six
+still under review and the new selection/capabilities pair. See [the archive](./archive/README.md) for the five retired
+extensions and [migration evidence](./docs/pi-1-baseline.md) for proof limits.
+
+| Extension | Purpose |
+|-----------|---------|
+| [pi-auto-rename](./pi-auto-rename/) | Session naming |
+| [pi-session-tools](./pi-session-tools/) | Session routing and subagent orchestration |
+| [pi-history-search](./pi-history-search/) | Search/read previous sessions |
+| [pi-introspection](./pi-introspection/) | Session/model/context information |
+| [pi-env-ctx](./pi-env-ctx/) | Pi-native child-process metadata |
+| [pi-oqto-bridge](./pi-oqto-bridge/) | Oqto runtime integration |
+| [pi-todolist](./pi-todolist/) | Collapsible todo widget, formerly pi-oqto-todos |
+| [pi-selection](./pi-selection/) | Content-only Questions/Review, native TUI/browser and CLI |
+| [pi-capabilities](./pi-capabilities/) | Optional versioned presentation discovery; not permission grants |
+| [pi-custom-context-files](./pi-custom-context-files/) | Additional instruction files |
+| [pi-kyz](./pi-kyz/) | Secret injection and output scrubbing |
+| [pi-mmry](./pi-mmry/) | Scoped memory integration |
+| [pi-sudo](./pi-sudo/) | Guarded privilege elevation |
+| [pi-trx-picker](./pi-trx-picker/) | Issue picker |
+| [pi-markdown-export](./pi-markdown-export/) | Markdown transcript export |
+| [pi-statusline](./pi-statusline/) | Native TUI footer |
+| [pi-ssh-key](./pi-ssh-key/) | Session-scoped SSH keys |
+| [pi-tui-rpc](./pi-tui-rpc/) | Native TUI remote control |
+| [pi-xlatch-session](./pi-xlatch-session/) | Phone-to-session sharing |
+| [pi-read-file-guard](./pi-read-file-guard/) | Oversized text guard — under review |
+| [pi-read-image-guard](./pi-read-image-guard/) | Oversized image guard — under review |
+| [pi-bash-picker](./pi-bash-picker/) | Shell snippet picker — under review |
+| [pi-edit-agent](./pi-edit-agent/) | Edit/branch assistant messages — under review |
+| [pi-error-recovery](./pi-error-recovery/) | Provider workarounds — under review |
+| [pi-azure-empty-response-guard](./pi-azure-empty-response-guard/) | Azure workaround — under review |
 
 > **Note:** The `delegate` and `tmux-delegate` extensions have been removed in favor of [pi-subagents](https://github.com/nicobailon/pi-subagents) (`pi install npm:pi-subagents`), which provides structured JSON streaming, usage tracking, chain/parallel modes, and a TUI clarification overlay.
 
@@ -28,7 +43,8 @@ Custom extensions for the [pi coding agent](https://github.com/badlogic/pi-mono)
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 22.19+
+- Pi 1.0.0
 - npm
 
 ### Setup
@@ -45,6 +61,8 @@ npm install
 | `npm run lint` | Biome linting only |
 | `npm run lint:fix` | Auto-fix lint issues |
 | `npm run typecheck` | tsgo type checking |
+| `npm test` | Maintained extension tests (excludes archive) |
+| `npm run test:pi-1 -- /path/to/pi` | Exact Pi 1.0.0 individual + combined catalog smoke |
 
 ### Linting Rules
 

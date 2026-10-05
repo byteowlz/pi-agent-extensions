@@ -1,7 +1,15 @@
 pi-session-exports/
 CLAUDE.md
 benchmarks/
-scripts/
+scripts/*
+!scripts/test-pi-1-catalog.mjs
+!scripts/test-selection-rpc.mjs
+!scripts/test-selection-tool.mjs
+!scripts/pi-1-imports.test.ts
+!scripts/review-regressions.test.ts
+!scripts/fixtures/
+scripts/fixtures/*
+!scripts/fixtures/subagent-lifecycle.ts
 # ---- ignr (detected: linux,node) @ 2026-01-30 ----
 
 # === linux ===
@@ -123,3 +131,4 @@ bun.lockb
 .pi/todos/
 .mmry/mmry.jsonl
 .mmry/index/
+node_modules

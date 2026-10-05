@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OqtoTodosConfig",
+  "type": "object",
+  "properties": {
+    "enabled": { "type": "boolean", "default": true },
+    "debug": { "type": "boolean", "default": false },
+    "storagePath": { "type": "string" },
+    "sessionScoped": { "type": "boolean", "default": true },
+    "tuiWidget": { "type": "boolean", "default": true },
+    "tuiWidgetCollapsed": { "type": "boolean", "default": true },
+    "preserveInCompaction": { "type": "boolean", "default": true }
+  }
+}

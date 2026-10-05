@@ -1,0 +1,8 @@
+{
+  "enabled": true,
+  "debug": false,
+  "sessionScoped": true,
+  "tuiWidget": true,
+  "tuiWidgetCollapsed": true,
+  "preserveInCompaction": true
+}

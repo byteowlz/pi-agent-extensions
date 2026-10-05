@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "mode": "review",
+  "title": "Review proposed changes",
+  "groups": [{ "id": "engine", "title": "Engine" }, { "id": "interface", "title": "Interface" }],
+  "items": [{ "id": "storage", "label": "Private durable storage", "description": "Review revision safety", "groupId": "engine", "required": true }, { "id": "browser", "label": "Browser review", "groupId": "interface" }],
+  "choices": [{ "id": "accept", "label": "Accept" }, { "id": "revise", "label": "Needs revision" }, { "id": "unsure", "label": "Unsure" }],
+  "allowOther": true,
+  "note": { "label": "Review comments", "multiline": true, "maxLength": 4000 }
+}

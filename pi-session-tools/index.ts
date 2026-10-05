@@ -1,0 +1,3131 @@
+/**
+ * pi-session-tools — route-aware tools: delegate a task to a new pi subagent
+ * in a fresh herdr tab, and fork the current session into its own named tab.
+ *
+ * The current agent calls the `subagent` tool (action=spawn); the user stays in
+ * control through a config file (kill switch, model allowlist, allowance) plus
+ * per-session settings (allow mode, auto decision, timeout, allowance):
+ *
+ *   ~/.pi/agent/subagent-config.json
+ *
+ *   {
+ *     "enabled": true,              // kill switch: false = model cannot spawn at all
+ *     "requireConfirmation": true,  // legacy: true = confirm (mapped to allowMode confirm)
+ *     "allowedModels": [],          // glob patterns (e.g. "openai/*", "archvm/*"); [] = all allowed
+ *     "maxSubagents": 3             // default max concurrent subagents per session; 0 = unlimited
+ *     "allowMode": "confirm",       // per-session default: "confirm" | "auto" | "timeout"
+ *     "autoDecision": "deny",       // when allowMode=timeout and nobody answers: "allow" | "deny"
+ *     "confirmTimeoutMs": 60000,    // how long the timed prompt waits before auto-deciding
+ *     "loadouts": {}                // named presets: array of patterns OR { models, mode?, max?, kinds? }
+ *     //   { "local": ["rtx6000/deepseek"],
+ *     //     "smart": { models: ["openai-codex/gpt-6.1-sol"], mode: "auto", max: 3, kinds: ["pi"] } }
+ *   }
+ *
+ * Per-session settings (allow mode, auto decision, timeout, allowance and the
+ * list of spawned subagents) live in a state file keyed by the pi session id:
+ *
+ *   ~/.pi/agent/subagent-state/<sessionId>.json
+ *
+ * A session's allowlist / subagent allowance is scoped to that session only:
+ * other sessions never count against it, and settings survive a resume/reload.
+ *
+ * Commands:
+ *   /subagent status                  show config + per-session state + active subagents
+ *   /subagent on|off                  enable/disable model-initiated spawning
+ *   /subagent mode <auto|confirm|timeout>   set this session's allow mode
+ *   /subagent decide <allow|deny>     set what a timed prompt does when it times out
+ *   /subagent timeout <ms>            set the timed prompt's auto-decide delay
+ *   /subagent max <n>                 set this session's concurrent allowance (0 = unlimited)
+ *   /subagent list                    list subagents this session spawned + status
+ *   /subagent close <name>            close a subagent's tab (kills it)
+ *   /subagent reset <name> [task]     interrupt a subagent and (optionally) re-prompt it
+ *   /subagent models                  open the interactive provider/model picker
+ *   /subagent models add <glob>       allow a model pattern (repeatable)
+ *   /subagent models remove <glob>    remove an allowlisted pattern
+ *   /subagent models list             show allowlist + loadouts
+ *   /subagent models clear            empty the allowlist (allow all)
+ *   /subagent models loadout save <name>   save current allowlist as a named loadout
+ *   /subagent models loadout load <name>   apply a loadout to the allowlist
+ *   /subagent models loadout delete <name>
+ *   /subagent models loadout list
+ *   /side [label] [--model M] txt     Fork the CURRENT session into a new named
+ *                                     tab (like Claude /btw or Codex /side, own tab)
+ *   /btw ...                          alias for /side
+ *
+ * Session semantics: pi is single-writer per session file (loaded once at
+ * startup; appended to; no reload/lock). Two TUIs on the SAME file do NOT
+ * auto-branch — they diverge and collide. To steer a copy in a new direction
+ * in its own tab, /side forks the current session into a NEW file
+ * (pi --fork <file>) whose header records the parent, then opens pi there.
+ *
+ * Spawns via the herdr CLI (the documented automation path; herdr itself is
+ * socket-backed via HERDR_SOCKET_PATH): tab create -> agent start -> prompt.
+ */
+
+import { execFile } from "node:child_process";
+import * as fs from "node:fs";
+import * as net from "node:net";
+import * as os from "node:os";
+import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	Editor,
+	type EditorTheme,
+	Input,
+	Key,
+	fuzzyFilter,
+	matchesKey,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
+import { Type } from "typebox";
+import { STATUS_QUERY, type StatusQuery } from "../pi-introspection/contributions.js";
+import { openTmuxSide, resolveRoute } from "./backend.js";
+import { subagentOutputSchema, subagentResult } from "./output.js";
+
+/** A named subagent profile: model allowlist plus optional mode/cap/kind. */
+export interface PresetLoadout {
+	/** Allowlist patterns ("provider/id" or globs). Empty = all models allowed. */
+	models: string[];
+	/** Optional allow mode this preset pins the session to. */
+	mode?: AllowMode;
+	/** Optional concurrent-subagent cap this preset pins the session to. */
+	max?: number;
+	/** Optional set of herdr agent kinds this preset allows spawn. */
+	kinds?: string[];
+}
+/** A loadout may be a plain pattern array (legacy) or a full preset object. */
+export type LoadoutDef = string[] | PresetLoadout;
+
+function isPresetObject(v: unknown): v is Record<string, unknown> {
+	return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** Normalize a loadout (pattern array or preset object) to a full preset. */
+export function normalizeLoadout(def: LoadoutDef): PresetLoadout {
+	if (Array.isArray(def)) return { models: def };
+	return { models: def.models ?? [], mode: def.mode, max: def.max, kinds: def.kinds };
+}
+
+/** True if the preset carries any useful setting (else it is empty/ignored). */
+export function loadoutHasContent(def: PresetLoadout): boolean {
+	return def.models.length > 0 || def.mode !== undefined || def.max !== undefined || def.kinds !== undefined;
+}
+
+/** Human description of a preset for notify/status output. */
+function describePreset(def: PresetLoadout): string {
+	const parts: string[] = [def.models.length ? def.models.join(", ") : "(all models)"];
+	if (def.mode) parts.push(`mode=${def.mode}`);
+	if (def.max !== undefined) parts.push(`max=${def.max}`);
+	if (def.kinds) parts.push(`kinds=${def.kinds.join(",")}`);
+	return parts.join(" · ");
+}
+
+function stringArray(v: unknown): string[] | undefined {
+	return Array.isArray(v) ? v.filter((p) => typeof p === "string") : undefined;
+}
+
+const execFileAsync = promisify(execFile);
+
+// ---------------------------------------------------------------------------
+// herdr blocked-state reporting (best-effort; only inside a herdr pane)
+// ---------------------------------------------------------------------------
+
+const HERDR_SOURCE = "pi-session-tools";
+let herdrSeq = 0;
+
+function herdrReport(state: "blocked" | "working", message?: string): void {
+	const pane = process.env.HERDR_PANE_ID;
+	if (process.env.HERDR_ENV !== "1" || !pane) return;
+	herdrSeq += 1;
+	const args = [
+		"pane",
+		"report-agent",
+		pane,
+		"--source",
+		HERDR_SOURCE,
+		"--agent",
+		"pi",
+		"--state",
+		state,
+		"--seq",
+		String(herdrSeq),
+	];
+	if (message) args.push("--message", message);
+	execFile("herdr", args, () => {}); // fire-and-forget
+}
+
+/** Hand lifecycle authority back to herdr's own detection after a prompt. */
+function herdrRelease(): void {
+	const pane = process.env.HERDR_PANE_ID;
+	if (process.env.HERDR_ENV !== "1" || !pane) return;
+	execFile("herdr", ["pane", "release-agent", pane, "--source", HERDR_SOURCE, "--agent", "pi"], () => {});
+}
+
+const CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "subagent-config.json");
+const STATE_DIR = path.join(os.homedir(), ".pi", "agent", "subagent-state");
+const HISTORY_PATH = path.join(os.homedir(), ".pi", "agent", "subagent-history.jsonl"); // durable, append-only ledger
+const NAME_PREFIX = "sub-"; // agent names must match [a-z][a-z0-9_-]{0,31}
+const POLL_INTERVAL_MS = 4000;
+
+// gvnr event-log emission (best-effort, non-fatal). Set GVNR_EVENT_URL + GVNR_TOKEN
+// to forward closure/completion records to the gvnr fleet-intake audit log.
+const GVNR_EVENT_URL = process.env.GVNR_EVENT_URL ?? "";
+const GVNR_TOKEN = process.env.GVNR_TOKEN ?? "";
+
+type SubagentOutcome = "done" | "closed" | "error" | "unknown";
+
+type AllowMode = "confirm" | "auto" | "timeout";
+type AutoDecision = "allow" | "deny";
+
+interface SubagentConfig {
+	enabled: boolean;
+	requireConfirmation: boolean;
+	allowedModels: string[];
+	allowedKinds: string[];
+	maxSubagents: number;
+	allowMode: AllowMode;
+	autoDecision: AutoDecision;
+	confirmTimeoutMs: number;
+	loadouts: Record<string, LoadoutDef>;
+	/** Path to the byteowlz model catalog (metadata + loadouts + policy). */
+	catalogPath?: string;
+}
+
+const DEFAULT_CONFIG: SubagentConfig = {
+	enabled: true,
+	requireConfirmation: true,
+	allowedModels: [],
+	allowedKinds: ["pi"],
+	maxSubagents: 3,
+	allowMode: "confirm",
+	autoDecision: "deny",
+	confirmTimeoutMs: 60_000,
+	loadouts: {},
+	catalogPath: path.join(os.homedir(), ".pi", "agent", "model-catalog.json"),
+};
+
+function asAllowMode(v: unknown): AllowMode | undefined {
+	return v === "confirm" || v === "auto" || v === "timeout" ? v : undefined;
+}
+
+function asAutoDecision(v: unknown): AutoDecision | undefined {
+	return v === "allow" || v === "deny" ? v : undefined;
+}
+
+function loadConfig(): SubagentConfig {
+	try {
+		if (fs.existsSync(CONFIG_PATH)) {
+			const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) as Partial<SubagentConfig>;
+			const allowMode = asAllowMode(raw.allowMode) ?? (raw.requireConfirmation === false ? "auto" : "confirm");
+			const loadouts: Record<string, LoadoutDef> = {};
+			if (raw.loadouts && typeof raw.loadouts === "object") {
+				for (const [k, v] of Object.entries(raw.loadouts)) {
+					if (Array.isArray(v)) {
+						loadouts[k] = v.filter((p) => typeof p === "string");
+					} else if (isPresetObject(v)) {
+						const models = stringArray(v.models) ?? [];
+						const mode = asAllowMode(v.mode);
+						const max = typeof v.max === "number" && v.max >= 0 ? Math.floor(v.max) : undefined;
+						const kinds = stringArray(v.kinds);
+						loadouts[k] = { models, mode, max, kinds };
+					}
+				}
+			}
+			return {
+				enabled: raw.enabled ?? DEFAULT_CONFIG.enabled,
+				requireConfirmation: raw.requireConfirmation ?? DEFAULT_CONFIG.requireConfirmation,
+				allowedModels: Array.isArray(raw.allowedModels) ? raw.allowedModels.filter((p) => typeof p === "string") : [],
+				allowedKinds: Array.isArray(raw.allowedKinds)
+					? raw.allowedKinds.filter((p) => typeof p === "string")
+					: DEFAULT_CONFIG.allowedKinds,
+				maxSubagents: typeof raw.maxSubagents === "number" ? raw.maxSubagents : DEFAULT_CONFIG.maxSubagents,
+				allowMode,
+				autoDecision: asAutoDecision(raw.autoDecision) ?? DEFAULT_CONFIG.autoDecision,
+				confirmTimeoutMs: typeof raw.confirmTimeoutMs === "number" ? raw.confirmTimeoutMs : DEFAULT_CONFIG.confirmTimeoutMs,
+				loadouts,
+				catalogPath: typeof raw.catalogPath === "string" ? raw.catalogPath : DEFAULT_CONFIG.catalogPath,
+			};
+		}
+	} catch {
+		// fall through to defaults on a corrupt file
+	}
+	return { ...DEFAULT_CONFIG };
+}
+
+function saveConfig(config: SubagentConfig): void {
+	try {
+		fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+		fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+	} catch {
+		// non-fatal: config still applies for this process
+	}
+}
+
+// --- Model catalog (byteowlz metadata + loadouts + policy) ------------
+
+interface CatalogModelEntry {
+	id: string;
+	provider: string;
+	label?: string;
+	dataResidency?: "local" | "internal" | "azure" | "external";
+	zdr?: boolean;
+	costType?: "free" | "subscription" | "per-token";
+	spawnKind?: string;
+	tags: string[];
+}
+
+interface CatalogLoadout {
+	match?: "any" | "all";
+	tags: string[];
+	excludeTags?: string[];
+	description?: string;
+}
+
+interface ModelCatalog {
+	version?: number;
+	policy?: { defaultKind?: string; defaultLoadout?: string; defaultAllowMode?: string };
+	providers?: Record<string, { dataResidency?: string; note?: string }>;
+	models?: CatalogModelEntry[];
+	loadouts?: Record<string, CatalogLoadout>;
+}
+
+const CATALOG_LOCAL_NAMES = ["model-catalog.json"];
+
+function resolveCatalogPath(catalogPath: string | undefined): string {
+	if (!catalogPath) return DEFAULT_CONFIG.catalogPath!;
+	if (catalogPath.startsWith("~")) return path.join(os.homedir(), catalogPath.slice(1));
+	return catalogPath;
+}
+
+function loadCatalogFile(p: string): ModelCatalog | null {
+	try {
+		if (!p || !fs.existsSync(p)) return null;
+		return JSON.parse(fs.readFileSync(p, "utf8")) as ModelCatalog;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Load the model catalog with layering (most-specific wins):
+ * global catalogPath -> <cwd>/.pi/model-catalog.json -> <cwd>/model-catalog.json.
+ * "models" merge by id; "loadouts"/"policy"/"providers" override by key.
+ */
+export function loadCatalog(cwd: string | undefined, basePath?: string): ModelCatalog {
+	const merged: ModelCatalog = { version: 1, models: [], providers: {}, loadouts: {} };
+	const apply = (c: ModelCatalog | null) => {
+		if (!c) return;
+		merged.version = c.version ?? merged.version;
+		if (c.policy) merged.policy = { ...merged.policy, ...c.policy };
+		if (c.providers) merged.providers = { ...merged.providers, ...c.providers };
+		if (c.loadouts) merged.loadouts = { ...merged.loadouts, ...c.loadouts };
+		if (Array.isArray(c.models)) {
+			const byId = new Map((merged.models ?? []).map((m) => [m.id, m]));
+			for (const m of c.models) byId.set(m.id, m);
+			merged.models = [...byId.values()];
+		}
+	};
+
+	apply(loadCatalogFile(basePath ?? resolveCatalogPath(loadConfig().catalogPath)));
+	if (cwd) {
+		for (const name of CATALOG_LOCAL_NAMES) {
+			apply(loadCatalogFile(path.join(cwd, ".pi", name)));
+			apply(loadCatalogFile(path.join(cwd, name)));
+		}
+	}
+	return merged;
+}
+
+/** Resolve a loadout to the set of model ids it selects. */
+export function resolveLoadoutModelIds(catalog: ModelCatalog, loadoutName: string): string[] {
+	const loadout = catalog.loadouts?.[loadoutName];
+	if (!loadout) return [];
+	const tags = loadout.tags ?? [];
+	const exclude = loadout.excludeTags ?? [];
+	const matchAll = loadout.match === "all";
+	return (catalog.models ?? [])
+		.filter((m) => (matchAll ? tags.every((t) => m.tags?.includes(t)) : tags.some((t) => m.tags?.includes(t))))
+		.filter((m) => !exclude.some((t) => m.tags?.includes(t)))
+		.map((m) => m.id);
+}
+
+export interface CatalogDeriveResult {
+	/** New entries to append to the catalog file. */
+	added: CatalogModelEntry[];
+	/** Scoped models already present in the catalog. */
+	existingCount: number;
+	/** Allowlist patterns that matched no registry model. */
+	unmatched: string[];
+}
+
+/**
+ * Derive catalog model entries from the scoped (allowlisted) registry models:
+ * every registry model matching an allowlist pattern that is not already in
+ * the catalog becomes a stub entry (label from the registry, optional tags).
+ * Existing catalog entries are never modified.
+ */
+export function deriveCatalogEntries(
+	catalog: ModelCatalog,
+	registry: ModelInfo[],
+	patterns: string[],
+	tags: string[]
+): CatalogDeriveResult {
+	const known = new Set((catalog.models ?? []).map((m) => `${m.provider}/${m.id}`));
+	const matchedPatterns = new Set<string>();
+	const added: CatalogModelEntry[] = [];
+	let existingCount = 0;
+	for (const m of registry) {
+		const full = `${m.provider}/${m.id}`;
+		if (!allowedBy(patterns, full)) continue;
+		for (const p of patterns) {
+			if (allowedBy([p], full)) matchedPatterns.add(p);
+		}
+		if (known.has(full)) {
+			existingCount++;
+			continue;
+		}
+		added.push({ id: m.id, provider: m.provider, label: m.name, tags: [...tags] });
+	}
+	return { added, existingCount, unmatched: patterns.filter((p) => !matchedPatterns.has(p)) };
+}
+
+/** Return the spawn kinds a loadout allows (from its models' spawnKind). */
+export function resolveLoadoutKinds(catalog: ModelCatalog, loadoutName: string): string[] {
+	const ids = new Set(resolveLoadoutModelIds(catalog, loadoutName));
+	const kinds = new Set<string>();
+	for (const m of catalog.models ?? []) {
+		if (ids.has(m.id) && m.spawnKind) kinds.add(m.spawnKind);
+	}
+	return [...kinds];
+}
+
+/** Build a compact, agent-facing compute/cost/privacy digest. */
+export function buildCatalogDigest(catalog: ModelCatalog): string {
+	if (!catalog.models?.length) return "";
+	const lines: string[] = [];
+	const byResidency = new Map<string, CatalogModelEntry[]>();
+	for (const m of catalog.models) {
+		const r = m.dataResidency ?? "unknown";
+		byResidency.set(r, [...(byResidency.get(r) ?? []), m]);
+	}
+	for (const [res, ms] of byResidency) {
+		const labels = ms.map((m) => m.label ?? m.id).join(", ");
+		lines.push(`- ${res}: ${labels}`);
+	}
+	if (catalog.loadouts) {
+		const lo = Object.keys(catalog.loadouts);
+		if (lo.length) lines.push(`Loadouts: ${lo.join(", ")}`);
+	}
+	return lines.join("\n");
+}
+
+// --- Per-session state ------------------------------------------------
+
+interface TrackedSubagent {
+	name: string;
+	paneId: string;
+	tabId?: string;
+	model: string;
+	kind?: string;
+	label: string;
+	cwd: string;
+	spawnedAt: number;
+	status?: string; // last observed herdr status (idle/working/blocked/done/unknown)
+	done?: boolean; // observed done; completion notification sent
+	notified?: boolean; // completion notification dispatched
+	gone?: boolean; // tab closed / agent no longer listed
+	endedAt?: number; // when the agent finished or was closed
+	outcome?: SubagentOutcome; // durable terminal state (done/closed/error/unknown)
+}
+
+interface SubagentHistoryEntry {
+	name: string;
+	label: string;
+	paneId?: string;
+	tabId?: string;
+	model: string;
+	cwd: string;
+	spawnedAt: number;
+	endedAt: number;
+	outcome: SubagentOutcome;
+	statusFinal?: string;
+	workspaceId?: string;
+	agentAddress?: string; // AGENT_CTX_AGENT_ADDRESS provenance
+}
+
+interface SessionState {
+	sessionId: string;
+	allowMode?: AllowMode;
+	autoDecision?: AutoDecision;
+	confirmTimeoutMs?: number;
+	maxSubagents?: number;
+	subagents: Record<string, TrackedSubagent>;
+	/** Durable append-only ledger of finished/closed subagents this session spawned. */
+	history?: SubagentHistoryEntry[];
+	/** This session's active model allowlist (overrides the global default while set). */
+	allowlist?: string[];
+	/** Local (per-session) named loadouts. */
+	loadouts?: Record<string, LoadoutDef>;
+	/** Whether this session may use global loadouts. Default true. */
+	allowGlobalLoadouts?: boolean;
+	/** This session's allowed herdr agent kinds (overrides config.allowedKinds when set). */
+	allowedKinds?: string[];
+	/** Loadout name this session is pinned to (resolved local-first, then global if allowed). */
+	forceLoadout?: string;
+}
+
+let currentSessionId: string | null = null;
+let currentState: SessionState | null = null;
+let notifyTimer: ReturnType<typeof setInterval> | null = null;
+
+function sessionIdOf(ctx: ExtensionContext): string | null {
+	try {
+		return ctx.sessionManager.getSessionId() ?? null;
+	} catch {
+		return null;
+	}
+}
+
+function stateFilePath(sessionId: string): string {
+	const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, "-");
+	return path.join(STATE_DIR, `${safe}.json`);
+}
+
+function loadSessionState(ctx: ExtensionContext): void {
+	const id = sessionIdOf(ctx);
+	currentSessionId = id;
+	if (!id) {
+		currentState = { sessionId: "ephemeral", subagents: {} };
+		return;
+	}
+	try {
+		if (fs.existsSync(stateFilePath(id))) {
+			const raw = JSON.parse(fs.readFileSync(stateFilePath(id), "utf8")) as Partial<SessionState>;
+			currentState = {
+				sessionId: id,
+				...(raw as object),
+				subagents: (raw.subagents as Record<string, TrackedSubagent>) ?? {},
+			};
+			return;
+		}
+	} catch {
+		// fall through
+	}
+	currentState = { sessionId: id, subagents: {} };
+}
+
+function persistState(): void {
+	if (!currentState || !currentSessionId) return; // ephemeral: in-memory only
+	try {
+		fs.mkdirSync(STATE_DIR, { recursive: true });
+		fs.writeFileSync(stateFilePath(currentSessionId), JSON.stringify(currentState, null, 2));
+	} catch {
+		// non-fatal
+	}
+}
+
+function ensureSessionState(ctx: ExtensionContext): void {
+	const id = sessionIdOf(ctx);
+	if (!currentState || currentSessionId !== id) loadSessionState(ctx);
+}
+
+function trackSubagent(ctx: ExtensionContext, t: TrackedSubagent): void {
+	ensureSessionState(ctx);
+	if (currentState) currentState.subagents[t.name] = t;
+	persistState();
+}
+
+function sessionAllowMode(config: SubagentConfig): AllowMode {
+	return currentState?.allowMode ?? config.allowMode;
+}
+function sessionAutoDecision(config: SubagentConfig): AutoDecision {
+	return currentState?.autoDecision ?? config.autoDecision;
+}
+function sessionConfirmTimeout(config: SubagentConfig): number {
+	return currentState?.confirmTimeoutMs ?? config.confirmTimeoutMs;
+}
+function sessionMaxSubagents(config: SubagentConfig): number {
+	return currentState?.maxSubagents ?? config.maxSubagents;
+}
+
+function isInHerdr(): boolean {
+	return process.env.HERDR_ENV === "1" && !!process.env.HERDR_SOCKET_PATH;
+}
+
+async function herdr(args: string[], opts?: { timeout?: number; signal?: AbortSignal }): Promise<any> {
+	const route = await resolveRoute(process.env, undefined, opts?.signal);
+	if (!route.ready || route.owner !== "herdr") throw new Error(route.reason);
+	const { stdout } = await execFileAsync("herdr", args, {
+		maxBuffer: 8 * 1024 * 1024,
+		timeout: 30_000,
+		killSignal: "SIGKILL",
+		...opts,
+	});
+	const text = stdout.trim();
+	if (!text) return {};
+	try {
+		return JSON.parse(text);
+	} catch {
+		return { result: undefined, raw: text };
+	}
+}
+
+/** Run `herdr <args>` and return the raw stdout as a string, without JSON parsing. */
+async function herdrRaw(args: string[], opts?: { timeout?: number }): Promise<string> {
+	const route = await resolveRoute(process.env);
+	if (!route.ready || route.owner !== "herdr") throw new Error(route.reason);
+	const { stdout } = await execFileAsync("herdr", args, { maxBuffer: 16 * 1024 * 1024, ...opts });
+	return stdout;
+}
+
+/** True when a failed `herdr agent start` was rejected because the target pane's
+ * shell was not yet at an interactive prompt (`agent_pane_busy`). A freshly
+ * created tab's shell can take a moment (slow rc files, load) to get there. */
+export function isPaneBusyError(err: unknown): boolean {
+	if (!err) return false;
+	const e = err as Error & { stderr?: string; message?: string };
+	const text = `${e.message ?? ""}\n${e.stderr ?? ""}`;
+	return /agent_pane_busy/.test(text);
+}
+
+const AGENT_START_ATTEMPTS = 4;
+const AGENT_START_BACKOFF_MS = 500;
+
+/** `herdr agent start` with bounded retries: a freshly created tab's root pane
+ * is only startable once its shell sits at an interactive prompt, and herdr
+ * rejects too-early attempts with `agent_pane_busy`. Retries only that error
+ * (400/800/1600ms backoff); anything else fails immediately. */
+async function startAgentWithRetry(
+	args: string[],
+	attempts = AGENT_START_ATTEMPTS,
+	activity?: { signal?: AbortSignal; assertActive: () => void }
+): Promise<any> {
+	let lastErr: unknown;
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		activity?.assertActive();
+		if (attempt > 0) {
+			await delay(AGENT_START_BACKOFF_MS * 2 ** (attempt - 1), undefined, { signal: activity?.signal });
+		}
+		activity?.assertActive();
+		try {
+			return await herdr(args, { signal: activity?.signal });
+		} catch (err) {
+			activity?.assertActive();
+			lastErr = err;
+			if (!isPaneBusyError(err)) throw err;
+		}
+	}
+	throw lastErr;
+}
+
+/** Convert a simple glob (e.g. "openai/*") to a RegExp. */
+function globToRegExp(pattern: string): RegExp {
+	const escaped = pattern
+		.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+		.replace(/\*/g, ".*")
+		.replace(/\?/g, ".");
+	return new RegExp(`^${escaped}$`);
+}
+
+/** Does `full` (e.g. "openai/gpt-5") match any of the given patterns? Empty = all allowed. */
+function allowedBy(patterns: string[], full: string): boolean {
+	if (patterns.length === 0) return true;
+	const provider = full.split("/")[0] ?? "";
+	const bare = full.split("/").pop() ?? full;
+	return patterns.some((p) => {
+		const re = globToRegExp(p);
+		return re.test(full) || re.test(bare) || re.test(`${provider}/*`);
+	});
+}
+
+// --- Loadouts (global + per-session) & effective allowlist ------------
+
+function sessionAllowGlobalLoadouts(): boolean {
+	return currentState?.allowGlobalLoadouts !== false;
+}
+
+/** Resolve a loadout name to a full preset: local (per-session) first, then global if allowed. */
+function resolveLoadout(name: string, config: SubagentConfig): PresetLoadout | undefined {
+	const local = currentState?.loadouts?.[name];
+	if (local !== undefined) {
+		const def = normalizeLoadout(local);
+		if (loadoutHasContent(def)) return def;
+	}
+	if (sessionAllowGlobalLoadouts() && config.loadouts?.[name] !== undefined) {
+		const def = normalizeLoadout(config.loadouts[name]);
+		if (loadoutHasContent(def)) return def;
+	}
+	return undefined;
+}
+
+/** This session's effective allowed herdr kinds (session override, else config). */
+function sessionAllowedKinds(config: SubagentConfig): string[] {
+	return currentState?.allowedKinds ?? config.allowedKinds;
+}
+
+/** Apply a full preset to the current session (allowlist + optional mode/max/kinds). Does not touch force. */
+function applyPresetToSession(name: string, config: SubagentConfig): PresetLoadout | undefined {
+	const def = resolveLoadout(name, config);
+	if (!def) return undefined;
+	if (!currentState) currentState = { sessionId: "ephemeral", subagents: {} };
+	currentState.allowlist = [...def.models];
+	if (def.mode !== undefined) currentState.allowMode = def.mode;
+	if (def.max !== undefined) currentState.maxSubagents = def.max;
+	if (def.kinds !== undefined) currentState.allowedKinds = [...def.kinds];
+	persistState();
+	return def;
+}
+
+/** The effective allowlist this session uses for spawning, plus where it came from. */
+function effectiveAllowlist(config: SubagentConfig): { patterns: string[]; source: string } {
+	const force = currentState?.forceLoadout;
+	if (force) {
+		const def = resolveLoadout(force, config);
+		if (def) return { patterns: def.models, source: `loadout:${force}` };
+	}
+	if (currentState?.allowlist !== undefined) return { patterns: currentState.allowlist, source: "session" };
+	return { patterns: config.allowedModels, source: "global" };
+}
+
+/** Drop any force pin so an explicit edit takes effect. */
+function clearForceLoadout(): void {
+	if (currentState) currentState.forceLoadout = undefined;
+}
+
+/** Return this session's mutable allowlist, initialised from the effective one if not set. */
+function ensureSessionAllowlist(config: SubagentConfig): string[] {
+	if (!currentState) currentState = { sessionId: "ephemeral", subagents: {} };
+	if (currentState.allowlist === undefined) {
+		currentState.allowlist = effectiveAllowlist(config).patterns;
+		currentState.forceLoadout = undefined;
+		persistState();
+	}
+	return currentState.allowlist;
+}
+
+// --- Subagent lifecycle (count, monitor, notify) -----------------------
+
+async function fetchAgentStatusMap(): Promise<Map<string, string>> {
+	const res = await herdr(["agent", "list"]);
+	const agents: unknown[] = Array.isArray(res?.result?.agents) ? res.result.agents : [];
+	const map = new Map<string, string>();
+	for (const a of agents) {
+		if (!a || typeof a !== "object") continue;
+		const { name, agent_status } = a as { name?: unknown; agent_status?: unknown };
+		if (typeof name === "string") map.set(name, typeof agent_status === "string" ? agent_status : "");
+	}
+	return map;
+}
+
+/**
+ * Count subagents THIS session spawned that are still live and not finished.
+ * Persisted per-session, so the allowance survives a resume/reload and is
+ * never polluted by subagents another session (or another workspace) spawned.
+ */
+async function countSubagents(): Promise<number> {
+	if (!currentState) return 0;
+	const names = Object.keys(currentState.subagents);
+	if (names.length === 0) return 0;
+	const statuses = await fetchAgentStatusMap();
+	let active = 0;
+	for (const name of names) {
+		const t = currentState.subagents[name];
+		if (t.gone) continue;
+		const status = statuses.get(name);
+		if (status === undefined) continue; // not listed -> not occupying the cap
+		if (status !== "done") active += 1;
+	}
+	return active;
+}
+
+function hasPendingSubagents(): boolean {
+	if (!currentState) return false;
+	return Object.values(currentState.subagents).some((t) => !t.done && !t.gone);
+}
+
+function stopNotifyTimer(): void {
+	if (notifyTimer) {
+		clearInterval(notifyTimer);
+		notifyTimer = null;
+	}
+}
+
+function startNotifyTimer(pi: ExtensionAPI, ctx: ExtensionContext): void {
+	if (notifyTimer) return;
+	if (!hasPendingSubagents()) return;
+	notifyTimer = setInterval(() => {
+		void pollSubagents(pi, ctx);
+	}, POLL_INTERVAL_MS);
+}
+
+function notifyFinished(pi: ExtensionAPI, ctx: ExtensionContext, t: TrackedSubagent): void {
+	const detail = [
+		`Subagent ${t.name} (${t.label}) has FINISHED its task.`,
+		"",
+		`  model: ${t.model}`,
+		`  cwd:   ${t.cwd}`,
+		"",
+		`Read its output: herdr agent read ${t.name} --source recent-unwrapped --format text`,
+		`Or just ask for it: herdr agent read ${t.name} --source recent-unwrapped --format text`,
+	].join("\n");
+	try {
+		// deliverAs followUp so a completion landing while the parent is
+		// mid-stream queues instead of throwing "Agent is already processing".
+		pi.sendUserMessage(detail, { deliverAs: "followUp" });
+	} catch {
+		// no session to inject into (print/RPC mode)
+	}
+	try {
+		ctx.ui.notify(`Subagent ${t.name} finished its task.`, "info");
+	} catch {
+		// ignore
+	}
+}
+
+async function pollSubagents(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
+	if (!isInHerdr()) return;
+	if (!currentState) return;
+	let statuses: Map<string, string>;
+	try {
+		statuses = await fetchAgentStatusMap();
+	} catch {
+		return; // transient: herdr unavailable
+	}
+	let changed = false;
+	for (const name of Object.keys(currentState.subagents)) {
+		const t = currentState.subagents[name];
+		if (t.done || t.gone) continue;
+		const status = statuses.get(name);
+		if (status === undefined) {
+			t.gone = true;
+			changed = true;
+			recordOutcome(t, "closed", { statusFinal: t.status });
+			continue;
+		}
+		if (status !== t.status) {
+			t.status = status;
+			changed = true;
+		}
+		if (status === "done") {
+			t.done = true;
+			t.notified = true;
+			changed = true;
+			notifyFinished(pi, ctx, t);
+			recordOutcome(t, "done", { statusFinal: status });
+		}
+	}
+	if (changed) persistState();
+	if (!hasPendingSubagents()) stopNotifyTimer();
+}
+
+// --- Durable subagent outcome: record, retain, emit -------------------
+
+/** Best-effort provenance from the AGENT_CTX / herdr environment. */
+function provenance(): { agentAddress?: string; machine?: string } {
+	const agentAddress = process.env.AGENT_CTX_AGENT_ADDRESS ?? process.env.HERDR_AGENT_ADDRESS;
+	const machine = process.env.AGENT_CTX_MACHINE_ID ?? process.env.HOSTNAME;
+	return { agentAddress, machine };
+}
+
+function ensureSessionHistory(): SubagentHistoryEntry[] {
+	if (!currentState) currentState = { sessionId: "ephemeral", subagents: {} };
+	if (!currentState.history) currentState.history = [];
+	return currentState.history;
+}
+
+/** Append one closure/completion entry to the node-local durable ledger. */
+function appendDurableHistory(entry: SubagentHistoryEntry): void {
+	try {
+		fs.mkdirSync(path.dirname(HISTORY_PATH), { recursive: true });
+		fs.appendFileSync(HISTORY_PATH, `${JSON.stringify(entry)}\n`, "utf8");
+	} catch {
+		// non-fatal: per-session history still holds the record
+	}
+}
+
+/** Best-effort POST to the gvnr fleet-intake audit log (never blocks the session). */
+async function emitGvnrEvent(entry: SubagentHistoryEntry): Promise<void> {
+	if (!GVNR_EVENT_URL) return; // not wired up: durable ledger + session history still apply
+	const causation = provenance();
+	const body = {
+		proto: "gvnr-dpty",
+		version: "0.1.0",
+		kind: "event",
+		causation: {
+			origin: causation.agentAddress ?? "pi-session-tools",
+			machine: causation.machine ?? "",
+			purpose: "subagent-closure",
+		},
+		payload: {
+			ts: new Date(entry.endedAt).toISOString(),
+			type: "subagent.closed",
+			runner_id: entry.name,
+			payload: {
+				outcome: entry.outcome,
+				label: entry.label,
+				model: entry.model,
+				cwd: entry.cwd,
+				statusFinal: entry.statusFinal,
+			},
+		},
+	};
+	try {
+		await fetch(`${GVNR_EVENT_URL.replace(/\/$/, "")}/events`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				...(GVNR_TOKEN ? { authorization: `Bearer ${GVNR_TOKEN}` } : {}),
+			},
+			body: JSON.stringify(body),
+			signal: AbortSignal.timeout(5000),
+		});
+	} catch {
+		// best-effort: never fail the session over an event emit
+	}
+}
+
+/** Record a terminal outcome for a subagent exactly once: durable ledger + session history + gvnr. */
+function recordOutcome(
+	t: TrackedSubagent,
+	outcome: SubagentOutcome,
+	extra: { statusFinal?: string; workspaceId?: string } = {}
+): void {
+	if (t.endedAt) return; // already recorded
+	t.outcome = outcome;
+	t.endedAt = Date.now();
+	const entry: SubagentHistoryEntry = {
+		name: t.name,
+		label: t.label,
+		paneId: t.paneId,
+		tabId: t.tabId,
+		model: t.model,
+		cwd: t.cwd,
+		spawnedAt: t.spawnedAt,
+		endedAt: t.endedAt,
+		outcome,
+		statusFinal: extra.statusFinal ?? t.status,
+		workspaceId: extra.workspaceId,
+		agentAddress: provenance().agentAddress,
+	};
+	appendDurableHistory(entry);
+	const hist = ensureSessionHistory();
+	hist.push(entry);
+	persistState();
+	void emitGvnrEvent(entry);
+}
+
+// --- herdr socket event subscription (push close/exit detection) ------
+
+const EVENT_SUB_TYPES = ["tab.closed", "pane.closed", "pane.exited"];
+let eventSocket: net.Socket | null = null;
+let eventReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let eventBuf = "";
+
+function stopEventSubscriber(): void {
+	if (eventReconnectTimer) {
+		clearTimeout(eventReconnectTimer);
+		eventReconnectTimer = null;
+	}
+	if (eventSocket) {
+		try {
+			eventSocket.destroy();
+		} catch {
+			// ignore
+		}
+		eventSocket = null;
+	}
+}
+
+/** Correlate a herdr lifecycle event to a tracked subagent and record a closure. */
+function handleEventEnvelope(env: { event?: unknown; data?: unknown }): void {
+	if (!currentState) return;
+	const kind = env.event;
+	const data = (env.data ?? {}) as Record<string, unknown>;
+	const paneId = typeof data.pane_id === "string" ? data.pane_id : undefined;
+	const tabId = typeof data.tab_id === "string" ? data.tab_id : undefined;
+	const workspaceId = typeof data.workspace_id === "string" ? data.workspace_id : undefined;
+	const matched = Object.values(currentState.subagents).filter((t) => {
+		if (t.done || t.gone) return false;
+		if (kind === "tab_closed" && tabId && t.tabId === tabId) return true;
+		if ((kind === "pane_closed" || kind === "pane_exited") && paneId && t.paneId === paneId) return true;
+		return false;
+	});
+	for (const t of matched) {
+		t.gone = true;
+		recordOutcome(t, "closed", { workspaceId });
+	}
+	if (matched.length > 0) persistState();
+}
+
+function handleEventLine(line: string): void {
+	const trimmed = line.trim();
+	if (!trimmed) return;
+	let msg: unknown;
+	try {
+		msg = JSON.parse(trimmed);
+	} catch {
+		return;
+	}
+	if (!msg || typeof msg !== "object") return;
+	const m = msg as Record<string, unknown>;
+	// subscription confirmed
+	if (m.id && (m as { result?: unknown }).result && typeof (m as { result?: unknown }).result === "object") {
+		const r = (m as { result?: { type?: string } }).result;
+		void r; // subscription_started confirmation; nothing further to mark
+		return;
+	}
+	// pushed lifecycle event envelope
+	if (typeof m.event === "string" && m.data) handleEventEnvelope(m);
+}
+
+/** Open a best-effort NDJSON event subscription to herdr over HERDR_SOCKET_PATH. */
+function startEventSubscriber(pi: ExtensionAPI): void {
+	if (!isInHerdr()) return;
+	if (eventSocket) return; // already connected/reconnecting
+	const sockPath = process.env.HERDR_SOCKET_PATH;
+	if (!sockPath) return;
+	try {
+		eventSocket = net.createConnection(sockPath);
+	} catch {
+		eventSocket = null;
+		return;
+	}
+	const sock = eventSocket;
+	eventBuf = "";
+	sock.on("connect", () => {
+		sock.write(
+			`${JSON.stringify({
+				id: `sub-${Date.now()}`,
+				method: "events.subscribe",
+				params: { subscriptions: EVENT_SUB_TYPES.map((type) => ({ type })) },
+			})}\n`
+		);
+	});
+	sock.on("data", (chunk) => {
+		eventBuf += chunk.toString();
+		while (true) {
+			const idx = eventBuf.indexOf("\n");
+			if (idx < 0) break;
+			const line = eventBuf.slice(0, idx);
+			eventBuf = eventBuf.slice(idx + 1);
+			handleEventLine(line);
+		}
+	});
+	const teardown = () => {
+		if (eventSocket === sock) eventSocket = null;
+		if (!eventReconnectTimer) {
+			eventReconnectTimer = setTimeout(() => {
+				eventReconnectTimer = null;
+				startEventSubscriber(pi);
+			}, 5000);
+		}
+	};
+	sock.on("close", teardown);
+	sock.on("error", () => teardown());
+}
+
+function randomName(): string {
+	return `${NAME_PREFIX}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function randomSideName(): string {
+	return `side-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Fork the current session into a brand-new session FILE, then open pi in a
+ * new named herdr tab from that fork.
+ *
+ * We do NOT point two TUIs at the same session file (pi is single-writer;
+ * two writers would diverge/collide without auto-branching). Instead we fork
+ * to a fresh file via `pi --fork`, whose header records the parent session.
+ */
+async function openSideTab(opts: {
+	ctx: ExtensionContext;
+	label: string;
+	cwd?: string;
+	model?: string;
+	instruction?: string;
+}) {
+	const sessionFile = opts.ctx.sessionManager.getSessionFile();
+	if (!sessionFile) {
+		throw new Error("No current session file to fork (ephemeral --no-session?).");
+	}
+
+	const name = randomSideName();
+	const cwd = opts.cwd ?? opts.ctx.sessionManager.getCwd() ?? opts.ctx.cwd;
+	const route = await resolveRoute(process.env);
+	if (!route.ready) throw new Error(route.reason);
+	if (route.owner === "tmux") {
+		return openTmuxSide({
+			pane: process.env.TMUX_PANE!,
+			label: opts.label,
+			cwd,
+			sessionFile,
+			model: opts.model,
+			instruction: opts.instruction,
+		});
+	}
+	if (route.owner !== "herdr") throw new Error("Side windows require an active Herdr or tmux session.");
+
+	const tabRes = await herdr(["tab", "create", "--label", opts.label, "--cwd", cwd, "--no-focus"]);
+	const paneId = tabRes?.result?.root_pane?.pane_id;
+	const tabId = tabRes?.result?.tab?.tab_id;
+	if (!paneId) {
+		throw new Error(`herdr tab create failed: ${JSON.stringify(tabRes).slice(0, 400)}`);
+	}
+
+	const piArgs: string[] = ["--fork", sessionFile];
+	if (opts.model) piArgs.push("--model", opts.model);
+	const startRes = await startAgentWithRetry(["agent", "start", name, "--kind", "pi", "--pane", paneId, "--", ...piArgs]);
+	if (startRes?.error || !startRes?.result?.agent?.name) {
+		throw new Error(`herdr agent start failed: ${JSON.stringify(startRes).slice(0, 400)}`);
+	}
+
+	if (opts.instruction) {
+		await herdr(["agent", "prompt", name, opts.instruction]);
+	}
+
+	return { name, tabId, paneId };
+}
+
+const SUBAGENT_ACTIONS = ["spawn", "list", "info"] as const;
+type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
+
+interface SubagentToolParams {
+	action?: SubagentAction;
+	task?: string;
+	model?: string;
+	kind?: string;
+	loadout?: string;
+	tabLabel?: string;
+	cwd?: string;
+}
+
+const SubagentToolParamsSchema = Type.Object({
+	action: Type.Optional(
+		Type.Union(
+			SUBAGENT_ACTIONS.map((a) => Type.Literal(a)),
+			{
+				description:
+					"What to do: 'spawn' (default) delegate a task, 'list' this session's subagents, 'info' available compute/cost/privacy.",
+			}
+		)
+	),
+	task: Type.Optional(Type.String({ description: "Task to delegate to a new subagent (action=spawn)." })),
+	model: Type.Optional(Type.String({ description: "Model id to spawn (action=spawn). Defaults to the loadout/current model." })),
+	kind: Type.Optional(Type.String({ description: "herdr agent kind (action=spawn). Default 'pi'; e.g. 'claude', 'codex'." })),
+	loadout: Type.Optional(
+		Type.String({ description: "Named loadout to gate/choose the model (action=spawn), e.g. 'local', 'data-privacy'." })
+	),
+	tabLabel: Type.Optional(Type.String({ description: "Label for the new herdr tab (action=spawn)." })),
+	cwd: Type.Optional(Type.String({ description: "Working directory for the subagent (action=spawn)." })),
+});
+
+// --- Confirmation with per-session allow mode -------------------------
+
+type SpawnDecision = { ok: boolean; model?: string };
+
+/**
+ * Confirmation modal for subagent spawns (non-auto allow modes): shows the
+ * spawn detail, a live countdown (timeout mode only), and three actions —
+ * allow, deny, or change the subagent model via a fuzzy picker (when
+ * `modelEditable`; only the pi kind actually consumes the model).
+ * Pressing m opens the picker; Esc there returns to the confirmation with a
+ * fresh countdown. Auto-decide is suspended while the picker is open.
+ */
+function spawnConfirm(
+	ctx: ExtensionContext,
+	detail: string,
+	timeoutMs: number | null,
+	onTimeoutAllow: boolean,
+	modelEditable: boolean
+): Promise<SpawnDecision> {
+	return ctx.ui.custom<SpawnDecision>((tui, theme, _kb, done) => {
+		// Waiting on the human to approve spawn — show as blocked in herdr.
+		herdrReport("blocked", "subagent spawn confirmation");
+		let settled = false;
+		let deadline = timeoutMs !== null ? Date.now() + timeoutMs : null;
+		let cachedLines: string[] | undefined;
+		let timer: ReturnType<typeof setInterval> | null = null;
+		let picking = false;
+
+		const search = new Input();
+		try {
+			search.focused = true;
+		} catch {
+			// focus is best-effort; input still works without it
+		}
+		interface ModelRow {
+			full: string;
+			label: string;
+			match: string;
+		}
+		let modelRows: ModelRow[] | null = null;
+		let visible: ModelRow[] = [];
+		let selected = 0;
+		const maxPickVisible = 10;
+
+		function finish(v: SpawnDecision): void {
+			if (settled) return;
+			settled = true;
+			if (timer) clearInterval(timer);
+			herdrReport("working");
+			herdrRelease();
+			done(v);
+		}
+
+		function refresh(): void {
+			cachedLines = undefined;
+			tui.requestRender();
+		}
+
+		function armTimer(): void {
+			if (deadline === null) return;
+			if (timer) clearInterval(timer);
+			timer = setInterval(() => {
+				if (settled || picking) return;
+				if (deadline !== null && Date.now() >= deadline) {
+					finish({ ok: onTimeoutAllow });
+				} else {
+					refresh();
+				}
+			}, 500);
+		}
+
+		function ensureModelRows(): void {
+			if (modelRows) return;
+			modelRows = collectModels(ctx).map((m) => {
+				const full = `${m.provider}/${m.id}`;
+				return { full, label: `${m.name}  (${full})`, match: `${m.name} ${full}` };
+			});
+			visible = modelRows;
+		}
+
+		function recomputePick(): void {
+			if (!modelRows) return;
+			const q = search.getValue().trim();
+			visible = q ? fuzzyFilter(modelRows, q, (r) => r.match) : modelRows;
+			if (selected >= visible.length) selected = Math.max(0, visible.length - 1);
+			if (selected < 0) selected = 0;
+		}
+
+		function openPicker(): void {
+			picking = true;
+			ensureModelRows();
+			search.setValue("");
+			selected = 0;
+			recomputePick();
+			refresh();
+		}
+
+		function closePicker(): void {
+			picking = false;
+			// fresh countdown: browsing the picker counts as input
+			deadline = timeoutMs !== null ? Date.now() + timeoutMs : null;
+			armTimer();
+			refresh();
+		}
+
+		armTimer();
+
+		function handleConfirmInput(data: string): boolean {
+			if (matchesKey(data, Key.escape) || data === "n" || data === "N") {
+				finish({ ok: false });
+				return true;
+			}
+			if (matchesKey(data, Key.enter) || data === "y" || data === "Y") {
+				finish({ ok: true });
+				return true;
+			}
+			if (modelEditable && (data === "m" || data === "M")) {
+				openPicker();
+				return true;
+			}
+			return false;
+		}
+
+		function handlePickInput(data: string): void {
+			if (matchesKey(data, Key.escape)) {
+				closePicker();
+				return;
+			}
+			if (matchesKey(data, Key.up)) {
+				if (visible.length > 0) selected = (selected - 1 + visible.length) % visible.length;
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.down)) {
+				if (visible.length > 0) selected = (selected + 1) % visible.length;
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.pageUp)) {
+				selected = Math.max(0, selected - maxPickVisible);
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.pageDown)) {
+				selected = Math.min(visible.length - 1, selected + maxPickVisible);
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.enter)) {
+				const row = visible[selected];
+				if (row) finish({ ok: true, model: row.full });
+				return;
+			}
+			search.handleInput(data);
+			recomputePick();
+			refresh();
+		}
+
+		function handleInput(data: string): void {
+			if (picking) {
+				handlePickInput(data);
+			} else if (!handleConfirmInput(data)) {
+				refresh();
+			}
+		}
+
+		function renderPicker(width: number): string[] {
+			const rw = Math.max(1, width);
+			const lines: string[] = [];
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			lines.push(...wrapTextWithAnsi(theme.fg("accent", "Change subagent model:"), rw));
+			lines.push("");
+			lines.push(...search.render(Math.max(1, rw - 2)).map((l) => ` ${l}`));
+			lines.push("");
+			if (visible.length === 0) {
+				lines.push(theme.fg("warning", "  No matching models"));
+			} else {
+				const start = Math.max(0, Math.min(selected - Math.floor(maxPickVisible / 2), visible.length - maxPickVisible));
+				const end = Math.min(start + maxPickVisible, visible.length);
+				for (let i = start; i < end; i++) {
+					const row = visible[i];
+					const isSelected = i === selected;
+					const prefix = isSelected ? theme.fg("accent", "→ ") : "  ";
+					const labelWidth = Math.max(1, rw - visibleWidth(prefix) - 2);
+					const label = truncateToWidth(row.label, labelWidth, "…");
+					lines.push(isSelected ? theme.fg("accent", `${prefix}${label}`) : prefix + label);
+				}
+				if (start > 0 || end < visible.length) lines.push(theme.fg("dim", `  (${selected + 1}/${visible.length})`));
+			}
+			lines.push("");
+			lines.push(...wrapTextWithAnsi(theme.fg("dim", "Type to fuzzy-filter • ↑↓ navigate • Enter select • Esc back"), rw));
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			return lines;
+		}
+
+		function render(width: number): string[] {
+			if (picking) return renderPicker(width);
+			if (cachedLines) return cachedLines;
+			const rw = Math.max(1, width);
+			const lines: string[] = [];
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			const countdown =
+				deadline !== null
+					? `  (auto-${onTimeoutAllow ? "allow" : "deny"} in ${Math.max(0, Math.ceil((deadline - Date.now()) / 1000))}s)`
+					: "";
+			lines.push(...wrapTextWithAnsi(theme.fg("accent", `Spawn subagent?${countdown}`), rw));
+			lines.push("");
+			lines.push(...wrapTextWithAnsi(theme.fg("muted", detail), rw));
+			lines.push("");
+			const hints = ["[y] allow", "[n] deny"];
+			if (modelEditable) hints.push("[m] change model");
+			hints.push("Esc deny", "Enter allow");
+			lines.push(...wrapTextWithAnsi(theme.fg("dim", hints.join(" • ")), rw));
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			cachedLines = lines;
+			return lines;
+		}
+
+		return { render, handleInput, invalidate: refresh };
+	});
+}
+
+/** Decide whether a spawn is allowed, honouring the session's allow mode. */
+export async function approveSpawn(
+	ctx: ExtensionContext,
+	config: SubagentConfig,
+	detail: string,
+	modelEditable: boolean
+): Promise<SpawnDecision> {
+	const mode = sessionAllowMode(config);
+	if (mode === "auto") return { ok: true };
+	// RPC has dialogs but no custom terminal components. Never convert a
+	// missing approval surface into permission; only explicit auto mode skips it.
+	if (!ctx.hasUI) return { ok: false };
+	if (ctx.mode === "rpc") {
+		const confirmed = await ctx.ui.confirm("Spawn subagent?", detail, {
+			signal: ctx.signal,
+			...(mode === "timeout" ? { timeout: sessionConfirmTimeout(config) } : {}),
+		});
+		return { ok: confirmed === true };
+	}
+	if (ctx.mode !== "tui") return { ok: false };
+	if (mode === "confirm") return spawnConfirm(ctx, detail, null, false, modelEditable);
+	const timeout = sessionConfirmTimeout(config);
+	const decision = sessionAutoDecision(config);
+	return spawnConfirm(ctx, detail, timeout, decision === "allow", modelEditable);
+}
+
+// --- Model / provider picker with loadouts ----------------------------
+
+interface ModelInfo {
+	provider: string;
+	id: string;
+	name: string;
+}
+
+function collectModels(ctx: ExtensionContext): ModelInfo[] {
+	const models = ctx.modelRegistry.getAvailable?.() ?? [];
+	const out: ModelInfo[] = [];
+	for (const m of models) {
+		const provider = String(m?.provider ?? "");
+		const id = String(m?.id ?? "");
+		if (!provider || !id) continue;
+		out.push({ provider, id, name: String(m?.name ?? id) });
+	}
+	out.sort((a, b) => (a.provider < b.provider ? -1 : a.provider > b.provider ? 1 : a.name < b.name ? -1 : 1));
+	return out;
+}
+
+// --- Model allowlist palette (fuzzy, scoped-by-default) ---------------
+
+interface PaletteModel {
+	provider: string;
+	id: string;
+	name: string;
+	tags: string[];
+}
+
+interface PaletteLoadout {
+	name: string;
+	ids: string[];
+	tags: string[];
+}
+
+interface PaletteRow {
+	kind: "model" | "provider" | "loadout";
+	/** Pattern toggled in the working set (model/provider rows). */
+	pattern?: string;
+	/** Loadout name (loadout rows). */
+	loadout?: PaletteLoadout;
+	label: string;
+	match: string;
+}
+
+/**
+ * Fuzzy allowlist palette: empty query shows only what's scoped (allowed
+ * patterns + catalog loadouts); typing fuzzy-searches the full catalog
+ * (name, provider/id, tags) with a hard row cap, so the registry's full
+ * model list never floods the screen.
+ *
+ * Keys: space/Enter toggle a model (Enter advances for fast multi-add),
+ * provider/* rows appear for typed provider prefixes, Enter on a loadout
+ * applies it as the whole allowlist, Esc saves & closes, ctrl+r reverts.
+ */
+function runAllowlistPalette(
+	ctx: ExtensionContext,
+	models: PaletteModel[],
+	loadouts: PaletteLoadout[],
+	initial: string[]
+): Promise<string[]> {
+	return ctx.ui.custom<string[]>((tui, theme, _kb, done) => {
+		const search = new Input();
+		try {
+			search.focused = true;
+		} catch {
+			// focus is best-effort; input still works without it
+		}
+
+		const working = new Set(initial);
+		let selected = 0;
+		const maxMatches = 10;
+		const maxAllowedShown = 8;
+		let cachedLines: string[] | undefined;
+		type Item = { kind: "header"; label: string } | { kind: "row"; row: PaletteRow };
+		let items: Item[] = [];
+
+		const refresh = (): void => {
+			cachedLines = undefined;
+			tui.requestRender();
+		};
+
+		function modelRow(m: PaletteModel): PaletteRow {
+			const pattern = `${m.provider}/${m.id}`;
+			return {
+				kind: "model",
+				pattern,
+				label: `${working.has(pattern) || allowedBy([...working], pattern) ? "☑" : "☐"} ${m.name}  (${pattern})${m.tags.length ? `  ${m.tags.join(", ")}` : ""}`,
+				match: `${m.name} ${pattern} ${m.tags.join(" ")}`,
+			};
+		}
+
+		function providerRow(provider: string): PaletteRow {
+			const pattern = `${provider}/*`;
+			return {
+				kind: "provider",
+				pattern,
+				label: `${working.has(pattern) ? "☑" : "☐"} ${provider} — whole provider`,
+				match: `${provider} provider/*`,
+			};
+		}
+
+		function loadoutRow(l: PaletteLoadout): PaletteRow {
+			return {
+				kind: "loadout",
+				loadout: l,
+				label: `${l.name}  · ${l.ids.length} model(s)${l.tags.length ? `  ${l.tags.join(", ")}` : ""}`,
+				match: `loadout ${l.name} ${l.tags.join(" ")}`,
+			};
+		}
+
+		function buildItems(): Item[] {
+			const q = search.getValue().trim();
+			const out: Item[] = [];
+			if (!q) {
+				// Scoped-by-default: only allowed patterns + loadouts.
+				const allowed = [...working].sort();
+				if (allowed.length > 0) {
+					out.push({ kind: "header", label: `Allowed (${allowed.length})` });
+					for (const pattern of allowed.slice(0, maxAllowedShown)) {
+						const m = models.find((x) => `${x.provider}/${x.id}` === pattern);
+						out.push({
+							kind: "row",
+							row: m ? modelRow(m) : { kind: "model", pattern, label: `☑ ${pattern}`, match: pattern },
+						});
+					}
+					if (allowed.length > maxAllowedShown)
+						out.push({ kind: "header", label: `+ ${allowed.length - maxAllowedShown} more allowed` });
+				} else {
+					out.push({ kind: "header", label: "Allowed: none (all models allowed)" });
+				}
+				if (loadouts.length > 0) {
+					out.push({ kind: "header", label: "Loadouts (space applies; replaces the allowlist)" });
+					for (const l of loadouts) out.push({ kind: "row", row: loadoutRow(l) });
+				}
+				return out;
+			}
+
+			// Fuzzy over the full catalog, capped.
+			const modelMatches = fuzzyFilter(models.map(modelRow), q, (r) => r.match).slice(0, maxMatches);
+			const providers = [...new Set(modelMatches.map((r) => (r.pattern ?? "").split("/")[0] ?? ""))];
+			if (q.includes("/")) {
+				for (const p of providers.slice(0, 3)) out.push({ kind: "row", row: providerRow(p) });
+			}
+			for (const r of modelMatches) out.push({ kind: "row", row: r });
+			const loadoutMatches = fuzzyFilter(loadouts, q, (l) => `loadout ${l.name} ${l.tags.join(" ")}`)
+				.slice(0, 4)
+				.map(loadoutRow);
+			if (loadoutMatches.length > 0) {
+				out.push({ kind: "header", label: "Loadouts" });
+				for (const r of loadoutMatches) out.push({ kind: "row", row: r });
+			}
+			if (out.length === 0) out.push({ kind: "header", label: "No matches" });
+			return out;
+		}
+
+		function recompute(): void {
+			items = buildItems();
+			const sel = items[selected];
+			if (!sel || sel.kind === "header") {
+				selected = clampRowSelection(items, selected);
+			}
+		}
+
+		function clampRowSelection(items2: Item[], from: number): number {
+			let idx = Math.max(0, Math.min(from, items2.length - 1));
+			while (idx < items2.length - 1 && items2[idx].kind === "header") idx++;
+			if (items2[idx]?.kind === "header") {
+				idx = items2.length - 1;
+				while (idx > 0 && items2[idx].kind === "header") idx--;
+			}
+			return idx;
+		}
+
+		function applyRow(row: PaletteRow): void {
+			if (row.kind === "loadout" && row.loadout) {
+				working.clear();
+				for (const id of row.loadout.ids) working.add(id);
+			} else if (row.pattern) {
+				if (working.has(row.pattern)) working.delete(row.pattern);
+				else working.add(row.pattern);
+			}
+		}
+
+		function move(delta: number): void {
+			if (items.length === 0) return;
+			let idx = selected;
+			for (let step = 0; step < Math.abs(delta); step++) {
+				do {
+					idx += Math.sign(delta);
+				} while (idx >= 0 && idx < items.length && items[idx]?.kind === "header");
+				if (idx < 0 || idx >= items.length) {
+					idx = Math.max(0, Math.min(idx, items.length - 1));
+					while (idx > 0 && items[idx]?.kind === "header") idx--;
+					break;
+				}
+			}
+			selected = Math.max(0, Math.min(idx, items.length - 1));
+		}
+
+		function handleInput(data: string): void {
+			if (matchesKey(data, Key.escape)) {
+				done([...working].sort());
+				return;
+			}
+			if (matchesKey(data, "ctrl+r")) {
+				working.clear();
+				for (const p of initial) working.add(p);
+				recompute();
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
+				const delta = matchesKey(data, Key.up) ? -1 : 1;
+				if (items.length > 0) move(delta);
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.pageUp) || matchesKey(data, Key.pageDown)) {
+				const delta = matchesKey(data, Key.pageUp) ? -maxMatches : maxMatches;
+				if (items.length > 0) move(delta);
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.space) || matchesKey(data, Key.enter)) {
+				const item = items[selected];
+				if (item?.kind === "row") {
+					applyRow(item.row);
+					recompute();
+					// Enter advances for fast multi-add; space stays put.
+					if (matchesKey(data, Key.enter) && item.row.kind === "model") move(1);
+				}
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.backspace)) {
+				// let Input handle its own backspace
+			}
+			search.handleInput(data);
+			recompute();
+			refresh();
+		}
+
+		function render(width: number): string[] {
+			if (cachedLines) return cachedLines;
+			const rw = Math.max(1, width);
+			const lines: string[] = [];
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			lines.push(
+				...wrapTextWithAnsi(
+					theme.fg("accent", `Allowed subagent models — ${working.size} pattern(s) in this session's allowlist`),
+					rw
+				)
+			);
+			lines.push("");
+			lines.push(...search.render(Math.max(1, rw - 2)).map((l) => ` ${l}`));
+			lines.push("");
+
+			const selRow = items[selected];
+			for (let i = 0; i < items.length; i++) {
+				const item = items[i];
+				if (item.kind === "header") {
+					lines.push(theme.fg("muted", theme.fg("accent", `▾ ${item.label}`)));
+				} else {
+					const isSel = i === selected;
+					const prefix = isSel ? theme.fg("accent", "→ ") : "  ";
+					const line = `${prefix}${item.row.label}`;
+					lines.push(truncateToWidth(isSel ? theme.fg("accent", line) : line, rw));
+				}
+			}
+			void selRow;
+
+			lines.push("");
+			lines.push(
+				...wrapTextWithAnsi(
+					theme.fg(
+						"dim",
+						"Type to fuzzy-search all models • space/Enter toggle (Enter advances) • Esc save & close • ctrl+r revert"
+					),
+					rw
+				)
+			);
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			cachedLines = lines;
+			return lines;
+		}
+
+		recompute();
+
+		return {
+			render,
+			invalidate: (): void => {
+				cachedLines = undefined;
+			},
+			handleInput,
+		};
+	});
+}
+
+async function openModelPicker(ctx: ExtensionContext, config: SubagentConfig): Promise<boolean> {
+	if (ctx.mode !== "tui") {
+		ctx.ui.notify(
+			"The model palette requires Pi TUI; use /subagent models add <glob> or /subagent models loadout load <name> here",
+			"warning"
+		);
+		return false;
+	}
+	const registry = collectModels(ctx);
+	if (registry.length === 0) {
+		ctx.ui.notify("No models found in the registry (ctx.modelRegistry.getAvailable()).", "warning");
+		return false;
+	}
+
+	// Catalog tags scope the search ("local", "data-privacy", ...) and loadouts
+	// become one-keypress allowlist presets. Loadout sources: catalog tag scopes,
+	// then config/session pattern presets (first definition of a name wins).
+	const catalog = loadCatalog(ctx.cwd);
+	const catalogTags = new Map<string, string[]>();
+	for (const m of catalog.models ?? []) {
+		if (m.provider && m.id) catalogTags.set(`${m.provider}/${m.id}`, m.tags ?? []);
+	}
+	const models: PaletteModel[] = registry.map((m) => ({
+		provider: m.provider,
+		id: m.id,
+		name: m.name,
+		tags: catalogTags.get(`${m.provider}/${m.id}`) ?? [],
+	}));
+
+	const loadouts: PaletteLoadout[] = [];
+	const seenLoadouts = new Set<string>();
+	for (const [name, def] of Object.entries(catalog.loadouts ?? {})) {
+		seenLoadouts.add(name);
+		loadouts.push({ name, ids: resolveLoadoutModelIds(catalog, name), tags: def.tags ?? [] });
+	}
+	for (const [name, def] of Object.entries(config.loadouts)) {
+		if (seenLoadouts.has(name)) continue;
+		seenLoadouts.add(name);
+		loadouts.push({ name, ids: normalizeLoadout(def).models, tags: [] });
+	}
+	for (const [name, def] of Object.entries(currentState?.loadouts ?? {})) {
+		if (seenLoadouts.has(name)) continue;
+		seenLoadouts.add(name);
+		loadouts.push({ name, ids: normalizeLoadout(def).models, tags: [] });
+	}
+
+	const eff = effectiveAllowlist(config);
+	const result = await runAllowlistPalette(ctx, models, loadouts, eff.patterns);
+
+	// Save into this session's own allowlist, clearing any force pin so the
+	// explicit selection takes effect.
+	ensureSessionState(ctx);
+	if (currentState) currentState.allowlist = result;
+	if (currentState) currentState.forceLoadout = undefined;
+	persistState();
+	const n = result.length;
+	ctx.ui.notify(
+		`Session allowlist updated${eff.source === "global" ? " (was using global default)" : ""}: ${n === 0 ? "all models allowed (set is empty)" : `${n} pattern(s): ${result.join(", ")}`}`,
+		"info"
+	);
+	return true;
+}
+
+// --- Relay (send last output to another tab) --------------------------
+
+interface SessionMessageLike {
+	type: string;
+	message?: { role?: string; content?: unknown };
+}
+
+/** A saved SSH machine (herdr >= 0.9.1) whose agents can be reached via `--machine`. */
+interface RelayMachine {
+	id: string;
+	label: string;
+}
+
+interface RelayTarget {
+	/** Stable unique key across local + remote targets (pane ids are scoped per server). */
+	key: string;
+	paneId: string;
+	label: string;
+	/** Picker section: workspace/repo label (local) or machine + workspace (remote). */
+	group: string;
+	/** Set for agents living on a saved SSH machine; undefined = local server. */
+	machine?: RelayMachine;
+}
+
+interface AgentListEnvelope {
+	result?: {
+		agents?: Array<{
+			pane_id?: unknown;
+			tab_id?: unknown;
+			workspace_id?: unknown;
+			terminal_title_stripped?: unknown;
+			cwd?: unknown;
+		}>;
+	};
+}
+
+interface TabListEnvelope {
+	result?: { tabs?: Array<{ tab_id?: unknown; label?: unknown }> };
+}
+
+interface WorkspaceListEnvelope {
+	result?: { workspaces?: Array<{ workspace_id?: unknown; label?: unknown }> };
+}
+
+/** id → label map for tabs/workspaces, fetched fresh on every /send. */
+type LabelMap = Map<string, string>;
+
+/** One profile from `herdr machine list --json`. */
+interface SavedMachineProfile {
+	id?: unknown;
+	label?: unknown;
+	enabled?: unknown;
+}
+
+function contentToText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (Array.isArray(content)) {
+		return content
+			.map((c) => {
+				if (
+					c &&
+					typeof c === "object" &&
+					(c as { type?: string }).type === "text" &&
+					typeof (c as { text?: unknown }).text === "string"
+				) {
+					return (c as { text: string }).text;
+				}
+				return "";
+			})
+			.filter(Boolean)
+			.join("\n")
+			.trim();
+	}
+	return "";
+}
+
+function getLastAgentOutput(ctx: ExtensionContext): string {
+	const entries = ctx.sessionManager.getEntries?.() ?? [];
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const entry = entries[i] as SessionMessageLike | undefined;
+		if (!entry || entry.type !== "message") continue;
+		if (entry.message?.role !== "assistant") continue;
+		const text = contentToText(entry.message.content);
+		if (text) return text;
+	}
+	return "";
+}
+
+/** Saved SSH machine profiles from `herdr machine list --json` (empty on failure/older herdr). */
+async function listSavedMachines(): Promise<SavedMachineProfile[]> {
+	let res: unknown;
+	try {
+		res = await herdr(["machine", "list", "--json"]);
+	} catch {
+		return [];
+	}
+	const wrapper = res as { endpoints?: unknown; machines?: unknown } | undefined;
+	const list: unknown = Array.isArray(res)
+		? res
+		: Array.isArray(wrapper?.endpoints)
+			? wrapper?.endpoints
+			: Array.isArray(wrapper?.machines)
+				? wrapper?.machines
+				: [];
+	return (list as unknown[]).filter((m): m is SavedMachineProfile => !!m && typeof m === "object");
+}
+
+/** herdr CLI prefix that routes commands at a relay target's machine (empty for local). */
+function relayMachineArgs(target: RelayTarget): string[] {
+	return target.machine ? ["--machine", target.machine.id] : [];
+}
+
+/** Tab id → tab label, fresh from `herdr tab list` (empty on failure; labels are best-effort). */
+async function fetchTabLabels(args: string[]): Promise<LabelMap> {
+	const out: LabelMap = new Map();
+	try {
+		const res = (await herdr([...args, "tab", "list"])) as TabListEnvelope | undefined;
+		for (const t of res?.result?.tabs ?? []) {
+			if (typeof t?.tab_id === "string" && typeof t?.label === "string" && t.label.trim()) {
+				out.set(t.tab_id, t.label.trim());
+			}
+		}
+	} catch {
+		// fall back to terminal titles
+	}
+	return out;
+}
+
+/** Workspace id → workspace label (usually the repo/dir name), fresh from `herdr workspace list`. */
+async function fetchWorkspaceLabels(args: string[]): Promise<LabelMap> {
+	const out: LabelMap = new Map();
+	try {
+		const res = (await herdr([...args, "workspace", "list"])) as WorkspaceListEnvelope | undefined;
+		for (const w of res?.result?.workspaces ?? []) {
+			if (typeof w?.workspace_id === "string" && typeof w?.label === "string" && w.label.trim()) {
+				out.set(w.workspace_id, w.label.trim());
+			}
+		}
+	} catch {
+		// fall back to the cwd basename
+	}
+	return out;
+}
+
+/** Append agents from one `agent list` envelope to the relay target list. */
+function addRelayAgents(
+	envelope: AgentListEnvelope | undefined,
+	targets: RelayTarget[],
+	seen: Set<string>,
+	labelSeen: Set<string>,
+	selfPane: string | undefined,
+	tabLabels: LabelMap,
+	wsLabels: LabelMap,
+	machine?: RelayMachine
+): void {
+	for (const a of envelope?.result?.agents ?? []) {
+		const paneId = a?.pane_id;
+		if (typeof paneId !== "string" || !paneId) continue;
+		if (!machine && selfPane && paneId === selfPane) continue;
+		const key = machine ? `${machine.id}\u241f${paneId}` : paneId;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		const raw = a?.terminal_title_stripped || a?.cwd;
+		const title = typeof raw === "string" && raw.trim() ? raw.trim() : paneId;
+		// The herdr tab label is the name the user actually set; terminal titles go stale.
+		const tabLabel = typeof a?.tab_id === "string" ? tabLabels.get(a.tab_id) : undefined;
+		let label = tabLabel && tabLabel !== title ? `${tabLabel} — ${title}` : title;
+		if (machine) label = `${machine.label}: ${label}`;
+		if (labelSeen.has(label)) label = `${label} (${paneId})`;
+		labelSeen.add(label);
+		const cwd = typeof a?.cwd === "string" ? a.cwd : "";
+		const cwdBase = cwd ? (cwd.split("/").pop() ?? cwd) : "";
+		const ws = typeof a?.workspace_id === "string" ? (wsLabels.get(a.workspace_id) ?? cwdBase) : cwdBase;
+		const group = machine ? `${machine.label}/${ws || "remote"}` : ws;
+		targets.push({ key, paneId, label, group, machine });
+	}
+}
+
+async function listRelayTargets(): Promise<{ targets: RelayTarget[]; warnings: string[] }> {
+	const selfPane = process.env.HERDR_PANE_ID;
+	const seen = new Set<string>();
+	const labelSeen = new Set<string>();
+	const targets: RelayTarget[] = [];
+	const warnings: string[] = [];
+
+	try {
+		// Titles/labels are pulled fresh on every /send; terminal titles can go stale
+		// (agents only update them on certain events), so tab labels take precedence.
+		const [tabLabels, wsLabels] = await Promise.all([fetchTabLabels([]), fetchWorkspaceLabels([])]);
+		addRelayAgents(
+			(await herdr(["agent", "list"])) as AgentListEnvelope | undefined,
+			targets,
+			seen,
+			labelSeen,
+			selfPane,
+			tabLabels,
+			wsLabels
+		);
+	} catch (err) {
+		warnings.push(`local agents: ${(err as Error)?.message ?? err}`);
+	}
+
+	// Remote agents: one `--machine agent list` per enabled saved SSH machine.
+	for (const m of await listSavedMachines()) {
+		const id = typeof m.id === "string" ? m.id : "";
+		if (!id || m.enabled === false) continue;
+		const label = typeof m.label === "string" && m.label.trim() ? m.label.trim() : id;
+		try {
+			const mArgs = ["--machine", id];
+			const [mTabs, mWs] = await Promise.all([fetchTabLabels(mArgs), fetchWorkspaceLabels(mArgs)]);
+			const envelope = (await herdr([...mArgs, "agent", "list"], { timeout: 30_000 })) as AgentListEnvelope | undefined;
+			addRelayAgents(envelope, targets, seen, labelSeen, selfPane, mTabs, mWs, { id, label });
+		} catch (err) {
+			warnings.push(`${label}: ${(err as Error)?.message ?? err}`);
+		}
+	}
+
+	return { targets, warnings };
+}
+
+function composeRelayMessage(note: string, output: string): string {
+	const clean = note.trim();
+	return clean ? `${clean}\n\n${output}` : output;
+}
+
+/**
+ * Fuzzy target picker: a search box + fuzzy-filtered list.
+ * Search matches characters in order (case-insensitive) against the target's
+ * terminal title and pane id, scored and ranked.
+ * Returns the chosen target key, or null on cancel.
+ */
+async function fuzzyTargetPicker(ctx: ExtensionContext, targets: RelayTarget[]): Promise<string | null> {
+	interface Row {
+		value: string;
+		pane: string;
+		label: string;
+		match: string;
+		group: string;
+	}
+	const sorted = [...targets].sort((a, b) => a.group.localeCompare(b.group) || a.label.localeCompare(b.label));
+	const all: Row[] = sorted.map((t) => ({
+		value: t.key,
+		pane: t.paneId,
+		label: t.label,
+		match: `${t.label} ${t.paneId}`,
+		group: t.group,
+	}));
+	type Item = { kind: "header"; label: string } | { kind: "row"; row: Row };
+
+	function buildItems(rows: Row[]): Item[] {
+		const items: Item[] = [];
+		let last: string | null = null;
+		for (const r of rows) {
+			if (r.group !== last) {
+				items.push({ kind: "header", label: r.group });
+				last = r.group;
+			}
+			items.push({ kind: "row", row: r });
+		}
+		return items;
+	}
+
+	return ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+		const search = new Input();
+		try {
+			search.focused = true;
+		} catch {
+			// focus is best-effort; input still works without it
+		}
+		let visible: Row[] = all;
+		let selected = 0;
+		const maxListLines = Math.max(1, Math.min(all.length + Math.max(1, new Set(all.map((r) => r.group)).size), 22));
+		let cachedLines: string[] | undefined;
+
+		function recompute(query: string): void {
+			const trimmed = query.trim();
+			visible = trimmed ? fuzzyFilter(all, trimmed, (it) => it.match) : all;
+			if (selected >= visible.length) selected = Math.max(0, visible.length - 1);
+			if (selected < 0) selected = 0;
+		}
+
+		function refresh(): void {
+			cachedLines = undefined;
+			tui.requestRender();
+		}
+
+		function handleNavigation(data: string): boolean {
+			if (matchesKey(data, Key.up)) {
+				if (visible.length > 0) selected = (selected - 1 + visible.length) % visible.length;
+				return true;
+			}
+			if (matchesKey(data, Key.down)) {
+				if (visible.length > 0) selected = (selected + 1) % visible.length;
+				return true;
+			}
+			if (matchesKey(data, Key.pageUp)) {
+				selected = Math.max(0, selected - maxListLines);
+				return true;
+			}
+			if (matchesKey(data, Key.pageDown)) {
+				selected = Math.min(visible.length - 1, selected + maxListLines);
+				return true;
+			}
+			if (matchesKey(data, Key.enter)) {
+				const row = visible[selected];
+				if (row) {
+					done(row.value);
+					return true;
+				}
+			}
+			return false;
+		}
+
+		function handleInput(data: string): void {
+			if (matchesKey(data, Key.escape)) {
+				done(null);
+				return;
+			}
+			if (handleNavigation(data)) {
+				refresh();
+				return;
+			}
+			search.handleInput(data);
+			recompute(search.getValue());
+			refresh();
+		}
+
+		function renderRow(row: Row, isSelected: boolean, width: number): string {
+			const prefix = isSelected ? theme.fg("accent", "→ ") : "  ";
+			const pane = theme.fg("muted", `  [${row.pane}]`);
+			const labelWidth = Math.max(1, width - visibleWidth(prefix) - visibleWidth(pane));
+			const label = truncateToWidth(row.label, labelWidth, "…");
+			return isSelected ? theme.fg("accent", `${prefix}${label}`) + pane : prefix + label + pane;
+		}
+
+		function renderList(rw: number, lines: string[]): void {
+			if (visible.length === 0) {
+				lines.push(theme.fg("warning", "  No matching agents"));
+				return;
+			}
+			const items = buildItems(visible);
+			const selectedValue = visible[selected]?.value;
+			let selItem = 0;
+			for (let i = 0; i < items.length; i++) {
+				const item = items[i];
+				if (item.kind === "row" && item.row.value === selectedValue) {
+					selItem = i;
+					break;
+				}
+			}
+			let start = Math.max(0, Math.min(selItem - Math.floor(maxListLines / 2), items.length - maxListLines));
+			const end = Math.min(start + maxListLines, items.length);
+			start = Math.max(0, end - maxListLines);
+			for (let i = start; i < end; i++) {
+				const item = items[i];
+				if (item.kind === "header") {
+					lines.push(theme.fg("accent", `▾ ${item.label}`));
+				} else {
+					lines.push(renderRow(item.row, item.row.value === selectedValue, rw));
+				}
+			}
+			if (start > 0 || end < items.length) lines.push(theme.fg("dim", `  (${selected + 1}/${visible.length} targets)`));
+		}
+
+		function render(width: number): string[] {
+			if (cachedLines) return cachedLines;
+			const rw = Math.max(1, width);
+			const lines: string[] = [];
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			lines.push(...wrapTextWithAnsi(theme.fg("accent", `Send last output to: (${all.length} targets, type to filter)`), rw));
+			lines.push("");
+			lines.push(...search.render(Math.max(1, rw - 2)).map((l) => ` ${l}`));
+			lines.push("");
+			renderList(rw, lines);
+			lines.push("");
+			lines.push(
+				...wrapTextWithAnsi(
+					theme.fg("dim", "Type to fuzzy-filter • ↑↓ navigate • PgUp/PgDn page • Enter select • Esc cancel"),
+					rw
+				)
+			);
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			cachedLines = lines;
+			return lines;
+		}
+
+		return {
+			render,
+			handleInput,
+			invalidate: () => {
+				cachedLines = undefined;
+			},
+		};
+	});
+}
+
+async function relayModal(
+	ctx: ExtensionContext,
+	target: RelayTarget,
+	output: string
+): Promise<{ note: string; inject: boolean } | null> {
+	const previewLines = output.split("\n");
+
+	return ctx.ui.custom<{ note: string; inject: boolean } | null>((tui, theme, _kb, done) => {
+		const editorTheme: EditorTheme = {
+			borderColor: (s) => theme.fg("accent", s),
+			selectList: {
+				selectedPrefix: (t) => theme.fg("accent", t),
+				selectedText: (t) => theme.fg("accent", t),
+				description: (t) => theme.fg("muted", t),
+				scrollInfo: (t) => theme.fg("dim", t),
+				noMatch: (t) => theme.fg("warning", t),
+			},
+		};
+		const editor = new Editor(tui, editorTheme);
+		let cachedLines: string[] | undefined;
+
+		editor.onSubmit = (value) => {
+			done({ note: value, inject: false });
+		};
+
+		function refresh(): void {
+			cachedLines = undefined;
+			tui.requestRender();
+		}
+
+		function handleInput(data: string): void {
+			if (matchesKey(data, Key.escape)) {
+				done(null);
+				return;
+			}
+			if (matchesKey(data, "ctrl+j") || matchesKey(data, "ctrl+enter")) {
+				done({ note: editor.getText(), inject: true });
+				return;
+			}
+			editor.handleInput(data);
+			refresh();
+		}
+
+		function render(width: number): string[] {
+			if (cachedLines) return cachedLines;
+			const rw = Math.max(1, width);
+			const lines: string[] = [];
+			function pushWrapped(text: string): void {
+				lines.push(...wrapTextWithAnsi(text, rw));
+			}
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			pushWrapped(theme.fg("accent", `Send last output to: ${target.label}`));
+			lines.push("");
+			pushWrapped(theme.fg("muted", `Last output (${previewLines.length} lines):`));
+			const shown = previewLines.length > 15 ? [...previewLines.slice(previewLines.length - 15), "…"] : previewLines;
+			for (const line of shown) pushWrapped(theme.fg("text", line));
+			lines.push("");
+			pushWrapped(theme.fg("muted", "Note / instruction (Enter to send):"));
+			for (const line of editor.render(Math.max(1, rw - 2))) {
+				lines.push(` ${line}`);
+			}
+			lines.push("");
+			pushWrapped(
+				theme.fg("dim", "Enter = send • Ctrl+j = send + bring back other tab's reply into this session • Esc = cancel")
+			);
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			cachedLines = lines;
+			return lines;
+		}
+
+		return {
+			render,
+			handleInput,
+			invalidate: () => {
+				cachedLines = undefined;
+			},
+		};
+	});
+}
+
+async function runSend(ctx: ExtensionContext, pi: ExtensionAPI): Promise<void> {
+	if (ctx.mode !== "tui") {
+		ctx.ui.notify("The relay picker requires Pi TUI; use send_to_session with an explicit target here", "warning");
+		return;
+	}
+	if (!isInHerdr()) {
+		ctx.ui.notify("Not running inside a herdr-managed pane (HERDR_ENV=1 + HERDR_SOCKET_PATH required).", "error");
+		return;
+	}
+	const output = getLastAgentOutput(ctx);
+	if (!output) {
+		ctx.ui.notify("No recent assistant output found to send.", "warning");
+		return;
+	}
+	const { targets, warnings } = await listRelayTargets();
+	if (targets.length === 0) {
+		const why = warnings.length ? ` (${warnings[0]})` : "";
+		ctx.ui.notify(`No other herdr agents found to send to.${why}`, "warning");
+		return;
+	}
+	if (warnings.length > 0) {
+		ctx.ui.notify(`Some targets skipped: ${warnings.join(" • ")}`.slice(0, 300), "warning");
+	}
+	const chosen = await fuzzyTargetPicker(ctx, targets);
+	if (!chosen) return;
+	const target = targets.find((t) => t.key === chosen);
+	if (!target) return;
+
+	const result = await relayModal(ctx, target, output);
+	if (!result) {
+		ctx.ui.notify("Cancelled.", "info");
+		return;
+	}
+
+	const message = composeRelayMessage(result.note, output);
+	try {
+		if (result.inject) {
+			await injectResponseBack(ctx, pi, target, message);
+		} else {
+			await herdr([...relayMachineArgs(target), "agent", "prompt", target.paneId, message], { timeout: 120_000 });
+			ctx.ui.notify(`Sent to ${target.label}.`, "info");
+		}
+	} catch (err) {
+		ctx.ui.notify(`Send failed: ${(err as Error)?.message ?? err}`, "error");
+	}
+}
+
+/**
+ * Send a prompt to the target, wait for it to settle, read its recent output,
+ * and feed that response back into the *sending* session as a steer/follow-up.
+ */
+async function injectResponseBack(ctx: ExtensionContext, pi: ExtensionAPI, target: RelayTarget, message: string): Promise<void> {
+	const machineArgs = relayMachineArgs(target);
+	ctx.ui.notify(`Sent to ${target.label}; waiting for its response…`, "info");
+	try {
+		await herdr([...machineArgs, "agent", "prompt", target.paneId, message, "--wait", "--timeout", "600000"], {
+			timeout: 660_000,
+		});
+	} catch (err) {
+		ctx.ui.notify(
+			`Prompt delivered to ${target.label} but waiting failed: ${(err as Error)?.message ?? err}. Still reading its output.`,
+			"warning"
+		);
+	}
+
+	const raw = await herdrRaw(
+		[...machineArgs, "agent", "read", target.paneId, "--source", "recent", "--lines", "300", "--format", "text"],
+		{ timeout: 60_000 }
+	);
+	const response = raw.trim();
+	if (!response) {
+		ctx.ui.notify(`Could not read a response from ${target.label}.`, "warning");
+		return;
+	}
+	const responseTail = response.length > 6000 ? `${response.slice(-6000)}\n…(truncated)` : response;
+	pi.sendUserMessage(`Response from ${target.label} (relayed from this tab's last output):\n\n${responseTail}`, {
+		deliverAs: "followUp",
+	});
+	ctx.ui.notify(`Injected ${target.label}'s response into this session.`, "info");
+}
+
+// --- subagent close / reset helpers -----------------------------------
+
+function resolveTracked(token: string): TrackedSubagent | undefined {
+	if (!currentState) return undefined;
+	const t = currentState.subagents[token];
+	if (t) return t;
+	return Object.values(currentState.subagents).find((x) => x.name.endsWith(token));
+}
+
+async function closeSubagent(ctx: ExtensionContext, token: string): Promise<void> {
+	const t = resolveTracked(token);
+	if (!t) {
+		ctx.ui.notify(`No subagent "${token}" is tracked by this session. See /subagent list.`, "error");
+		return;
+	}
+	let tabId = t.tabId;
+	try {
+		if (!tabId) {
+			const res = await herdr(["agent", "get", t.name]);
+			tabId = res?.result?.tab_id ?? res?.tab_id ?? tabId;
+		}
+	} catch {
+		// fall through: tabId may still be tracked
+	}
+	if (!tabId) {
+		ctx.ui.notify(`Could not resolve a tab id for ${t.name} to close.`, "error");
+		return;
+	}
+	await herdr(["tab", "close", tabId]);
+	t.gone = true;
+	recordOutcome(t, "closed");
+	persistState();
+	try {
+		piNotify(ctx, `Subagent ${t.name} (${t.label}) was closed by the user.`);
+	} catch {
+		// ignore
+	}
+	ctx.ui.notify(`Closed subagent ${t.name} (tab ${tabId}).`, "info");
+	stopNotifyTimer();
+}
+
+async function resetSubagent(ctx: ExtensionContext, token: string, instruction?: string): Promise<void> {
+	const t = resolveTracked(token);
+	if (!t) {
+		ctx.ui.notify(`No subagent "${token}" is tracked by this session. See /subagent list.`, "error");
+		return;
+	}
+	try {
+		// interrupt current work if busy
+		const status = t.status ?? (await fetchAgentStatusMap()).get(t.name);
+		if (status === "working" || status === "blocked" || status === "unknown") {
+			await herdr(["agent", "send-keys", t.name, "ctrl+c"]);
+		}
+		await herdr(["agent", "wait", t.name, "--until", "idle", "--timeout", "120000"]);
+	} catch {
+		// ignore; still mark reset
+	}
+	t.status = "idle";
+	t.done = false;
+	t.notified = false;
+	t.gone = false;
+	persistState();
+	if (instruction) {
+		await herdr(["agent", "prompt", t.name, instruction]);
+		t.status = "working";
+		persistState();
+		startNotifyTimer(piRef, ctx);
+		ctx.ui.notify(`Reset ${t.name} and re-prompted it.`, "info");
+	} else {
+		ctx.ui.notify(`Reset ${t.name} to idle; it can take a new task.`, "info");
+	}
+}
+
+function piNotify(ctx: ExtensionContext, text: string): void {
+	// attempt to feed a user message so the agent knows what happened
+	try {
+		piRef.sendUserMessage(text, { deliverAs: "followUp" });
+	} catch {
+		// print/RPC mode: nothing to inject into
+		ctx.ui.notify(text, "info");
+	}
+}
+
+let piRef: ExtensionAPI;
+
+export default function sessionTools(pi: ExtensionAPI) {
+	piRef = pi;
+	let unsubscribeStatus: (() => void) | undefined;
+
+	pi.on("session_start", async (_event, ctx) => {
+		stopNotifyTimer();
+		try {
+			loadSessionState(ctx);
+		} catch {
+			// ignore
+		}
+		startNotifyTimer(pi, ctx);
+		startEventSubscriber(pi);
+		unsubscribeStatus?.();
+		const sessionId = ctx.sessionManager.getSessionId();
+		unsubscribeStatus = pi.events?.on(STATUS_QUERY, (data: unknown) => {
+			const query = data as StatusQuery;
+			if (
+				query?.version !== 1 ||
+				query.sessionId !== sessionId ||
+				typeof query.reply !== "function" ||
+				!query.signal ||
+				query.signal.aborted
+			)
+				return;
+			query.reply(
+				(async () => {
+					const route = await resolveRoute(process.env, undefined, query.signal);
+					if (currentState?.sessionId !== sessionId) throw new Error("Session changed during status query");
+					const config = loadConfig();
+					return {
+						id: "pi-session-tools",
+						version: 1 as const,
+						status: route.ready ? ("ok" as const) : ("unavailable" as const),
+						details: {
+							owner: route.owner,
+							presentation: route.presentation,
+							routeReason: route.reason,
+							spawnEnabled: config.enabled,
+							maxSubagents: currentState?.maxSubagents ?? config.maxSubagents,
+							loadout: currentState?.forceLoadout ?? null,
+							allowedKinds: (currentState?.allowedKinds ?? config.allowedKinds ?? []).join(", ").slice(0, 1000),
+							allowMode: currentState?.allowMode ?? config.allowMode ?? "confirm",
+							trackedSubagents: currentState ? Object.keys(currentState.subagents).length : 0,
+							spawnBackend: route.owner === "herdr" && route.ready ? "herdr" : "unavailable",
+						},
+					};
+				})()
+			);
+		});
+	});
+
+	pi.on("session_shutdown", async () => {
+		stopNotifyTimer();
+		stopEventSubscriber();
+		unsubscribeStatus?.();
+		unsubscribeStatus = undefined;
+	});
+
+	pi.registerTool({
+		name: "subagent",
+		label: "Subagent",
+		description:
+			"Manage subagents. Default action 'spawn' delegates a task to a NEW subagent in a fresh herdr tab (kind + model + optional loadout). 'list' shows this session's subagents. 'info' returns the available compute/cost/privacy catalog. Spawning is gated by config (enabled/model/kind/allowance) and per-session settings (allow mode).",
+		promptSnippet: "subagent: spawn a subagent (default), list this session's subagents, or get available compute/cost/privacy.",
+		parameters: SubagentToolParamsSchema,
+		outputSchema: subagentOutputSchema,
+		executionMode: "sequential",
+
+		async execute(
+			_toolCallId,
+			params: SubagentToolParams,
+			_signal,
+			_onUpdate,
+			ctx
+		): Promise<import("@earendil-works/pi-coding-agent").AgentToolResult<unknown>> {
+			const action = params.action ?? "spawn";
+			const sessionId = ctx.sessionManager.getSessionId();
+			let partialEffects = false;
+			let partialChild: { name: string; paneId: string; tabId?: string; model: string; kind: string } | undefined;
+			let didStart = false;
+			const assertActive = () => {
+				_signal?.throwIfAborted();
+				if (currentState?.sessionId !== sessionId || ctx.sessionManager.getSessionId() !== sessionId)
+					throw new Error("Subagent session changed; retry in the current session");
+			};
+			async function run(): Promise<import("@earendil-works/pi-coding-agent").AgentToolResult<unknown>> {
+				ensureSessionState(ctx);
+				assertActive();
+				const config = loadConfig();
+				const catalog = loadCatalog(ctx.cwd);
+
+				if (action === "info") {
+					const digest = buildCatalogDigest(catalog);
+					const names = Object.keys(catalog.loadouts ?? {}).join(", ");
+					return {
+						content: [
+							{
+								type: "text",
+								text: digest
+									? `Available compute:\n${digest}${names ? `\n\nLoadouts: ${names}` : ""}`
+									: "No model catalog configured.",
+							},
+						],
+						details: { action, catalog },
+					};
+				}
+
+				if (action === "list") {
+					const subs = currentState ? Object.values(currentState.subagents) : [];
+					const lines = subs.length
+						? subs.map((t) => `  ${t.name} — ${t.status ?? "unknown"}${t.model ? ` (${t.model})` : ""}`).join("\n")
+						: "No subagents spawned by this session.";
+					return {
+						content: [{ type: "text", text: `Subagents (${subs.length}):\n${lines}` }],
+						details: { action, subagents: subs },
+					};
+				}
+
+				// ---- spawn ----
+				const route = await resolveRoute(process.env, undefined, _signal);
+				if (!route.ready || route.owner !== "herdr") {
+					throw new Error(
+						!route.ready
+							? route.reason
+							: `Subagent lifecycle is not yet implemented for ${route.owner}; no backend fallback was attempted.`
+					);
+				}
+				if (!isInHerdr()) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: "Error: not running inside a herdr-managed pane (HERDR_ENV=1 + HERDR_SOCKET_PATH required).",
+							},
+						],
+						details: { spawned: false },
+					};
+				}
+				if (!config.enabled) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: "Error: subagent spawning is DISABLED (config 'enabled' is false). Run /subagent on to allow it.",
+							},
+						],
+						details: { spawned: false },
+					};
+				}
+				if (!params.task) {
+					return { content: [{ type: "text", text: "Error: 'task' is required to spawn." }], details: { spawned: false } };
+				}
+
+				const kind = params.kind ?? catalog.policy?.defaultKind ?? "pi";
+				let model = params.model;
+
+				if (params.loadout) {
+					const ids = new Set(resolveLoadoutModelIds(catalog, params.loadout));
+					const kinds = new Set(resolveLoadoutKinds(catalog, params.loadout));
+					if (!model) model = `${ctx.model?.provider ?? ""}/${ctx.model?.id ?? ""}`;
+					const allowed = kind === "pi" ? ids.has(model) : ids.size === 0 ? kinds.has(kind) : false;
+					if (!allowed) {
+						return {
+							content: [
+								{
+									type: "text",
+									text: `Error: (model "${model}", kind "${kind}") not allowed by loadout "${params.loadout}". Allowed models: ${[...ids].join(", ") || "(none)"}; kinds: ${[...kinds].join(", ") || "(none)"}.`,
+								},
+							],
+							details: { spawned: false },
+						};
+					}
+				} else {
+					if (!model) model = `${ctx.model?.provider ?? ""}/${ctx.model?.id ?? ""}`;
+					const eff = effectiveAllowlist(config);
+					if (!allowedBy(eff.patterns, model)) {
+						return {
+							content: [
+								{
+									type: "text",
+									text: `Error: model "${model}" is not in the allowlist (${eff.source}). Allowed: ${eff.patterns.join(", ") || "(none)"}.`,
+								},
+							],
+							details: { spawned: false },
+						};
+					}
+					if (kind !== "pi" && !sessionAllowedKinds(config).includes(kind)) {
+						return {
+							content: [
+								{
+									type: "text",
+									text: `Error: kind "${kind}" is not allowed (allowedKinds: ${sessionAllowedKinds(config).join(", ")}). Add it to subagent-config.json or pick a loadout.`,
+								},
+							],
+							details: { spawned: false },
+						};
+					}
+				}
+
+				const maxN = sessionMaxSubagents(config);
+				const active = await countSubagents();
+				if (maxN > 0 && active >= maxN) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Error: subagent allowance reached (${active}/${maxN}). Run /subagent max <n> to raise it, or /subagent close <name> to free a slot.`,
+							},
+						],
+						details: { spawned: false },
+					};
+				}
+
+				const cwd = params.cwd ?? ctx.cwd;
+				const label = params.tabLabel ?? (params.task.replace(/\s+/g, " ").slice(0, 28).trim() || "subagent");
+				const detail = `Tab: ${label}\nKind: ${kind}\nModel: ${model}\nCwd: ${cwd}\n\nTask:\n${params.task.slice(0, 400)}${params.task.length > 400 ? "\n…" : ""}`;
+				assertActive();
+				const approval = await approveSpawn({ ...ctx, signal: _signal ?? ctx.signal }, config, detail, kind === "pi");
+				assertActive();
+				if (!approval.ok) {
+					return { content: [{ type: "text", text: "Spawn cancelled by the user." }], details: { spawned: false } };
+				}
+				if (approval.model) model = approval.model;
+
+				const name = randomName();
+				let paneId: string | undefined;
+				let tabId: string | undefined;
+				let startRes: { error?: unknown; result?: { agent?: { name?: string } } } | undefined;
+				try {
+					assertActive();
+					// Once dispatched, a lost response cannot establish effects:none.
+					partialEffects = true;
+					const tabRes = await herdr(["tab", "create", "--label", label, "--cwd", cwd, "--no-focus"], { signal: _signal });
+					paneId = tabRes?.result?.root_pane?.pane_id;
+					tabId = tabRes?.result?.tab?.tab_id;
+					if (!paneId) {
+						return {
+							content: [
+								{ type: "text", text: `Error: herdr tab create failed. Response: ${JSON.stringify(tabRes).slice(0, 500)}` },
+							],
+							details: { spawned: false },
+						};
+					}
+
+					// A fresh root pane is only startable once its shell sits at its
+					// interactive prompt; herdr rejects too-early attempts with
+					// agent_pane_busy. startAgentWithRetry absorbs that race.
+					const startArgs = kind === "pi" ? ["--", "--model", model] : [];
+					assertActive();
+					partialChild = { name, paneId, tabId, model, kind };
+					startRes = await startAgentWithRetry(
+						["agent", "start", name, "--kind", kind, "--pane", paneId, ...startArgs],
+						AGENT_START_ATTEMPTS,
+						{ signal: _signal, assertActive }
+					);
+					didStart = !startRes?.error && Boolean(startRes?.result?.agent?.name);
+				} catch (err) {
+					const e = err as Error & { stderr?: string };
+					const detail = e?.stderr?.trim() || e?.message || "unknown error";
+					return {
+						content: [{ type: "text", text: `Error: herdr subagent dispatch failed: ${detail.slice(0, 500)}` }],
+						details: { spawned: false },
+					};
+				}
+				if (!paneId || startRes?.error || !startRes?.result?.agent?.name) {
+					return {
+						content: [
+							{ type: "text", text: `Error: herdr agent start failed. Response: ${JSON.stringify(startRes).slice(0, 500)}` },
+						],
+						details: { spawned: false },
+					};
+				}
+
+				assertActive();
+				trackSubagent(ctx, { name, paneId, tabId, model, kind, label, cwd, spawnedAt: Date.now(), status: "idle" });
+
+				assertActive();
+				const promptRes = await herdr(["agent", "prompt", name, params.task], { signal: _signal });
+				const promptOk = !promptRes?.error;
+				startNotifyTimer(pi, ctx);
+				if (!promptOk) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Subagent started but prompt submit reported an error (${JSON.stringify(promptRes).slice(0, 300)}). It may still be idle; read it via: herdr agent read ${name}`,
+							},
+						],
+						details: { spawned: true, promptSubmitted: false, name, tabId, paneId, kind, model },
+					};
+				}
+
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Subagent spawned and task submitted.\n\n  agent: ${name}\n  kind: ${kind}\n  model: ${model}\n  tab:  ${tabId}\n  pane: ${paneId}\n  cwd:  ${cwd}\n\nYou will be notified here automatically when it finishes.\nMonitor: herdr agent read ${name} --format text\nWait:   herdr agent wait ${name} --until idle`,
+						},
+					],
+					details: { spawned: true, promptSubmitted: true, name, tabId, paneId, kind, model },
+				};
+			}
+			try {
+				const result = await run();
+				if (partialEffects && result.details && typeof result.details === "object")
+					result.details = {
+						...result.details,
+						partialEffects,
+						...(partialChild ? { partialChild } : {}),
+						...(didStart ? { spawned: true, ...partialChild } : {}),
+					};
+				if (_signal?.aborted && result.details && typeof result.details === "object")
+					result.details = { ...result.details, errorCode: "cancelled" };
+				return subagentResult(action, result);
+			} catch (error) {
+				if (action !== "spawn") throw error;
+				return subagentResult(action, {
+					content: [
+						{ type: "text", text: (error instanceof Error ? error.message : "Subagent operation failed").slice(0, 1600) },
+					],
+					details: {
+						spawned: didStart,
+						partialEffects,
+						...(_signal?.aborted ? { errorCode: "cancelled" } : {}),
+						...(partialChild ? { partialChild, ...partialChild } : {}),
+					},
+				});
+			}
+		},
+	});
+
+	// ---- /subagent command: config + per-session settings + status ----
+	pi.registerCommand("subagent", {
+		description:
+			"Manage subagent delegation: on/off, per-session allow mode (auto/confirm/timeout), auto decision, allowance, close/reset, model picker + loadouts, status.",
+		handler: async (args, ctx) => {
+			ensureSessionState(ctx);
+			const argv = (args ?? "").trim().split(/\s+/).filter(Boolean);
+			const config = loadConfig();
+
+			if (argv[0] === "on") {
+				config.enabled = true;
+				saveConfig(config);
+				ctx.ui.notify("Subagent spawning enabled.", "info");
+				return;
+			}
+			if (argv[0] === "off") {
+				config.enabled = false;
+				saveConfig(config);
+				ctx.ui.notify("Subagent spawning disabled.", "info");
+				return;
+			}
+			if (argv[0] === "mode") {
+				const mode = asAllowMode(argv[1]);
+				if (!mode) {
+					ctx.ui.notify("Usage: /subagent mode <auto|confirm|timeout>", "error");
+					return;
+				}
+				if (currentState) currentState.allowMode = mode;
+				persistState();
+				ctx.ui.notify(`This session's allow mode: ${mode}`, "info");
+				return;
+			}
+			if (argv[0] === "confirm" || argv[0] === "noconfirm") {
+				const mode: AllowMode = argv[0] === "confirm" ? "confirm" : "auto";
+				if (currentState) currentState.allowMode = mode;
+				persistState();
+				ctx.ui.notify(`This session's allow mode: ${mode}`, "info");
+				return;
+			}
+			if (argv[0] === "decide") {
+				const d = asAutoDecision(argv[1]);
+				if (!d) {
+					ctx.ui.notify("Usage: /subagent decide <allow|deny>", "error");
+					return;
+				}
+				if (currentState) currentState.autoDecision = d;
+				persistState();
+				ctx.ui.notify(`On timeout, this session will auto-${d}.`, "info");
+				return;
+			}
+			if (argv[0] === "timeout") {
+				const ms = Number.parseInt(argv[1] ?? "", 10);
+				if (!Number.isFinite(ms) || ms <= 0) {
+					ctx.ui.notify("Usage: /subagent timeout <ms> (e.g. 30000)", "error");
+					return;
+				}
+				if (currentState) currentState.confirmTimeoutMs = ms;
+				persistState();
+				ctx.ui.notify(`Timed confirm waits ${ms}ms before auto-deciding.`, "info");
+				return;
+			}
+			if (argv[0] === "max") {
+				if (argv[1] === "default") {
+					if (currentState) currentState.maxSubagents = undefined;
+					persistState();
+					ctx.ui.notify(`This session falls back to the default allowance (${config.maxSubagents}).`, "info");
+					return;
+				}
+				const n = Number.parseInt(argv[1] ?? "", 10);
+				if (!Number.isFinite(n) || n < 0) {
+					ctx.ui.notify("Usage: /subagent max <n> (0 = unlimited) or /subagent max default", "error");
+					return;
+				}
+				if (currentState) currentState.maxSubagents = n;
+				persistState();
+				ctx.ui.notify(`This session's allowance: ${n}${n === 0 ? " (unlimited)" : ""}.`, "info");
+				return;
+			}
+			if (argv[0] === "list") {
+				await listSubagents(ctx);
+				return;
+			}
+			if (argv[0] === "history") {
+				await showSubagentHistory(ctx);
+				return;
+			}
+			if (argv[0] === "close") {
+				if (!argv[1]) {
+					ctx.ui.notify("Usage: /subagent close <name>", "error");
+					return;
+				}
+				await closeSubagent(ctx, argv[1]);
+				return;
+			}
+			if (argv[0] === "reset") {
+				if (!argv[1]) {
+					ctx.ui.notify("Usage: /subagent reset <name> [task]", "error");
+					return;
+				}
+				await resetSubagent(ctx, argv[1], argv.slice(2).join(" ") || undefined);
+				return;
+			}
+			if (argv[0] === "models") {
+				await handleModelsCommand(ctx, config, argv.slice(1));
+				return;
+			}
+			if (argv[0] === "catalog") {
+				await handleCatalogCommand(ctx, config, argv.slice(1));
+				return;
+			}
+
+			// default: status
+			const active = await countSubagents();
+			const mode = sessionAllowMode(config);
+			const decision = sessionAutoDecision(config);
+			const timeout = sessionConfirmTimeout(config);
+			const maxN = sessionMaxSubagents(config);
+			const tracked = currentState ? Object.keys(currentState.subagents).length : 0;
+			const eff = effectiveAllowlist(config);
+			ctx.ui.notify(
+				[
+					`Subagent config: enabled=${config.enabled}`,
+					`allowMode=${mode}${mode === "timeout" ? ` (auto-${decision} after ${timeout}ms)` : ""}`,
+					`max=${maxN}${maxN === 0 ? " (unlimited)" : ""}`,
+					`kinds=${sessionAllowedKinds(config).join(",")}`,
+					`active=${active}`,
+					`tracked=${tracked}`,
+					`Allowlist [${eff.source}]: ${eff.patterns.length ? eff.patterns.join(", ") : "(all)"}`,
+					`Loadouts: local=${Object.keys(currentState?.loadouts ?? {}).join(", ") || "(none)"} | global=${Object.keys(config.loadouts).join(", ") || "(none)"}${sessionAllowGlobalLoadouts() ? "" : " [global off]"}${currentState?.forceLoadout ? ` | force=${currentState.forceLoadout}` : ""}`,
+				].join("\n"),
+				"info"
+			);
+		},
+	});
+
+	// ---- model catalog: derive entries from the scoped allowlist ----
+	function handleCatalogCommand(ctx: ExtensionContext, config: SubagentConfig, rest: string[]): Promise<void> {
+		return (async () => {
+			if (rest[0] === "derive") {
+				const tags = (rest[1] ?? "")
+					.split(",")
+					.map((t) => t.trim())
+					.filter(Boolean);
+				const eff = effectiveAllowlist(config);
+				if (eff.patterns.length === 0) {
+					ctx.ui.notify(
+						"Allowlist is empty (all models allowed) — nothing scoped to derive from. Scope models first: /subagent models",
+						"error"
+					);
+					return;
+				}
+				const registry = collectModels(ctx);
+				if (registry.length === 0) {
+					ctx.ui.notify("No models found in the registry; cannot derive catalog entries.", "warning");
+					return;
+				}
+				const merged = loadCatalog(ctx.cwd);
+				const result = deriveCatalogEntries(merged, registry, eff.patterns, tags);
+				if (result.added.length === 0) {
+					ctx.ui.notify(`Nothing to derive: all ${result.existingCount} scoped model(s) are already in the catalog.`, "info");
+				} else {
+					const p = resolveCatalogPath(config.catalogPath);
+					const raw = loadCatalogFile(p) ?? { version: 1 };
+					const out = { ...raw, models: [...(raw.models ?? []), ...result.added] };
+					fs.mkdirSync(path.dirname(p), { recursive: true });
+					fs.writeFileSync(p, `${JSON.stringify(out, null, 2)}\n`);
+					ctx.ui.notify(
+						`Catalog ${p}: added ${result.added.length} (${result.added.map((m) => `${m.provider}/${m.id}`).join(", ")}); ${result.existingCount} already present.${tags.length ? ` Tags: ${tags.join(", ")}.` : " No tags — edit the file to tag them."}`,
+						"info"
+					);
+				}
+				if (result.unmatched.length > 0) {
+					ctx.ui.notify(`Allowlist patterns matching no registry model: ${result.unmatched.join(", ")}`, "warning");
+				}
+				return;
+			}
+			ctx.ui.notify("Usage: /subagent catalog derive [tag1,tag2] — derive catalog entries from the scoped allowlist", "info");
+		})();
+	}
+
+	// ---- model allowlist + loadouts ----
+	function handleModelsCommand(ctx: ExtensionContext, config: SubagentConfig, rest: string[]): Promise<void> {
+		return (async () => {
+			if (rest.length === 0 || rest[0] === "picker" || rest[0] === "select") {
+				await openModelPicker(ctx, config);
+				return;
+			}
+			if (rest[0] === "add" && rest[1]) {
+				const list = ensureSessionAllowlist(config);
+				list.push(rest[1]);
+				clearForceLoadout();
+				persistState();
+				ctx.ui.notify(`Session allowlist pattern added: ${rest[1]}`, "info");
+				return;
+			}
+			if (rest[0] === "remove" && rest[1]) {
+				const list = ensureSessionAllowlist(config);
+				if (currentState) currentState.allowlist = list.filter((p) => p !== rest[1]);
+				clearForceLoadout();
+				persistState();
+				ctx.ui.notify(`Removed session allowlist pattern: ${rest[1]}`, "info");
+				return;
+			}
+			if (rest[0] === "clear") {
+				if (currentState) currentState.allowlist = [];
+				clearForceLoadout();
+				persistState();
+				ctx.ui.notify("Session allowlist cleared (all models allowed).", "info");
+				return;
+			}
+			if (rest[0] === "allow-global") {
+				const v = rest[1];
+				if (v !== "on" && v !== "off") {
+					ctx.ui.notify("Usage: /subagent models allow-global <on|off>", "error");
+					return;
+				}
+				if (currentState) currentState.allowGlobalLoadouts = v === "on";
+				persistState();
+				ctx.ui.notify(`Global loadouts ${v === "on" ? "allowed" : "disallowed"} for this session.`, "info");
+				return;
+			}
+			if (rest[0] === "force") {
+				const name = rest[1];
+				if (!name || name === "off" || name === "none") {
+					clearForceLoadout();
+					persistState();
+					ctx.ui.notify("Force cleared; the session uses its own allowlist.", "info");
+					return;
+				}
+				const def = applyPresetToSession(name, config);
+				if (!def) {
+					ctx.ui.notify(`Loadout "${name}" is not resolvable (local first, then global if allowed).`, "error");
+					return;
+				}
+				if (currentState) currentState.forceLoadout = name;
+				persistState();
+				ctx.ui.notify(`Session pinned to loadout "${name}": ${describePreset(def)}. Open the picker to override.`, "info");
+				return;
+			}
+			if (rest[0] === "list") {
+				const eff = effectiveAllowlist(config);
+				const local = currentState?.loadouts ?? {};
+				const global = config.loadouts ?? {};
+				const force = currentState?.forceLoadout;
+				const allowGlobal = sessionAllowGlobalLoadouts();
+				ctx.ui.notify(
+					[
+						`Effective allowlist [${eff.source}]${eff.source === `loadout:${force}` ? " (forced)" : ""}: ${eff.patterns.length ? eff.patterns.join(", ") : "(all)"}`,
+						`allow-global: ${allowGlobal ? "yes" : "no"}${force ? ` • force: ${force}` : ""}`,
+						`Local loadouts: ${Object.keys(local).length ? Object.keys(local).join(", ") : "(none)"}`,
+						`Global loadouts${allowGlobal ? "" : " [disabled]"}: ${Object.keys(global).length ? Object.keys(global).join(", ") : "(none)"}`,
+					].join("\n"),
+					"info"
+				);
+				return;
+			}
+			if (rest[0] === "loadout") {
+				const action = rest[1];
+				const name = rest[2];
+				const scope = rest[3] === "global" ? "global" : "local";
+				if (action === "save" && name) {
+					const pats = effectiveAllowlist(config).patterns;
+					if (scope === "global") {
+						config.loadouts[name] = [...pats];
+						saveConfig(config);
+						ctx.ui.notify(`Saved global loadout "${name}" (${pats.length} pattern(s)).`, "info");
+					} else {
+						if (!currentState) currentState = { sessionId: "ephemeral", subagents: {} };
+						if (!currentState.loadouts) currentState.loadouts = {};
+						currentState.loadouts[name] = [...pats];
+						persistState();
+						ctx.ui.notify(`Saved local loadout "${name}" (${pats.length} pattern(s)).`, "info");
+					}
+					return;
+				}
+				if (action === "load" && name) {
+					const def = applyPresetToSession(name, config);
+					if (!def) {
+						ctx.ui.notify(
+							`No loadout named "${name}" (local first, then global if allowed). See /subagent models list.`,
+							"error"
+						);
+						return;
+					}
+					clearForceLoadout();
+					persistState();
+					ctx.ui.notify(`Applied loadout "${name}": ${describePreset(def)}.`, "info");
+					return;
+				}
+				if (action === "delete" && name) {
+					if (scope === "global") {
+						delete config.loadouts[name];
+						saveConfig(config);
+						ctx.ui.notify(`Deleted global loadout "${name}".`, "info");
+					} else {
+						if (currentState?.loadouts) delete currentState.loadouts[name];
+						persistState();
+						ctx.ui.notify(`Deleted local loadout "${name}".`, "info");
+					}
+					return;
+				}
+				if (action === "list") {
+					const local = currentState?.loadouts ?? {};
+					const global = config.loadouts ?? {};
+					const localStr = Object.keys(local).length
+						? Object.entries(local)
+								.map(([k, v]) => `  ${k}: ${describePreset(normalizeLoadout(v))}`)
+								.join("\n")
+						: "  (none)";
+					const globalStr = Object.keys(global).length
+						? Object.entries(global)
+								.map(([k, v]) => `  ${k}: ${describePreset(normalizeLoadout(v))}`)
+								.join("\n")
+						: "  (none)";
+					ctx.ui.notify(`Local loadouts:\n${localStr}\n\nGlobal loadouts\n${globalStr}`, "info");
+					return;
+				}
+				ctx.ui.notify("Usage: /subagent models loadout <save|load|delete|list> [name] [local|global]", "error");
+				return;
+			}
+			ctx.ui.notify(
+				"Usage: /subagent models [picker|add <glob>|remove <glob>|list|clear|allow-global <on|off>|force <name>|off|loadout <save|load|delete|list> [name] [local|global]]",
+				"error"
+			);
+		})();
+	}
+
+	async function listSubagents(ctx: ExtensionContext): Promise<void> {
+		const tracked = currentState ? Object.values(currentState.subagents) : [];
+		if (tracked.length === 0) {
+			ctx.ui.notify("This session has not spawned any subagents.", "info");
+			return;
+		}
+		const lines = tracked.map((t) => {
+			const state = t.gone ? "closed" : t.done ? "done" : (t.status ?? "unknown");
+			const ended = t.endedAt ? ` · ended ${new Date(t.endedAt).toISOString().slice(0, 19).replace("T", " ")}` : "";
+			return `${t.name}  [${state}]  ${t.label}  (${t.model})${ended}`;
+		});
+		ctx.ui.notify(`Subagents spawned by this session:\n${lines.join("\n")}`, "info");
+	}
+
+	// ---- /subagent history: durable record of finished/closed subagents ----
+	async function showSubagentHistory(ctx: ExtensionContext): Promise<void> {
+		const hist = (currentState?.history ?? []).slice().sort((a, b) => b.endedAt - a.endedAt);
+		if (hist.length === 0) {
+			ctx.ui.notify("No finished/closed subagents recorded yet.", "info");
+			return;
+		}
+		const lines = hist.map((h) => {
+			const end = new Date(h.endedAt).toISOString().slice(0, 19).replace("T", " ");
+			return `${h.name}  [${h.outcome}]  ${h.label}  (${h.model})  ended ${end}`;
+		});
+		ctx.ui.notify(`Finished/closed subagents (${hist.length}):\n${lines.join("\n")}`, "info");
+	}
+
+	// ---- /side and /btw: open the current session in its own new tab ----
+	const registerSide = (name: string) => {
+		pi.registerCommand(name, {
+			description: `Fork the CURRENT session into a new Herdr tab or plain tmux window using the validated session route. Usage: /${name} [label] [--model M] [instruction...].`,
+			handler: async (args, ctx) => {
+				// parse: optional --model M, first bare token = label, rest = instruction
+				const tokens = (args ?? "").trim().split(/\s+/).filter(Boolean);
+				let model: string | undefined;
+				let label: string;
+				let instruction: string | undefined;
+
+				const rest: string[] = [];
+				let i = 0;
+				while (i < tokens.length) {
+					if (tokens[i] === "--model" && i + 1 < tokens.length) {
+						model = tokens[i + 1];
+						i += 2;
+					} else {
+						rest.push(tokens[i]);
+						i++;
+					}
+				}
+
+				if (rest.length === 0) {
+					ctx.ui.notify(
+						`Usage: /side [label] [--model M] [instruction...] — e.g. /side fix-bugs --model openai/gpt-5 "Fix the tests then report."`,
+						"error"
+					);
+					return;
+				}
+
+				label = rest[0].replace(/[^a-zA-Z0-9 _\-.]/g, "-").slice(0, 40) || "side";
+				instruction = rest.slice(1).join(" ") || undefined;
+
+				try {
+					const result = await openSideTab({ ctx, label, model, instruction });
+					ctx.ui.notify(
+						`Opened side session in its own tab.\n  agent: ${result.name}\n  tab: ${result.tabId}\n  pane: ${result.paneId}\nIt is forked from the current session (pi --fork); steer it any direction.`,
+						"info"
+					);
+				} catch (err: any) {
+					ctx.ui.notify(`Side tab failed: ${err?.message ?? err}`, "error");
+				}
+			},
+		});
+	};
+	registerSide("side");
+	registerSide("btw");
+
+	pi.registerCommand("send", {
+		description:
+			"Send this agent's last response to another herdr tab, optionally with a note. Fuzzy-pick the target, type a note; Enter sends, Ctrl+j sends and brings back that tab's reply into this session as a follow-up (Esc cancels).",
+		handler: async (_args, ctx) => {
+			await runSend(ctx, pi);
+		},
+	});
+	pi.registerCommand("relay", {
+		description: "Alias of /send: copy this agent's last response and forward it to another herdr tab with an optional note.",
+		handler: async (_args, ctx) => {
+			await runSend(ctx, pi);
+		},
+	});
+}

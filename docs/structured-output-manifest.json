@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "extensions": {
+    "pi-auto-rename": { "rename_session": "implemented" },
+    "pi-azure-empty-response-guard": {},
+    "pi-bash-picker": {},
+    "pi-capabilities": {},
+    "pi-custom-context-files": {},
+    "pi-edit-agent": {},
+    "pi-env-ctx": {},
+    "pi-error-recovery": {},
+    "pi-session-tools": { "subagent": "implemented" },
+    "pi-history-search": { "HistorySearch": "implemented", "HistoryBranches": "implemented", "HistoryRead": "implemented", "HistoryGrep": "implemented" },
+    "pi-introspection": { "self_reflection": "implemented" },
+    "pi-kyz": { "bash": "host-schema-preserving-wrapper" },
+    "pi-markdown-export": {},
+    "pi-mmry": { "memory": "implemented" },
+    "pi-oqto-bridge": {},
+    "pi-read-file-guard": {},
+    "pi-read-image-guard": {},
+    "pi-selection": { "Selection": "owner-coordination-pending" },
+    "pi-ssh-key": {},
+    "pi-statusline": {},
+    "pi-sudo": { "sudo_exec": "implemented", "remote_sudo_exec": "implemented" },
+    "pi-todolist": { "Todo": "implemented" },
+    "pi-trx-picker": {},
+    "pi-tui-rpc": {},
+    "pi-xlatch-session": { "xlatch_later": "implemented" }
+  },
+  "transforms": {
+    "pi-read-file-guard": "intentional structuredContent invalidation verified in native Pi1",
+    "pi-read-image-guard": "intentional structuredContent invalidation verified in native Pi1",
+    "pi-kyz": "recursive text/details/structuredContent redaction; stream redaction before host spill"
+  },
+  "exceptions": {
+    "Selection": "Existing Type.Unknown output schema remains unchanged pending Oqto owner operation-contract review. This is not completed rollout acceptance."
+  }
+}

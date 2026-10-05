@@ -334,11 +334,14 @@ describe("memory tool", () => {
 		const h = harness({ cwd: project("app") });
 		await h.start();
 		expect(h.active()).toEqual(["read", "bash", "memory"]);
-		writeFileSync(join(fakeDir, "search.json"), '[{"memory_id":"mem_1"}]\n');
-		writeFileSync(join(fakeDir, "add.json"), '{"memory_id":"mem_2"}\n');
+		const entry = { memory_id: "mem_1", content: "Fact", revision: 2, scope: "repo" };
+		writeFileSync(join(fakeDir, "search.json"), JSON.stringify([entry]));
+		writeFileSync(join(fakeDir, "add.json"), JSON.stringify({ ...entry, memory_id: "mem_2" }));
+		writeFileSync(join(fakeDir, "supersede.json"), JSON.stringify({ ...entry, revision: 3 }));
+		writeFileSync(join(fakeDir, "rm.json"), JSON.stringify({ ...entry, removed: true }));
 
 		const search = await h.tool({ action: "search", query: "--weird", limit: 3 });
-		expect(search.content[0].text).toBe('[{"memory_id":"mem_1"}]');
+		expect(JSON.parse(search.content[0].text)).toEqual([entry]);
 		await h.tool({ action: "search", query: "vpn" });
 		const created = await h.tool({
 			action: "create",
@@ -348,7 +351,7 @@ describe("memory tool", () => {
 			scope: "general",
 			expires: "30d",
 		});
-		expect(created.content[0].text).toBe('{"memory_id":"mem_2"}');
+		expect(JSON.parse(created.content[0].text)).toEqual({ ...entry, memory_id: "mem_2" });
 		await h.tool({ action: "create", content: "repo fact" });
 		await h.tool({ action: "supersede", id: "mem_1", content: "new", reason: "changed", expected_revision: 2 });
 		await h.tool({ action: "deprecate", id: "mem_1", reason: "obsolete", expected_revision: 3 });

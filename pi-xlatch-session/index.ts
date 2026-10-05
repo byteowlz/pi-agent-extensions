@@ -33,6 +33,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { Type } from "typebox";
 
 import { type ParkedContent, type ParkedItem, formatParkedContent, formatParkedList } from "./src/later.js";
+import { checkedContent, checkedItems, laterOutputSchema, listOutput, readOutput } from "./src/output.js";
 import { SlotEndpoint, removeDeadSocket, socketLive } from "./src/slot.js";
 
 const execFileAsync = promisify(execFile);
@@ -227,20 +228,21 @@ async function staleRegistrations(): Promise<string[]> {
 	}
 }
 
-async function laterList(): Promise<ParkedItem[]> {
-	const { stdout } = await execFileAsync("xlatch", ["later", "list", "--json"], { maxBuffer: 4 * 1024 * 1024 });
-	return JSON.parse(stdout) as ParkedItem[];
+async function laterList(signal?: AbortSignal): Promise<ParkedItem[]> {
+	const { stdout } = await execFileAsync("xlatch", ["later", "list", "--json"], { maxBuffer: 4 * 1024 * 1024, signal });
+	return checkedItems(JSON.parse(stdout));
 }
 
-async function laterRead(id: string): Promise<ParkedContent> {
+async function laterRead(id: string, signal?: AbortSignal): Promise<ParkedContent> {
 	const { stdout } = await execFileAsync("xlatch", ["later", "read", id, "--directory", INCOMING, "--json"], {
 		maxBuffer: 4 * 1024 * 1024,
+		signal,
 	});
-	return JSON.parse(stdout) as ParkedContent;
+	return checkedContent(JSON.parse(stdout));
 }
 
-async function laterRemove(id: string): Promise<void> {
-	await execFileAsync("xlatch", ["later", "remove", id, "--json"], { maxBuffer: 4 * 1024 * 1024 });
+async function laterRemove(id: string, signal?: AbortSignal): Promise<void> {
+	await execFileAsync("xlatch", ["later", "remove", id, "--json"], { maxBuffer: 4 * 1024 * 1024, signal });
 }
 
 function createShareServer(handle: (payload: SharePayload) => unknown): net.Server {
@@ -600,32 +602,57 @@ export default function xlatchSession(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "xlatch_later",
 		label: "xlatch Save for Later",
+		outputSchema: laterOutputSchema,
 		description:
 			"List, read, or remove content parked in xlatch Save for Later. This works without connecting the current Pi session to an xlatch live-share slot. Read is non-destructive; remove only after the content has been handled.",
 		parameters: Type.Object({
 			action: Type.Optional(Type.String({ enum: ["list", "read", "remove"], default: "list" })),
 			id: Type.Optional(Type.String({ description: "Parked item id, required for read or remove" })),
 		}),
-		async execute(_toolCallId, params) {
+		async execute(_toolCallId, params, signal): Promise<import("@earendil-works/pi-coding-agent").AgentToolResult<unknown>> {
 			try {
 				const action = params.action ?? "list";
 				if (action === "list") {
-					const items = await laterList();
-					return { content: [{ type: "text" as const, text: formatParkedList(items) }], details: null };
+					signal?.throwIfAborted();
+					const all = await laterList(signal);
+					const result = listOutput(all);
+					const { items, truncated } = result;
+					return {
+						content: [
+							{ type: "text" as const, text: formatParkedList(items) + (truncated ? "\n[Truncated list/metadata.]" : "") },
+						],
+						details: null,
+						structuredContent: result,
+					};
 				}
 				const id = params.id?.trim();
 				if (!id) throw new Error(`id is required for ${action}`);
 				if (action === "read") {
-					const content = await laterRead(id);
-					return { content: [{ type: "text" as const, text: formatParkedContent(content) }], details: null };
+					signal?.throwIfAborted();
+					const result = readOutput(await laterRead(id, signal));
+					return {
+						content: [{ type: "text" as const, text: result.text + (result.truncated ? "\n[Truncated content.]" : "") }],
+						details: null,
+						structuredContent: result,
+					};
 				}
-				await laterRemove(id);
-				return { content: [{ type: "text" as const, text: `Removed parked item ${id}.` }], details: null };
+				signal?.throwIfAborted();
+				await laterRemove(id, signal);
+				return {
+					content: [{ type: "text" as const, text: `Removed parked item ${id}.` }],
+					details: null,
+					structuredContent: { ok: true, action, id, removed: true },
+				};
 			} catch (error) {
 				return {
-					content: [{ type: "text" as const, text: errorMessage(error) }],
+					content: [{ type: "text" as const, text: errorMessage(error).slice(0, 1600) }],
 					isError: true as const,
 					details: null,
+					structuredContent: {
+						ok: false,
+						action: params.action ?? "list",
+						error: { code: signal?.aborted ? "aborted" : "xlatch_failed", message: errorMessage(error).slice(0, 1600) },
+					},
 				};
 			}
 		},

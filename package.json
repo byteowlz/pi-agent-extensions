@@ -1,21 +1,28 @@
 {
 	"name": "pi-agent-extensions",
-	"version": "1.25.1",
+	"version": "2.4.0",
 	"description": "Extensions for the pi coding agent",
 	"type": "module",
 	"private": true,
+	"engines": {
+		"node": ">=22.19.0"
+	},
 	"scripts": {
 		"check": "npm run lint && npm run typecheck",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
 		"typecheck": "tsgo --config tsconfig.json",
-		"test": "bun test"
+		"test": "bun test",
+		"test:structured-output-host": "node scripts/test-structured-output-host.mjs",
+		"test:pi-1": "node scripts/test-pi-1-catalog.mjs",
+		"test:selection-rpc": "node scripts/test-selection-rpc.mjs",
+		"test:selection-tool": "node scripts/test-selection-tool.mjs"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.4",
-		"@earendil-works/pi-ai": "^0.74.0",
-		"@earendil-works/pi-coding-agent": "^0.74.0",
-		"@earendil-works/pi-tui": "^0.74.0",
+		"@earendil-works/pi-ai": "1.0.0",
+		"@earendil-works/pi-coding-agent": "1.0.0",
+		"@earendil-works/pi-tui": "1.0.0",
 		"@rslint/tsgo": "^0.4.2",
 		"@types/node": "^22.0.0",
 		"typebox": "^1.1.24",

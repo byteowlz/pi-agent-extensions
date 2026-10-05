@@ -41,6 +41,7 @@ import {
 	runMmry,
 	sha256,
 } from "./src/core.js";
+import { memoryOutputSchema, parseMemoryOutput } from "./src/output.js";
 import { type CallArgs, renderCall, renderResult } from "./src/render.js";
 
 const WIDGET = "mmry";
@@ -247,18 +248,36 @@ export default function piMmry(pi: ExtensionAPI) {
 		},
 	});
 
-	const tool = async (name: string, args: string[], ctx: ExtensionContext) => {
+	const tool = async (
+		name: string,
+		args: string[],
+		ctx: ExtensionContext,
+		signal?: AbortSignal
+	): Promise<import("@earendil-works/pi-coding-agent").AgentToolResult<unknown>> => {
 		try {
-			const stdout = await runMmry(exec, state.config, ctx.cwd, args);
+			const raw = await runMmry(exec, state.config, ctx.cwd, args, signal);
+			signal?.throwIfAborted();
+			const structuredContent = parseMemoryOutput(name, raw);
+			const stdout = JSON.stringify("entries" in structuredContent ? structuredContent.entries : structuredContent.entry);
 			metric(ctx, { event: "tool", tool: name, ok: true });
-			return { content: [{ type: "text" as const, text: stdout.trim() }], details: { action: name, args, stdout } };
+			return {
+				content: [{ type: "text" as const, text: stdout + (structuredContent.truncated ? "\n[Truncated memory output.]" : "") }],
+				details: { action: name, stdout },
+				structuredContent,
+			};
 		} catch (error) {
 			metric(ctx, { event: "tool", tool: name, ok: false });
-			const message = (error as Error).message;
+			const message = (error instanceof Error ? error.message : "Memory operation failed").slice(0, 1600);
 			return {
 				content: [{ type: "text" as const, text: message }],
 				isError: true,
-				details: { action: name, args, error: message },
+				details: { action: name, error: message },
+				structuredContent: {
+					ok: false,
+					action: name,
+					effects: name === "search" ? "none" : "possible",
+					error: { code: signal?.aborted ? "aborted" : "memory_failed", message },
+				},
 			};
 		}
 	};
@@ -266,6 +285,7 @@ export default function piMmry(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: TOOL_NAME,
 		label: "Memory",
+		outputSchema: memoryOutputSchema,
 		promptSnippet: PROMPT_SNIPPET,
 		promptGuidelines: PROMPT_GUIDELINES,
 		description:
@@ -292,16 +312,28 @@ export default function piMmry(pi: ExtensionAPI) {
 			scope: Type.Optional(Type.Union([Type.Literal("repo"), Type.Literal("general")], { description: "create: default repo" })),
 			expires: Type.Optional(Type.String({ description: "create: RFC 3339 timestamp or duration like 30d" })),
 		}),
-		execute: (_id, params, _signal, _onUpdate, ctx) => {
+		execute: (
+			_id,
+			params,
+			signal,
+			_onUpdate,
+			ctx
+		): Promise<import("@earendil-works/pi-coding-agent").AgentToolResult<unknown>> => {
 			const args = memoryArgs(params as MemoryParams);
 			if (typeof args === "string") {
 				return Promise.resolve({
 					content: [{ type: "text" as const, text: args }],
 					isError: true,
 					details: { action: params.action, error: args },
+					structuredContent: {
+						ok: false,
+						action: params.action,
+						effects: "none",
+						error: { code: "invalid_request", message: args },
+					},
 				});
 			}
-			return tool(params.action, args, ctx);
+			return tool(params.action, args, ctx, signal);
 		},
 		renderCall: (args, theme) => new Text(renderCall(args as CallArgs, theme), 0, 0),
 		renderResult: (result, { expanded }, theme) => {
