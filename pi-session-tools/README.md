@@ -378,3 +378,15 @@ forked session later under the new tab's working directory in `pi -r` / `/resume
 - `openSideTab` requires a persisted session (not `--no-session`).
 - The extension reports errors via the tool/command result; herdr CLI JSON is
   surfaced directly when parsing fails.
+
+### Single-shot (print/json) mode
+
+`pi -p` / `pi --mode json` must exit promptly after answering. The long-lived
+herdr socket event subscriber and subagent poll timer are therefore only armed
+for TUI/RPC sessions; in print/json mode they are skipped entirely. A
+`session_shutdown` also marks the subscriber as stopped so its socket
+close/error handler cannot re-arm the reconnect timer (which would otherwise
+keep the process's event loop alive and hang `pi -p`). Lifecycle decisions live
+in `lifecycle.ts` and are covered by `lifecycle.test.ts`; the end-to-end
+`print-exit.e2e.test.ts` drives a real pi binary in print mode and asserts it
+exits 0 within seconds.

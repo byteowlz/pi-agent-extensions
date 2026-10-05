@@ -300,12 +300,18 @@ export default function historySearch(pi: ExtensionAPI): void {
 
 	async function ensureCurrentIndex(ctx: ExtensionContext): Promise<void> {
 		if (indexing) return;
-		const config = loadConfig(ctx.cwd);
+		// Resolve the config synchronously here, while the ctx is still valid.
+		// `ctx.cwd` is a live getter that throws once the session is stale
+		// (after session_shutdown in single-shot print/json mode, see
+		// piext-ge92); capturing it here prevents a deferred timer from
+		// touching a stale ctx after `pi -p` has already answered.
+		const cwd = ctx.cwd;
+		const config = loadConfig(cwd);
 		if (!config.enabled || !config.indexOnStart) return;
 		indexing = true;
 		try {
 			const base = resolveSessionsBase(config);
-			await updateProjectIndex(projectDir(base, ctx.cwd), config);
+			await updateProjectIndex(projectDir(base, cwd), config);
 		} catch {
 			// Index not writable here (e.g. read-only mount) — tools fall back at query time.
 		} finally {
@@ -314,6 +320,12 @@ export default function historySearch(pi: ExtensionAPI): void {
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
+		// Don't index in single-shot (print/json) mode: the session ends right
+		// after the answer and there is no long-lived session to index for.
+		// hasUI is false there (true for TUI/RPC), so it is the type-safe
+		// signal; the runtime `mode` is also consulted when present.
+		const mode = (ctx as unknown as { mode?: string }).mode;
+		if (!ctx.hasUI && mode !== "rpc" && mode !== "tui") return;
 		// Defer slightly so startup isn't blocked by a first-run full index.
 		setTimeout(() => {
 			void ensureCurrentIndex(ctx);
