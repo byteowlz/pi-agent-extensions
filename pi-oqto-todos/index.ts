@@ -23,7 +23,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 // ============================================================================
@@ -33,7 +33,7 @@ import { Type } from "typebox";
 type TodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
 type TodoPriority = "high" | "medium" | "low";
 
-interface TodoItem {
+export interface TodoItem {
 	id: string;
 	content: string;
 	status: TodoStatus;
@@ -322,7 +322,27 @@ function getStatusColor(status: TodoStatus): ThemeColor {
 	return "text";
 }
 
-function renderTodoLine(todo: TodoItem, theme: Theme, maxWidth: number): string {
+/**
+ * Truncate a string to a visible width WITHOUT breaking an enclosing background.
+ *
+ * `truncateToWidth` (pi-tui) terminates every truncated run with a full `\x1b[0m`
+ * reset, which clears the foreground AND background colour. The tool-result
+ * shell paints each line with a background (`theme.bg("toolSuccessBg", ...)`, see
+ * `modes/interactive/components/tool-execution.js`), so a mid-line full reset
+ * turns the trailing part of a truncated row into a dark strip.
+ *
+ * We rewrite any full reset introduced by truncation into a foreground-only
+ * reset (`\x1b[39m`), so the enclosing background survives while the ellipsis and
+ * earlier foreground styling are kept. This stays theme-agnostic: we never
+ * hardcode the success background, we only stop the reset from clearing it.
+ */
+function truncateToWidthBgSafe(text: string, maxWidth: number, ellipsis = "..."): string {
+	return truncateToWidth(text, maxWidth, ellipsis).split("\u001b[0m").join("\u001b[39m");
+}
+
+export { truncateToWidthBgSafe };
+
+export function renderTodoLine(todo: TodoItem, theme: Theme, maxWidth: number): string {
 	const icon = getStatusIcon(todo.status);
 	const priorityLabel = getPriorityLabel(todo.priority);
 	// Reserve width for the status icon prefix and the priority suffix so the
@@ -332,13 +352,13 @@ function renderTodoLine(todo: TodoItem, theme: Theme, maxWidth: number): string 
 	const prefixWidth = visibleWidth(icon) + 1;
 	const suffixWidth = priorityLabel ? visibleWidth(priorityLabel) + 1 : 0;
 	const contentWidth = Math.max(8, maxWidth - prefixWidth - suffixWidth);
-	const contentPreview = truncateToWidth(normalizeTodoText(todo.content), contentWidth);
+	const contentPreview = truncateToWidthBgSafe(normalizeTodoText(todo.content), contentWidth);
 	let line = theme.fg(getStatusColor(todo.status), `${icon} ${contentPreview}`);
 	if (priorityLabel) {
 		const priorityColor = todo.priority === "high" ? "error" : "dim";
 		line += ` ${theme.fg(priorityColor, priorityLabel)}`;
 	}
-	return truncateToWidth(line, maxWidth);
+	return truncateToWidthBgSafe(line, maxWidth);
 }
 
 function orderTodos(todos: TodoItem[]): TodoItem[] {
@@ -366,13 +386,13 @@ function formatTodosForSummary(todos: TodoItem[]): string {
 	return lines.join("\n");
 }
 
-function renderTodoList(todos: TodoItem[], theme: Theme, expanded: boolean): string {
+export function renderTodoList(todos: TodoItem[], theme: Theme, expanded: boolean, maxWidth?: number): string {
 	if (todos.length === 0) {
 		return theme.fg("muted", "No todos");
 	}
 
 	const lines: string[] = [];
-	const maxWidth = expanded ? 120 : 80;
+	const width = maxWidth ?? (expanded ? 120 : 80);
 
 	const allOrdered = orderTodos(todos);
 	const active = allOrdered.filter((t) => t.status === "in_progress" || t.status === "pending");
@@ -383,7 +403,7 @@ function renderTodoList(todos: TodoItem[], theme: Theme, expanded: boolean): str
 		lines.push(buildSummaryLine(todos, theme));
 		lines.push("");
 		for (const todo of allOrdered) {
-			lines.push(renderTodoLine(todo, theme, maxWidth));
+			lines.push(renderTodoLine(todo, theme, width));
 		}
 	} else {
 		// Default: active todos only; done todos collapse into one line.
@@ -392,7 +412,7 @@ function renderTodoList(todos: TodoItem[], theme: Theme, expanded: boolean): str
 			lines.push(buildSummaryLine(todos, theme, false));
 			lines.push("");
 			for (const todo of active.slice(0, maxItems)) {
-				lines.push(renderTodoLine(todo, theme, maxWidth));
+				lines.push(renderTodoLine(todo, theme, width));
 			}
 			if (active.length > maxItems) {
 				lines.push(theme.fg("dim", `  ... ${active.length - maxItems} more`));
@@ -403,6 +423,47 @@ function renderTodoList(todos: TodoItem[], theme: Theme, expanded: boolean): str
 	}
 
 	return lines.join("\n");
+}
+
+/**
+ * Width-aware component for the Todo tool result.
+ *
+ * Renders the todo list at the actual available width instead of a hard-coded
+ * 80/120 columns, so truncation always matches the panel the result is drawn
+ * into. Each line is truncated background-safely (no full `\x1b[0m` reset) so
+ * the tool-result shell's `toolSuccessBg`/`toolErrorBg`/`toolPendingBg` region
+ * is never broken by an ellipsis.
+ */
+export class TodoResultComponent implements Component {
+	private readonly prefix: string;
+	private readonly todos: TodoItem[];
+	private readonly theme: Theme;
+	private readonly expanded: boolean;
+	private cachedWidth = -1;
+	private cachedLines: string[] = [];
+
+	constructor(prefix: string, todos: TodoItem[], theme: Theme, expanded: boolean) {
+		this.prefix = prefix;
+		this.todos = todos;
+		this.theme = theme;
+		this.expanded = expanded;
+	}
+
+	render(width: number): string[] {
+		if (this.cachedWidth === width) {
+			return this.cachedLines;
+		}
+		const text = this.prefix + renderTodoList(this.todos, this.theme, this.expanded, width);
+		const lines = text.split("\n").map((line) => truncateToWidthBgSafe(line, Math.max(1, width)));
+		this.cachedWidth = width;
+		this.cachedLines = lines;
+		return lines;
+	}
+
+	invalidate(): void {
+		this.cachedWidth = -1;
+		this.cachedLines = [];
+	}
 }
 
 // ============================================================================
@@ -427,14 +488,14 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 		const priorityLabel = getPriorityLabel(todo.priority);
 		const reservedSuffix = priorityLabel ? 8 : 6;
 		const contentWidth = Math.max(8, effectiveWidth - reservedSuffix);
-		const contentPreview = truncateToWidth(normalizeTodoText(todo.content), contentWidth);
+		const contentPreview = truncateToWidthBgSafe(normalizeTodoText(todo.content), contentWidth);
 
 		let line = theme.fg(getStatusColor(todo.status), `  ${icon} ${contentPreview}`);
 		if (priorityLabel) {
 			const priorityColor = todo.priority === "high" ? "error" : "dim";
 			line += ` ${theme.fg(priorityColor, priorityLabel)}`;
 		}
-		return truncateToWidth(line, effectiveWidth);
+		return truncateToWidthBgSafe(line, effectiveWidth);
 	}
 
 	function buildWidgetLines(todos: TodoItem[], theme: Theme, width?: number): string[] {
@@ -447,21 +508,21 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 		const done = todos.filter((t) => t.status === "completed").length;
 
 		if (active.length > 0) {
-			lines.push(truncateToWidth(buildSummaryLine(todos, theme, false).replace(/^\d+ todos/, "Todos:"), effectiveWidth));
+			lines.push(truncateToWidthBgSafe(buildSummaryLine(todos, theme, false).replace(/^\d+ todos/, "Todos:"), effectiveWidth));
 			const displayItems = active.slice(0, maxWidgetItems);
 			for (const todo of displayItems) {
 				lines.push(renderWidgetTodoLine(todo, theme, effectiveWidth));
 			}
 			if (active.length > maxWidgetItems) {
-				lines.push(truncateToWidth(theme.fg("dim", `  ... ${active.length - maxWidgetItems} more`), effectiveWidth));
+				lines.push(truncateToWidthBgSafe(theme.fg("dim", `  ... ${active.length - maxWidgetItems} more`), effectiveWidth));
 			}
 		}
 		if (done > 0) {
-			lines.push(truncateToWidth(theme.fg("dim", `  ✓ ${done} todo${done === 1 ? "" : "s"} done`), effectiveWidth));
+			lines.push(truncateToWidthBgSafe(theme.fg("dim", `  ✓ ${done} todo${done === 1 ? "" : "s"} done`), effectiveWidth));
 		}
 		if (lines.length === 0 && todos.length > 0) {
 			// Only cancelled items remain.
-			lines.push(truncateToWidth(theme.fg("muted", `Todos: ${todos.length} cancelled`), effectiveWidth));
+			lines.push(truncateToWidthBgSafe(theme.fg("muted", `Todos: ${todos.length} cancelled`), effectiveWidth));
 		}
 
 		return lines;
@@ -793,7 +854,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 					prefix = `${theme.fg("success", `OK Wrote ${todos.length} todos`)}\n\n`;
 				}
 
-				return new Text(prefix + renderTodoList(todos, theme, expanded), 0, 0);
+				return new TodoResultComponent(prefix, todos, theme, expanded);
 			} catch {
 				return new Text("(render error)", 0, 0);
 			}
