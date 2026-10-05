@@ -405,6 +405,10 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("trx", {
 		description: "Browse and select trx issues to implement",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
+			if (ctx.mode !== "tui") {
+				ctx.ui.notify("The issue picker requires Pi TUI; use trx list/show in this mode", "warning");
+				return;
+			}
 			ctx.ui.setStatus("trx", "Loading issues...");
 			const issues = loadIssues();
 			ctx.ui.setStatus("trx", undefined);

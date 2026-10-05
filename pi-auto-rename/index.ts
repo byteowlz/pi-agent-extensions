@@ -57,7 +57,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type Api, type Model, complete } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
@@ -509,7 +509,7 @@ function generateTruncatedName(cleaned: string): string {
  * Find the cheapest available model that has an API key configured.
  * Prefers small/fast models suitable for short title generation.
  */
-async function findCheapestAvailableModel(ctx: ExtensionContext): Promise<{ model: Model<Api>; apiKey: string } | null> {
+async function findCheapestAvailableModel(ctx: ExtensionContext): Promise<{ model: Model<Api>; apiKey: string | null } | null> {
 	const allModels = ctx.modelRegistry.getAll() as Model<Api>[];
 	// Sort by total cost (input + output), cheapest first
 	const sorted = [...allModels].sort((a, b) => {
@@ -520,7 +520,7 @@ async function findCheapestAvailableModel(ctx: ExtensionContext): Promise<{ mode
 
 	for (const model of sorted) {
 		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-		if (auth.ok && auth.apiKey) return { model, apiKey: auth.apiKey };
+		if (auth.ok) return { model, apiKey: auth.apiKey ?? null };
 	}
 	return null;
 }
@@ -581,12 +581,12 @@ function debugNotify(
 	method(`[auto-rename] ${message}`);
 }
 
-async function resolveCurrentModel(ctx: ExtensionContext): Promise<{ model: Model<Api>; apiKey: string } | null> {
+async function resolveCurrentModel(ctx: ExtensionContext): Promise<{ model: Model<Api>; apiKey: string | null } | null> {
 	const currentModel = ctx.model as Model<Api> | undefined;
 	if (!currentModel) return null;
 	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(currentModel);
-	if (!auth.ok || !auth.apiKey) return null;
-	return { model: currentModel, apiKey: auth.apiKey };
+	if (!auth.ok) return null;
+	return { model: currentModel, apiKey: auth.apiKey ?? null };
 }
 
 async function resolveModelWithFallback(config: ResolvedConfig, ctx: ExtensionContext): Promise<ModelResolutionResult> {
@@ -837,7 +837,7 @@ async function tryLlmGeneration(
 		const controller = new AbortController();
 		const timeout = setTimeout(() => controller.abort(), 15000);
 
-		const response = await complete(
+		const response = await ctx.modelRegistry.complete(
 			resolution.model,
 			{
 				messages: [
@@ -848,7 +848,7 @@ async function tryLlmGeneration(
 					},
 				],
 			},
-			{ apiKey: resolution.apiKey ?? undefined, signal: controller.signal }
+			{ signal: controller.signal }
 		);
 		clearTimeout(timeout);
 
@@ -1357,6 +1357,14 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "rename_session",
 		label: "Rename Session",
+		outputSchema: Type.Union([
+			Type.Object({ ok: Type.Literal(true), action: Type.Literal("rename"), previous: Type.String(), name: Type.String() }),
+			Type.Object({
+				ok: Type.Literal(false),
+				action: Type.Literal("rename"),
+				error: Type.Object({ code: Type.String(), message: Type.String() }),
+			}),
+		]),
 		description:
 			"Set the current session's display name to a concise, descriptive title. " +
 			"Use this when you accomplish something meaningful or the session's focus shifts, " +
@@ -1370,12 +1378,25 @@ export default function (pi: ExtensionAPI) {
 					"The readable-id suffix is appended automatically and should not be provided.",
 			}),
 		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(
+			_toolCallId,
+			params,
+			_signal,
+			_onUpdate,
+			ctx
+		): Promise<import("@earendil-works/pi-coding-agent").AgentToolResult<unknown>> {
+			_signal?.throwIfAborted();
 			const config = loadConfig(ctx.cwd);
 			if (!config.enabled) {
 				return {
 					content: [{ type: "text", text: "Auto-rename extension is disabled; cannot rename the session." }],
 					details: { action: "rename", error: "disabled" },
+					isError: true,
+					structuredContent: {
+						ok: false,
+						action: "rename",
+						error: { code: "disabled", message: "Auto-rename extension is disabled" },
+					},
 				};
 			}
 
@@ -1384,6 +1405,8 @@ export default function (pi: ExtensionAPI) {
 				return {
 					content: [{ type: "text", text: "Could not rename: empty session name." }],
 					details: { action: "rename", error: "empty-name" },
+					isError: true,
+					structuredContent: { ok: false, action: "rename", error: { code: "empty_name", message: "Empty session name" } },
 				};
 			}
 
@@ -1393,6 +1416,7 @@ export default function (pi: ExtensionAPI) {
 			return {
 				content: [{ type: "text", text: `Session renamed to "${name}".` }],
 				details: { action: "rename", previous, name },
+				structuredContent: { ok: true, action: "rename", previous, name },
 			};
 		},
 	});

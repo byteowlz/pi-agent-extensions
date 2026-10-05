@@ -18,6 +18,104 @@ All notable changes to pi-agent-extensions will be documented in this file.
   the actual available width instead of a hard-coded 80/120 columns, so
   truncation always matches the panel. Used in both the expanded and collapsed
   views; the widget renderer uses the same background-safe truncation.
+### Session backend foundation (2.4.0)
+
+- Rename maintained `pi-herdr-tools` source to `pi-session-tools`; update
+  active references/manifests and test fixtures. Live installs are not migrated.
+- Validate session ownership before routing. Active Herdr wins over outer tmux;
+  stale contexts and runner-managed ownership never silently fall through.
+- Add plain-tmux `/side` and `/btw` forks in detached windows, shell-safe argv,
+  stable caller targeting and isolated-server integration tests.
+- Add optional bounded, deadline/cancellation-aware introspection contributions;
+  session tools contribute effective policy, loadout and route explanation.
+- Runner lifecycle adapter, tmux subagent lifecycle/navigation/messaging and
+  backend-aware naming remain follow-up work; unavailable operations are not
+  represented as implemented capabilities.
+
+### Structured-output review fixes (2.3.1)
+
+- Scrub standard JSON-escaped known credentials (up to three nested encodings)
+  before streaming accumulation/spill and final structured/native history output.
+  This is not arbitrary-encoding DLP or a sandbox boundary.
+- Fence each subagent retry against abort/session changes; bound and cancel CLI
+  calls, propagate approval cancellation, and distinguish cancelled receipts.
+- Mark dispatched tab creation as potentially committed before awaiting its
+  response; lost responses never assert no effects or trigger a blind replay.
+- Cap catalog/list/read structured receipts at 32,000 UTF-8 JSON bytes, report
+  lossy metadata/list projections, and preserve opaque identities. Over-budget
+  single-item identity metadata fails explicitly rather than changing its ID.
+- Add private-HOME lifecycle and projection regressions plus exact Node/Pi1
+  checks of raw/JSON credentials in codemode, native JSONL and actual spill files.
+- Budget helpers are extension-local so standalone packaging does not depend
+  on another optional extension. Authoritative state is never truncated.
+
+### Structured codemode outputs (2.3.0)
+
+- Add explicit structured results to history, memory, Todo, introspection,
+  rename, xlatch, subagent and privileged execution tools while retaining
+  human-readable output. Audit maintained registrations with a coverage manifest.
+- Preserve secret redaction through bash streaming, structured objects and
+  spill files; add native exact Pi 1 codemode composition and abort probes.
+- Consolidate todo display controls under `/todo list|expand|collapse|toggle`.
+- Reconcile main's arbitrary-file xlatch delivery without downgrading Pi 1 pins.
+- Optional introspection contributors and history UI-thread isolation remain
+  separate follow-up work; these output contracts do not claim to fix UI stalls.
+
+### pi-selection and pi-capabilities (2.2.0)
+
+- Add content-only Questions/Review, native TUI and protected tailnet-first
+  browser, shared durable scoped CAS results, text/Other/notes and a Bun CLI.
+  Keep answered, blank/none, skipped/unsure, draft, submitted and cancelled
+  distinct. Selection input never authorizes downstream actions.
+- Add optional versioned presentation advertisements with expiry and lifecycle
+  cleanup; the selection contract import is type-only. Host transports must
+  authenticate users and authorize session scope before forwarding controls.
+- Exact Pi 1.0 startup, no-chat/history control and synthetic provider/tool
+  callback gates, real disposable Chromium reload/races, crash-lock/CAS and
+  lifecycle tests pass. New files are warning-free; legacy collection warnings
+  remain. Authenticated Oqto renderer and deployment acceptance are not claimed.
+
+### pi-todolist: collapsed sticky widget (2.1.0)
+
+- Default the native sticky widget to one width-bounded progress/task row.
+  `tuiWidgetCollapsed: false` restores the expanded default; `/todos expand`,
+  `/todos collapse` and `/todos toggle` override it until the session changes.
+  Existing todo persistence, tool-result expansion, config filename and Oqto
+  panel payloads are unchanged. No user config or running install is modified.
+
+
+- Archive the explicitly selected `pi-crosstalk`, `pi-observational-memory`,
+  `pi-acpx`, `pi-inline-macros` and `pi-message-timestamps` under `archive/`.
+  Preserve source/history but exclude them from maintained discovery, checks
+  and tests. All six unresolved extensions remain active, including both read
+  guards. Installed user extensions/configuration are not modified.
+
+- Rename `pi-oqto-todos` to `pi-todolist`. Tool names, commands, configuration
+  filename and persisted todo/history identifiers remain unchanged. Update
+  installation paths with the corresponding immutable distribution snapshot.
+
+### Pi 1.0.0 baseline migration (2.0.0)
+
+- Pi 1.0.0 is the supported baseline, not an optional candidate. Pin Pi SDK
+  development packages exactly; require Node.js 22.19 or newer. The major
+  version explicitly drops the pre-1.0 host compatibility promise.
+- Move auto-rename, observational memory and crosstalk nested completions to
+  the session ModelRegistry, retaining request-time credentials and provider
+  headers. Crosstalk now supplies a leading system message, not the removed
+  Context.systemPrompt field. Reflector errors/aborts cannot erase observations.
+- Use the actual host mode: RPC has dialogs but no custom terminal components.
+  Subagent approval uses RPC confirm, fails closed without an approval surface
+  unless explicit auto mode is selected, and never auto-allows an RPC timeout.
+  Native pickers/masked password prompts advertise their TUI-only boundary;
+  history/export/key/issue workflows retain explicit non-picker alternatives.
+- Oqto bridge emits RPC telemetry despite hasUI=true and clears run phase only
+  at agent_settled. Its legacy count-based input binding still needs the
+  coordinated runner/bridge identity migration; this entry does not claim it
+  has been repaired.
+- Add exhaustive named-value-import checks (including ts-nocheck files),
+  completion/approval/settlement regressions, and a real Pi 1.0 catalog/startup
+  smoke for the active catalog (23 extensions after the approved archival). This is not physical TUI, provider, grant,
+  or every-tool-callback acceptance.
 
 ### pi-mmry: non-blocking sync pull on start (1.24.1)
 

@@ -192,6 +192,10 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("bash", {
 		description: "Pick a bash snippet from recent messages and copy to clipboard",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
+			if (ctx.mode !== "tui") {
+				ctx.ui.notify("The clipboard picker requires Pi TUI; use the session's code blocks directly here", "warning");
+				return;
+			}
 			const entries = ctx.sessionManager.getBranch();
 			const snippets: BashSnippet[] = [];
 			let turnIndex = 0;

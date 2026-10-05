@@ -20,6 +20,8 @@
 import { execFileSync, execSync } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashTool, createLocalBashOperations } from "@earendil-works/pi-coding-agent";
+import { type SecretValue, scrubText, scrubValue } from "./scrub.js";
+import { secretStream } from "./stream.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -164,6 +166,8 @@ function kyzExecWithSecrets(command: string): { ok: boolean; output: string } {
 // ---------------------------------------------------------------------------
 
 let secretCache: CachedSecrets | null = null;
+// Scope changes/cache expiry affect injection, not redaction of in-flight results.
+const knownSecrets: SecretValue[] = [];
 
 function loadSecrets(): CachedSecrets {
 	// Return cached if fresh
@@ -202,6 +206,9 @@ function loadSecrets(): CachedSecrets {
 		}
 	}
 
+	for (const entry of entries) {
+		if (!knownSecrets.some((known) => known.value === entry.value)) knownSecrets.push(entry);
+	}
 	secretCache = { entries, refreshedAt: Date.now() };
 	return secretCache;
 }
@@ -214,29 +221,7 @@ function invalidateCache(): void {
 // Scrubbing
 // ---------------------------------------------------------------------------
 
-function scrubText(text: string, secrets: Array<{ name: string; value: string }>): string {
-	if (secrets.length === 0) return text;
-
-	let result = text;
-	// Sort by value length descending to match longer secrets first
-	const sorted = [...secrets].sort((a, b) => b.value.length - a.value.length);
-	for (const secret of sorted) {
-		if (secret.value.length < 4) continue;
-		// Plain value
-		result = result.replaceAll(secret.value, `[REDACTED:${secret.name}]`);
-		// Base64-encoded variant
-		const b64 = Buffer.from(secret.value).toString("base64");
-		if (b64.length >= 4) {
-			result = result.replaceAll(b64, `[REDACTED:${secret.name}:b64]`);
-		}
-		// URL-encoded variant
-		const urlEncoded = encodeURIComponent(secret.value);
-		if (urlEncoded !== secret.value && urlEncoded.length >= 4) {
-			result = result.replaceAll(urlEncoded, `[REDACTED:${secret.name}:url]`);
-		}
-	}
-	return result;
-}
+// Recursive JSON redaction lives in scrub.ts and is shared by the wrapper and hook.
 
 // ---------------------------------------------------------------------------
 // Extension entry point
@@ -250,12 +235,14 @@ export default function (pi: ExtensionAPI) {
 	// Scrub secrets from all tool results
 	// -----------------------------------------------------------------------
 	pi.on("tool_result", async (event, _ctx) => {
-		const entries = secretCache && Date.now() - secretCache.refreshedAt < CACHE_TTL_MS ? secretCache.entries : [];
-		if (entries.length === 0) return;
-
-		const scrubbed = event.content.map((c) => (c.type === "text" ? { ...c, text: scrubText(c.text, entries) } : c));
-
-		return { content: scrubbed };
+		if (knownSecrets.length === 0) return;
+		return {
+			content: event.content.map((c) => (c.type === "text" ? { ...c, text: scrubText(c.text, knownSecrets) } : c)),
+			details: scrubValue(event.details, knownSecrets),
+			...(event.structuredContent !== undefined
+				? { structuredContent: scrubValue(event.structuredContent, knownSecrets) as typeof event.structuredContent }
+				: {}),
+		};
 	});
 
 	// -----------------------------------------------------------------------
@@ -267,7 +254,18 @@ export default function (pi: ExtensionAPI) {
 		async execute(id, params, signal, onUpdate, _ctx) {
 			const { entries } = loadSecrets();
 
+			const localOps = createLocalBashOperations();
 			const injectedBash = createBashTool(cwd, {
+				operations: {
+					exec: async (command, execCwd, options) => {
+						const stream = secretStream(knownSecrets, options.onData);
+						try {
+							return await localOps.exec(command, execCwd, { ...options, onData: stream.write });
+						} finally {
+							stream.end();
+						}
+					},
+				},
 				spawnHook: ({ command, cwd: spawnCwd, env }) => {
 					const injectedEnv = { ...env };
 					for (const secret of entries) {
@@ -277,7 +275,33 @@ export default function (pi: ExtensionAPI) {
 				},
 			});
 
-			return injectedBash.execute(id, params, signal, onUpdate);
+			try {
+				const result = await injectedBash.execute(
+					id,
+					params,
+					signal,
+					onUpdate &&
+						((update) =>
+							onUpdate({
+								...update,
+								content: update.content.map((c) => (c.type === "text" ? { ...c, text: scrubText(c.text, knownSecrets) } : c)),
+								details: scrubValue(update.details, knownSecrets) as typeof update.details,
+								...(update.structuredContent !== undefined
+									? { structuredContent: scrubValue(update.structuredContent, knownSecrets) as typeof update.structuredContent }
+									: {}),
+							}))
+				);
+				return {
+					...result,
+					content: result.content.map((c) => (c.type === "text" ? { ...c, text: scrubText(c.text, knownSecrets) } : c)),
+					details: scrubValue(result.details, knownSecrets) as typeof result.details,
+					...(result.structuredContent !== undefined
+						? { structuredContent: scrubValue(result.structuredContent, knownSecrets) as typeof result.structuredContent }
+						: {}),
+				};
+			} catch (error) {
+				throw new Error(scrubText(error instanceof Error ? error.message : "Bash execution failed", knownSecrets));
+			}
 		},
 	});
 
@@ -303,10 +327,16 @@ export default function (pi: ExtensionAPI) {
 					for (const secret of entries) {
 						injectedEnv[secret.name] = secret.value;
 					}
-					return localOps.exec(command, execCwd, {
-						...options,
-						env: { ...options.env, ...injectedEnv },
-					});
+					const stream = secretStream(knownSecrets, options.onData);
+					try {
+						return await localOps.exec(command, execCwd, {
+							...options,
+							onData: stream.write,
+							env: { ...options.env, ...injectedEnv },
+						});
+					} finally {
+						stream.end();
+					}
 				},
 			},
 		};
