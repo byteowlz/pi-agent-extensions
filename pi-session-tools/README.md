@@ -28,6 +28,18 @@ This source rename does not migrate existing live extension installs. The
 they describe the feature rather than a backend. Update explicit extension paths
 and manifests when deploying; do not load both the old and renamed entry points.
 
+Spawned Pi sessions receive `[sub] Title [readable-id]` immediately via explicit
+`--name` and a fresh `--session-id`. The spawning agent provides the title with
+`tabLabel` (otherwise a bounded task excerpt is used). The suffix belongs to the
+child session, and the Herdr tab has the same label. Canonical naming is supplied
+by the collection's `pi-auto-rename` module; include that directory when deploying.
+
+Subagent tabs target the live calling pane's workspace explicitly, never the
+workspace currently focused by the user. Missing or changed calling-workspace
+identity fails closed. No worktree is needed. This is workspace membership, not
+native parent-agent subtree nesting (unsupported by the installed Herdr API).
+Non-Pi kinds get the Herdr label but not unsupported Pi session-name flags.
+
 Herdr-flavored tools for pi: delegate a task to a new pi subagent in a fresh
 herdr tab, and fork the current session into its own named tab to steer it in a
 different direction. (Both capabilities are herdr-specific — they drive the

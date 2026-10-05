@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0
+
+- Export canonical spawn-time naming for session tools: `[sub] Title [readable-id]`
+  derived from the child session id, independent of inherited readable-id overrides
+  and the automatic-renaming toggle. Preserve caller-provided titles, normalize
+  duplicate prefixes/suffixes, and bound title length.
+
 ## 1.1.1
 
 - Fix `/auto-rename <name>` dropping the readable-id suffix: the manual-rename path now always re-attaches the canonical readable id when `readableIdSuffix` is enabled (regenerated from the session id, or preserving any id already in the current name), so the id is never lost.

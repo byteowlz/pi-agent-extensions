@@ -7,6 +7,8 @@ export interface Route {
 	presentation: "herdr" | "tmux" | "none";
 	ready: boolean;
 	reason: string;
+	/** Live calling-pane workspace, never the UI-focused workspace. */
+	workspaceId?: string;
 }
 export type Run = (command: string, args: string[], signal?: AbortSignal) => Promise<string>;
 const exec = promisify(execFile);
@@ -40,6 +42,7 @@ export async function resolveRoute(env: NodeJS.ProcessEnv, execute: Run = run, s
 				owner: "herdr",
 				presentation,
 				ready: true,
+				workspaceId: typeof response.result.pane.workspace_id === "string" ? response.result.pane.workspace_id : undefined,
 				reason: "Validated current Herdr pane; takes precedence over outer tmux.",
 			};
 		} catch {

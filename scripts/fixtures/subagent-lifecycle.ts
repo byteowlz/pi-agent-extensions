@@ -24,7 +24,7 @@ writeFileSync(
 const fs=require('fs'),path=require('path');const a=process.argv.slice(2),r=process.env.HOME;
 fs.appendFileSync(path.join(r,'calls.jsonl'),JSON.stringify({args:a,time:Date.now(),afterAbort:fs.existsSync(path.join(r,'aborted'))})+'\\n');
 if(a[0]==='tab'&&a[1]==='create') {if(process.env.REVIEW_SCENARIO==='uncertain'){fs.writeFileSync(path.join(r,'tab-was-created'),'yes');console.error('lost response');process.exitCode=1;}else console.log(JSON.stringify({result:{root_pane:{pane_id:'fixture-pane'},tab:{tab_id:'fixture-tab'}}}));}
-else if(a[0]==='pane'&&a[1]==='get') console.log(JSON.stringify({result:{pane:{pane_id:'fixture-pane'}}}));
+else if(a[0]==='pane'&&a[1]==='get') console.log(JSON.stringify({result:{pane:{pane_id:'fixture-pane',workspace_id:'fixture-workspace'}}}));
 else if(a[0]==='agent'&&a[1]==='start') {const p=path.join(r,'first-start');if(!fs.existsSync(p)){fs.writeFileSync(p,'yes');console.error('agent_pane_busy');process.exitCode=1;}else console.log(JSON.stringify({result:{agent:{name:a[2]}}}));}
 else console.log('{}');
 `,

@@ -63,6 +63,7 @@
  */
 
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -82,6 +83,7 @@ import {
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { buildSubagentSessionName } from "../pi-auto-rename/index.js";
 import { STATUS_QUERY, type StatusQuery } from "../pi-introspection/contributions.js";
 import { openTmuxSide, resolveRoute } from "./backend.js";
 import { isLiveSession, shouldReconnect } from "./lifecycle.js";
@@ -2537,7 +2539,7 @@ export default function sessionTools(pi: ExtensionAPI) {
 			const action = params.action ?? "spawn";
 			const sessionId = ctx.sessionManager.getSessionId();
 			let partialEffects = false;
-			let partialChild: { name: string; paneId: string; tabId?: string; model: string; kind: string } | undefined;
+			let partialChild: { name: string; paneId: string; tabId?: string; model: string; kind: string; label: string } | undefined;
 			let didStart = false;
 			const assertActive = () => {
 				_signal?.throwIfAborted();
@@ -2673,7 +2675,12 @@ export default function sessionTools(pi: ExtensionAPI) {
 				}
 
 				const cwd = params.cwd ?? ctx.cwd;
-				const label = params.tabLabel ?? (params.task.replace(/\s+/g, " ").slice(0, 28).trim() || "subagent");
+				if (!route.workspaceId)
+					throw new Error("Cannot determine spawning pane's workspace; refusing focused-workspace fallback.");
+				const workspaceId = route.workspaceId;
+				const sessionId = randomUUID();
+				const title = params.tabLabel ?? (params.task.replace(/\s+/g, " ").slice(0, 80).trim() || "Subagent");
+				const label = buildSubagentSessionName(title, sessionId, cwd);
 				const detail = `Tab: ${label}\nKind: ${kind}\nModel: ${model}\nCwd: ${cwd}\n\nTask:\n${params.task.slice(0, 400)}${params.task.length > 400 ? "\n…" : ""}`;
 				assertActive();
 				const approval = await approveSpawn({ ...ctx, signal: _signal ?? ctx.signal }, config, detail, kind === "pi");
@@ -2689,9 +2696,16 @@ export default function sessionTools(pi: ExtensionAPI) {
 				let startRes: { error?: unknown; result?: { agent?: { name?: string } } } | undefined;
 				try {
 					assertActive();
+					const liveRoute = await resolveRoute(process.env, undefined, _signal);
+					assertActive();
+					if (!liveRoute.ready || liveRoute.owner !== "herdr" || liveRoute.workspaceId !== workspaceId)
+						throw new Error("Spawning workspace changed during approval; retry from the active parent session.");
 					// Once dispatched, a lost response cannot establish effects:none.
 					partialEffects = true;
-					const tabRes = await herdr(["tab", "create", "--label", label, "--cwd", cwd, "--no-focus"], { signal: _signal });
+					const tabRes = await herdr(
+						["tab", "create", "--workspace", workspaceId, "--label", label, "--cwd", cwd, "--no-focus"],
+						{ signal: _signal }
+					);
 					paneId = tabRes?.result?.root_pane?.pane_id;
 					tabId = tabRes?.result?.tab?.tab_id;
 					if (!paneId) {
@@ -2706,9 +2720,9 @@ export default function sessionTools(pi: ExtensionAPI) {
 					// A fresh root pane is only startable once its shell sits at its
 					// interactive prompt; herdr rejects too-early attempts with
 					// agent_pane_busy. startAgentWithRetry absorbs that race.
-					const startArgs = kind === "pi" ? ["--", "--model", model] : [];
+					const startArgs = kind === "pi" ? ["--", "--model", model, "--session-id", sessionId, "--name", label] : [];
 					assertActive();
-					partialChild = { name, paneId, tabId, model, kind };
+					partialChild = { name, paneId, tabId, model, kind, label };
 					startRes = await startAgentWithRetry(
 						["agent", "start", name, "--kind", kind, "--pane", paneId, ...startArgs],
 						AGENT_START_ATTEMPTS,
@@ -2755,7 +2769,7 @@ export default function sessionTools(pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: `Subagent spawned and task submitted.\n\n  agent: ${name}\n  kind: ${kind}\n  model: ${model}\n  tab:  ${tabId}\n  pane: ${paneId}\n  cwd:  ${cwd}\n\nYou will be notified here automatically when it finishes.\nMonitor: herdr agent read ${name} --format text\nWait:   herdr agent wait ${name} --until idle`,
+							text: `Subagent spawned and task submitted.\n\n  session: ${label}\n  agent: ${name}\n  kind: ${kind}\n  model: ${model}\n  tab:  ${tabId}\n  pane: ${paneId}\n  cwd:  ${cwd}\n\nYou will be notified here automatically when it finishes.\nMonitor: herdr agent read ${name} --format text\nWait:   herdr agent wait ${name} --until idle`,
 						},
 					],
 					details: { spawned: true, promptSubmitted: true, name, tabId, paneId, kind, model },

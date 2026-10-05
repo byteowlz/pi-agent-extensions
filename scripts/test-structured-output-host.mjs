@@ -9,6 +9,8 @@ import { join, resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 
 const binary = process.argv[2] ?? "pi";
+const childSessionId = "12345678-1234-4234-9234-123456789abc";
+const childSessionName = "[sub] Native Child [bright-local-probe]";
 assert.equal(execFileSync(binary, ["--version"], { encoding: "utf8" }).trim(), "1.0.0");
 const temp = await mkdtemp(join(tmpdir(), "pi-structured-host-"));
 const agent = join(temp, "agent");
@@ -57,6 +59,7 @@ const dataError = await tools.error_data({});
 const plain = await tools.plain({});
 const redacted = await tools.redacted({});
 const failures = await Promise.allSettled([tools.throws({}),tools.blocked({})]);
+const initialSession = await tools.self_reflection({info:"session"});
 const renamed = await tools.rename_session({name:"Contract Fixture"});
 const reflection = await tools.self_reflection({info:"all"});
 await tools.Todo({action:"write",todos:[{id:"fixture",content:"Check contract",status:"pending"}]});
@@ -82,7 +85,7 @@ const spawnDenied = await tools.subagent({task:"Must not execute"});
 const guardedText = await tools.read({});
 const guardedImage = await tools.read({image:true});
 const spill = await tools.bash({command: 'node -e \\'process.stdout.write("x".repeat(1100000)+JSON.stringify(process.env.TEST_FIXTURE)+process.env.TEST_FIXTURE)\\''});
-text({good,dataError,plain,redacted,renamed,reflectionInfo:reflection.info,reflectionContributions:reflection.extensions.contributions,todo,history:history.map(r=>({ok:r.ok,hits:r.hits,completeness:r.completeness})),evidence:evidence.map(r=>r.messages),grepMatches:historyGrep.matches,branchIds:historyBranches.branches.map(b=>b.branchId),deniedSudo,bash,jsonBash,memory,memoryCreate,memoryEdit,memoryRemove,parked,parkedRead,parkedRemove,catalog,children,spawnDenied,guardedText,guardedImage,spillPath:spill.full_output_path,failures:failures.map(r => ({status:r.status,message:r.reason?.message}))});`;
+text({good,dataError,plain,redacted,initialSession:initialSession.session,renamed,reflectionInfo:reflection.info,reflectionContributions:reflection.extensions.contributions,todo,history:history.map(r=>({ok:r.ok,hits:r.hits,completeness:r.completeness})),evidence:evidence.map(r=>r.messages),grepMatches:historyGrep.matches,branchIds:historyBranches.branches.map(b=>b.branchId),deniedSudo,bash,jsonBash,memory,memoryCreate,memoryEdit,memoryRemove,parked,parkedRead,parkedRemove,catalog,children,spawnDenied,guardedText,guardedImage,spillPath:spill.full_output_path,failures:failures.map(r => ({status:r.status,message:r.reason?.message}))});`;
 let calls = 0;
 const server = createServer(async (req, res) => {
  const chunks = []; for await (const c of req) chunks.push(c);
@@ -96,7 +99,7 @@ const server = createServer(async (req, res) => {
 });
 await new Promise(r=>server.listen(0,"127.0.0.1",r));
 await writeFile(join(agent,"models.json"),JSON.stringify({providers:{fixture:{baseUrl:`http://127.0.0.1:${server.address().port}/v1`,api:"openai-completions",apiKey:"synthetic",models:[{id:"fixture",input:["text"],contextWindow:8192,maxTokens:512}]}}}));
-const child = spawn(binary,["--mode","rpc","--name","Existing Fixture","--offline","-ne","-ns","-np","-nc","-na","--provider","fixture","--model","fixture","-e","builtin:codemode","-e",fixture,...["pi-auto-rename", "pi-introspection", "pi-todolist", "pi-history-search", "pi-sudo", "pi-kyz", "pi-mmry", "pi-xlatch-session", "pi-session-tools", "pi-read-file-guard", "pi-read-image-guard"].flatMap(name=>["-e",join(root,name,"index.ts")]),"--tools","codemode,object,error_data,throws,plain,redacted,blocked,wait,rename_session,self_reflection,Todo,HistorySearch,HistoryRead,HistoryGrep,HistoryBranches,sudo_exec,bash,read,memory,xlatch_later,subagent"],{cwd:temp,env:{PATH:`${join(temp,"bin")}:${process.env.PATH}`,HOME:temp,PI_CODING_AGENT_DIR:agent,PI_OFFLINE:"1"},stdio:["pipe","pipe","pipe"]});
+const child = spawn(binary,["--mode","rpc","--name",childSessionName,"--session-id",childSessionId,"--offline","-ne","-ns","-np","-nc","-na","--provider","fixture","--model","fixture","-e","builtin:codemode","-e",fixture,...["pi-auto-rename", "pi-introspection", "pi-todolist", "pi-history-search", "pi-sudo", "pi-kyz", "pi-mmry", "pi-xlatch-session", "pi-session-tools", "pi-read-file-guard", "pi-read-image-guard"].flatMap(name=>["-e",join(root,name,"index.ts")]),"--tools","codemode,object,error_data,throws,plain,redacted,blocked,wait,rename_session,self_reflection,Todo,HistorySearch,HistoryRead,HistoryGrep,HistoryBranches,sudo_exec,bash,read,memory,xlatch_later,subagent"],{cwd:temp,env:{PATH:`${join(temp,"bin")}:${process.env.PATH}`,HOME:temp,PI_CODING_AGENT_DIR:agent,PI_OFFLINE:"1"},stdio:["pipe","pipe","pipe"]});
 let buffer="", stderr=""; const rows=[];
 child.stderr.on("data",c=>{stderr+=c;});
 child.stdout.on("data",c=>{
@@ -119,6 +122,8 @@ try {
  assert.deepEqual(data.dataError,{value:"error_data"});
  assert.equal(data.plain,"plain text");
  assert.equal(data.renamed.ok,true);
+ assert.equal(data.initialSession.title, childSessionName, "spawn-time --name must survive the first model request");
+ assert(data.initialSession.file.includes(childSessionId), "Pi must retain the explicit child session UUID");
  assert.equal(data.reflectionInfo,"all");
  const sessionStatus = data.reflectionContributions.find(c=>c.id === "pi-session-tools");
  assert.equal(sessionStatus.details.owner, "plain", "optional extension status must be collected in genuine Pi host");
