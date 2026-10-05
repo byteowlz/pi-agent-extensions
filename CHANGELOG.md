@@ -4,6 +4,23 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Independent side-session identity and connections (2.7.0)
+
+- `/side` and `/btw` launch an explicitly named `[side] Title [readable-id]`
+  fork with its own UUID/file on both Herdr and tmux. Herdr creation explicitly
+  targets the validated spawning workspace and retains focus.
+- Add a bootstrap system hint and a durable child-owned boundary message before
+  the first model request, distinguishing inherited context from live identity,
+  xlatch/resource ownership, and still-shared working-directory files. Resumes
+  do not duplicate the persisted message; newly forked copies get their own hint.
+- Pin xlatch persisted claims to session UUIDs. Forks never auto-restore foreign
+  claims or ownerless legacy state; the original parent stays connected. A child
+  may explicitly connect and subsequently restore its own slot. Release active
+  listeners when the same process switches session identity.
+- Prove real xlatch parent/child lifecycle, isolated tmux launch/focus, and native
+  Node/Pi 1 fork headers, names/UUIDs, first-request hint, durable marker and no
+  inherited connection restore. Issue: piext-8cf9.
+
 ### Named subagents in their spawning workspace (2.6.0)
 
 - Assign spawned Pi sessions a fresh UUID and `[sub] Title [readable-id]` at

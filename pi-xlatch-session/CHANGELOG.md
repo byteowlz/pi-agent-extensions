@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.0.2
+
+- Associate persisted slot state with the owning session UUID. CLI startup forks
+  cannot inherit/reclaim a parent's slot, including ownerless legacy entries.
+  Preserve ordinary legacy resumes and restores of a fork's own explicit claims.
+- Release live listeners on same-process session identity replacement. Launching
+  a separate side process leaves the parent's connection untouched.
+- Add isolated parent/child ownership and restore regressions plus native Pi 1
+  startup-fork coverage.
+
 ## 2.0.1
 
 - Bound Save for Later list/read structured projections to 32,000 UTF-8 JSON

@@ -267,6 +267,14 @@ while unsubscribed (e.g. the extension restarted before the agent closed).
 - `/subagent reset <name>` — interrupt the running task (Ctrl+C) and return it to
   idle; add an optional task to re-prompt it immediately.
 
+`/side` / `/btw` launch `[side] Title [readable-id]` with a fresh session UUID
+and a separate forked file. A bootstrap system hint and one durable child-owned
+message tell the agent that inherited conversation does not imply the parent's
+live identity or resource ownership. Resumes preserve the message; subsequent
+forks get a fresh marker. The child's xlatch starts detached; the parent remains
+connected. Reconnect explicitly in the child if needed. Working-directory files
+are still shared unless you choose a separate checkout.
+
 `/side` / `/btw` — open the **current session** in its own new named tab, forked
 so you can steer it another direction (like Claude `/btw` or Codex `/side`, own tab):
 
