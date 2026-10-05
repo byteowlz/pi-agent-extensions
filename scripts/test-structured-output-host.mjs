@@ -120,7 +120,12 @@ try {
  assert.equal(data.plain,"plain text");
  assert.equal(data.renamed.ok,true);
  assert.equal(data.reflectionInfo,"all");
- assert(data.reflectionContributions.some(c=>c.id === "pi-session-tools" && c.details.owner === "plain"), "optional extension status must be collected in genuine Pi host");
+ const sessionStatus = data.reflectionContributions.find(c=>c.id === "pi-session-tools");
+ assert.equal(sessionStatus.details.owner, "plain", "optional extension status must be collected in genuine Pi host");
+ assert(Array.isArray(sessionStatus.details.availableSubagentModels), "eligible subagent models must be structured identifiers");
+ assert(sessionStatus.details.availableSubagentModels.includes("fixture/fixture"));
+ assert.equal(typeof sessionStatus.details.spawnEnabled, "boolean");
+ assert.equal(typeof sessionStatus.details.allowMode, "string");
  assert.equal(data.todo.todos[0].id,"fixture");
  assert(data.history.every(r=>r.ok && r.completeness === "unknown" && Array.isArray(r.hits)));
  assert.equal(data.evidence.length,1);

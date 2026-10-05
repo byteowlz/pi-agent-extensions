@@ -46,7 +46,13 @@ const extensions = Type.Object({
 				status: Type.Union([Type.Literal("ok"), Type.Literal("unavailable")]),
 				details: Type.Record(
 					Type.String({ maxLength: 64 }),
-					Type.Union([Type.String({ maxLength: 1000 }), Type.Number(), Type.Boolean(), Type.Null()])
+					Type.Union([
+						Type.String({ maxLength: 1000 }),
+						Type.Number(),
+						Type.Boolean(),
+						Type.Null(),
+						Type.Array(Type.String({ maxLength: 1000 }), { maxItems: 64 }),
+					])
 				),
 			}),
 			{ maxItems: 16 }
