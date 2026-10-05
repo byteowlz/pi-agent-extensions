@@ -84,6 +84,7 @@ import {
 import { Type } from "typebox";
 import { STATUS_QUERY, type StatusQuery } from "../pi-introspection/contributions.js";
 import { openTmuxSide, resolveRoute } from "./backend.js";
+import { isLiveSession, shouldReconnect } from "./lifecycle.js";
 import { subagentOutputSchema, subagentResult } from "./output.js";
 
 /** A named subagent profile: model allowlist plus optional mode/cap/kind. */
@@ -923,9 +924,15 @@ function recordOutcome(
 const EVENT_SUB_TYPES = ["tab.closed", "pane.closed", "pane.exited"];
 let eventSocket: net.Socket | null = null;
 let eventReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let eventSubscriberStopped = false;
 let eventBuf = "";
 
 function stopEventSubscriber(): void {
+	// A deliberate stop must also suppress the reconnect loop. Otherwise the
+	// destroyed socket's close/error handler re-arms the reconnect timer and
+	// the extension keeps the process's event loop alive forever after
+	// session_shutdown (e.g. `pi -p` single-shot never exits, see piext-ge92).
+	eventSubscriberStopped = true;
 	if (eventReconnectTimer) {
 		clearTimeout(eventReconnectTimer);
 		eventReconnectTimer = null;
@@ -985,6 +992,7 @@ function handleEventLine(line: string): void {
 /** Open a best-effort NDJSON event subscription to herdr over HERDR_SOCKET_PATH. */
 function startEventSubscriber(pi: ExtensionAPI): void {
 	if (!isInHerdr()) return;
+	if (eventSubscriberStopped) return; // deliberately stopped (shutdown)
 	if (eventSocket) return; // already connected/reconnecting
 	const sockPath = process.env.HERDR_SOCKET_PATH;
 	if (!sockPath) return;
@@ -1017,6 +1025,10 @@ function startEventSubscriber(pi: ExtensionAPI): void {
 	});
 	const teardown = () => {
 		if (eventSocket === sock) eventSocket = null;
+		// After a deliberate stop (session_shutdown) never reschedule the
+		// reconnect, or the timer keeps the process's event loop alive in
+		// single-shot (print/json) mode and `pi -p` never exits.
+		if (!shouldReconnect(eventSubscriberStopped)) return;
 		if (!eventReconnectTimer) {
 			eventReconnectTimer = setTimeout(() => {
 				eventReconnectTimer = null;
@@ -2390,8 +2402,11 @@ export default function sessionTools(pi: ExtensionAPI) {
 		} catch {
 			// ignore
 		}
-		startNotifyTimer(pi, ctx);
-		startEventSubscriber(pi);
+		// Single-shot print/json sessions must not retain event-loop handles.
+		if (isLiveSession(ctx.hasUI, ctx.mode)) {
+			startNotifyTimer(pi, ctx);
+			startEventSubscriber(pi);
+		}
 		unsubscribeStatus?.();
 		const sessionId = ctx.sessionManager.getSessionId();
 		unsubscribeStatus = pi.events?.on(STATUS_QUERY, (data: unknown) => {

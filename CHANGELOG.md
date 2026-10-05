@@ -116,6 +116,33 @@ All notable changes to pi-agent-extensions will be documented in this file.
   completion/approval/settlement regressions, and a real Pi 1.0 catalog/startup
   smoke for the active catalog (23 extensions after the approved archival). This is not physical TUI, provider, grant,
   or every-tool-callback acceptance.
+### pi-herdr-tools: fix `pi -p` never exiting (1.25.1)
+
+- **Removed a hang in print mode** (piext-ge92): `pi --no-session -p "say ok"`
+  printed the answer but never exited (consumer saw a timeout). root cause:
+  the herdr socket event subscriber (`startEventSubscriber`) opened a
+  long-lived socket on `session_start` when `HERDR_ENV=1`, and after
+  `session_shutdown` the destroyed socket's close/error handler re-armed a 5s
+  reconnect timer — an infinite reconnect loop that kept the Node event loop
+  alive after the process had already answered.
+- **Mode guard**: the long-lived herdr socket subscriber and subagent poll timer
+  are now only armed for TUI/RPC sessions; in single-shot print/json mode they
+  are skipped entirely so the process can exit promptly.
+- **Lifecycle fix**: `stopEventSubscriber` now marks the subscriber stopped, and
+  the socket teardown handler refuses to re-arm the reconnect timer after a
+  deliberate stop. Decision logic extracted to `pi-herdr-tools/lifecycle.ts`.
+- Lifecycle decisions covered by `pi-herdr-tools/lifecycle.test.ts` and the
+  end-to-end `pi-herdr-tools/print-exit.e2e.test.ts` (drives a real pi binary in
+  print mode, asserts exit 0 within seconds).
+
+### pi-history-search: don't index after single-shot session teardown (1.25.1)
+
+- **Fixed a stale-ctx crash** in the same print-mode lifecycle family: on
+  `session_start` the deferred start-of-session index timer (`setTimeout`)
+  read `ctx.cwd` after `session_shutdown`, throwing
+  "This extension ctx is stale…" and making `pi -p` exit 1. The deferred index
+  now only runs in TUI/RPC sessions and captures the `cwd` synchronously so a
+  deferred timer never touches a stale ctx.
 
 ### pi-mmry: non-blocking sync pull on start (1.24.1)
 
