@@ -10,11 +10,17 @@ const root = resolve(import.meta.dirname, "..");
 
 const binary = process.argv[2] ?? "pi";
 const childSessionId = "12345678-1234-4234-9234-123456789abc";
-const childSessionName = "[sub] Native Child [bright-local-probe]";
+const childSessionName = "[side] Native Fork [bright-local-probe]";
+const sideHint = "Session boundary: this is a NEW, independently named side session. Earlier conversation is inherited context, not evidence that you are still the parent session. The parent xlatch connection does not carry over.";
 assert.equal(execFileSync(binary, ["--version"], { encoding: "utf8" }).trim(), "1.0.0");
 const temp = await mkdtemp(join(tmpdir(), "pi-structured-host-"));
 const agent = join(temp, "agent");
 await mkdir(agent);
+const parentFile = join(temp, "parent.jsonl");
+await writeFile(parentFile, [
+ {type:"session",version:3,id:"11111111-1111-4111-9111-111111111111",timestamp:new Date().toISOString(),cwd:temp},
+ {type:"custom",id:"inherited-slot",parentId:null,timestamp:new Date().toISOString(),customType:"xlatch-session-slot",data:{slot:"parent-slot"}}
+].map(v=>JSON.stringify(v)).join("\n")+"\n");
 const fixture = join(temp, "fixture.ts");
 await writeFile(fixture, `import { Type } from "typebox";
 export default function(pi) {
@@ -51,7 +57,7 @@ await writeFile(join(temp,"mmry-recall.json"),JSON.stringify({enabled:false,pull
 const fakeMemory = {memory_id:"mem_fixture",content:"Synthetic fact",revision:2,scope:"repo"};
 await writeFile(join(temp,"bin","mmry"),`#!/usr/bin/env node\nconst action=process.argv[2];const entry=${JSON.stringify(fakeMemory)};console.log(JSON.stringify(action==="search"?[entry]:{...entry,...(action==="rm"?{removed:true}:{})}));`,{mode:0o700});
 const parkedItem = {id:"parkedfixture",label:"Synthetic",mime_type:"text/plain",created_at:1};
-await writeFile(join(temp,"bin","xlatch"),`#!/usr/bin/env node\nconst item=${JSON.stringify(parkedItem)};const action=process.argv[3];console.log(JSON.stringify(action==="list"?[item]:action==="read"?{item,input:{text:"Synthetic parked text"}}:{}));`,{mode:0o700});
+await writeFile(join(temp,"bin","xlatch"),`#!/usr/bin/env node\nconst item=${JSON.stringify(parkedItem)};const action=process.argv[3];if(process.argv[2]==="register")require('node:fs').writeFileSync(${JSON.stringify(join(temp,"unexpected-xlatch-restore"))},"restored");console.log(JSON.stringify(action==="list"?[item]:action==="read"?{item,input:{text:"Synthetic parked text"}}:{}));`,{mode:0o700});
 const marker = 'fake/SECRET:"quoted\\password\n秘密';
 await writeFile(join(temp, "bin", "kyz"), `#!/usr/bin/env node\nconst a=process.argv.slice(2); console.log(JSON.stringify(a[0]==="vault"?{unlocked:true}:a[0]==="list"?{entries:[{key:"fixture",service:"test",tags:[]}]}:{service:"test",key:"fixture",fields:{value:${JSON.stringify(marker)}}}));`, {mode:0o700});
 const code = `const good = await tools.object({});
@@ -87,9 +93,11 @@ const guardedImage = await tools.read({image:true});
 const spill = await tools.bash({command: 'node -e \\'process.stdout.write("x".repeat(1100000)+JSON.stringify(process.env.TEST_FIXTURE)+process.env.TEST_FIXTURE)\\''});
 text({good,dataError,plain,redacted,initialSession:initialSession.session,renamed,reflectionInfo:reflection.info,reflectionContributions:reflection.extensions.contributions,todo,history:history.map(r=>({ok:r.ok,hits:r.hits,completeness:r.completeness})),evidence:evidence.map(r=>r.messages),grepMatches:historyGrep.matches,branchIds:historyBranches.branches.map(b=>b.branchId),deniedSudo,bash,jsonBash,memory,memoryCreate,memoryEdit,memoryRemove,parked,parkedRead,parkedRemove,catalog,children,spawnDenied,guardedText,guardedImage,spillPath:spill.full_output_path,failures:failures.map(r => ({status:r.status,message:r.reason?.message}))});`;
 let calls = 0;
+let receivedSideHint = false;
 const server = createServer(async (req, res) => {
  const chunks = []; for await (const c of req) chunks.push(c);
  const body = JSON.parse(Buffer.concat(chunks).toString());
+ if(calls === 0) receivedSideHint = JSON.stringify(body.messages.filter(m=>m.role === "system")).includes(sideHint);
  calls++;
  const source = calls === 1 ? code : '// @options: {"timeout_ms": 100}\nawait tools.wait({});';
  const delta = calls <= 2 ? {role:"assistant",tool_calls:[{index:0,id:`probe-${calls}`,type:"function",function:{name:body.tools.find(t=>t.function?.name === "codemode").function.name,arguments:JSON.stringify({code:source})}}]} : {role:"assistant",content:"Done"};
@@ -99,7 +107,7 @@ const server = createServer(async (req, res) => {
 });
 await new Promise(r=>server.listen(0,"127.0.0.1",r));
 await writeFile(join(agent,"models.json"),JSON.stringify({providers:{fixture:{baseUrl:`http://127.0.0.1:${server.address().port}/v1`,api:"openai-completions",apiKey:"synthetic",models:[{id:"fixture",input:["text"],contextWindow:8192,maxTokens:512}]}}}));
-const child = spawn(binary,["--mode","rpc","--name",childSessionName,"--session-id",childSessionId,"--offline","-ne","-ns","-np","-nc","-na","--provider","fixture","--model","fixture","-e","builtin:codemode","-e",fixture,...["pi-auto-rename", "pi-introspection", "pi-todolist", "pi-history-search", "pi-sudo", "pi-kyz", "pi-mmry", "pi-xlatch-session", "pi-session-tools", "pi-read-file-guard", "pi-read-image-guard"].flatMap(name=>["-e",join(root,name,"index.ts")]),"--tools","codemode,object,error_data,throws,plain,redacted,blocked,wait,rename_session,self_reflection,Todo,HistorySearch,HistoryRead,HistoryGrep,HistoryBranches,sudo_exec,bash,read,memory,xlatch_later,subagent"],{cwd:temp,env:{PATH:`${join(temp,"bin")}:${process.env.PATH}`,HOME:temp,PI_CODING_AGENT_DIR:agent,PI_OFFLINE:"1"},stdio:["pipe","pipe","pipe"]});
+const child = spawn(binary,["--mode","rpc","--fork",parentFile,"--append-system-prompt",sideHint,"--name",childSessionName,"--session-id",childSessionId,"--offline","-ne","-ns","-np","-nc","-na","--provider","fixture","--model","fixture","-e","builtin:codemode","-e",fixture,...["pi-auto-rename", "pi-introspection", "pi-todolist", "pi-history-search", "pi-sudo", "pi-kyz", "pi-mmry", "pi-xlatch-session", "pi-session-tools", "pi-read-file-guard", "pi-read-image-guard"].flatMap(name=>["-e",join(root,name,"index.ts")]),"--tools","codemode,object,error_data,throws,plain,redacted,blocked,wait,rename_session,self_reflection,Todo,HistorySearch,HistoryRead,HistoryGrep,HistoryBranches,sudo_exec,bash,read,memory,xlatch_later,subagent"],{cwd:temp,env:{PATH:`${join(temp,"bin")}:${process.env.PATH}`,HOME:temp,PI_CODING_AGENT_DIR:agent,PI_OFFLINE:"1"},stdio:["pipe","pipe","pipe"]});
 let buffer="", stderr=""; const rows=[];
 child.stderr.on("data",c=>{stderr+=c;});
 child.stdout.on("data",c=>{
@@ -122,6 +130,13 @@ try {
  assert.deepEqual(data.dataError,{value:"error_data"});
  assert.equal(data.plain,"plain text");
  assert.equal(data.renamed.ok,true);
+ assert(receivedSideHint, "the first native model request must contain the fork identity hint");
+ assert(!(await readdir(temp)).includes("unexpected-xlatch-restore"), "CLI startup fork must not restore inherited xlatch state");
+ const childHeader = JSON.parse((await readFile(data.initialSession.file,"utf8")).split("\n")[0]);
+ assert.equal(childHeader.parentSession, parentFile);
+ const childEntries = (await readFile(data.initialSession.file,"utf8")).trim().split("\n").map(JSON.parse);
+ assert(childEntries.some(e=>e.type === "custom_message" && e.customType === "side-session-boundary" && e.details?.sessionId === childSessionId), "a child-owned boundary hint must be persisted for resumes");
+ assert.notEqual(data.initialSession.file, parentFile);
  assert.equal(data.initialSession.title, childSessionName, "spawn-time --name must survive the first model request");
  assert(data.initialSession.file.includes(childSessionId), "Pi must retain the explicit child session UUID");
  assert.equal(data.reflectionInfo,"all");

@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { sideLaunch } from "./side-launch.js";
 
 export type Backend = "herdr" | "tmux" | "plain" | "oqto-runner";
 export interface Route {
@@ -86,6 +87,7 @@ export async function openTmuxSide(
 		label: string;
 		cwd: string;
 		sessionFile: string;
+		parentSessionId?: string;
 		model?: string;
 		instruction?: string;
 	},
@@ -95,8 +97,8 @@ export async function openTmuxSide(
 	if (!options.sessionFile) throw new Error("No persistent session to fork");
 	const session = (await execute("tmux", ["display-message", "-p", "-t", options.pane, "#{session_id}"])).trim();
 	if (!/^\$\d+$/.test(session)) throw new Error("Invalid tmux session identity");
-	const argv = ["pi", "--fork", options.sessionFile];
-	if (options.model) argv.push("--model", options.model);
+	const launch = sideLaunch(options);
+	const argv = ["pi", ...launch.argv];
 	if (options.instruction) argv.push("--", options.instruction);
 	// tmux supplies the new TMUX_PANE; do not erase it. Pi owns its new session id.
 	const command = ["env", "-u", "AGENT_CTX_HARNESS_SESSION_ID", ...argv].map(shellArg).join(" ");
@@ -109,7 +111,7 @@ export async function openTmuxSide(
 		"-t",
 		`${session}:`,
 		"-n",
-		options.label,
+		launch.name,
 		"-c",
 		options.cwd,
 		command,
@@ -117,5 +119,5 @@ export async function openTmuxSide(
 	const [tabId, paneId] = output.trim().split("|");
 	if (!/^@\d+$/.test(tabId ?? "") || !/^%\d+$/.test(paneId ?? ""))
 		throw new Error(`Invalid tmux launch receipt ${JSON.stringify(output.slice(0, 100))}; window may have been created.`);
-	return { name: options.label, tabId, paneId };
+	return { name: launch.name, tabId, paneId };
 }

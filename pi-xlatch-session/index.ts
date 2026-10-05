@@ -206,7 +206,13 @@ function lastClaimedSlot(ctx: ExtensionContext): string | undefined {
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i];
 		if (entry?.type === "custom" && entry.customType === STATE_ENTRY) {
-			return (entry.data as { slot?: string | null } | undefined)?.slot ?? undefined;
+			const data = entry.data as { slot?: string | null; sessionId?: string } | undefined;
+			// Forks copy custom entries. Only restore a claim owned by THIS session.
+			if (data?.sessionId && data.sessionId !== ctx.sessionManager.getSessionId()) return undefined;
+			// Legacy entries have no owner: keep ordinary resumes compatible, but
+			// never trust inherited legacy state in a fork (including CLI startup).
+			if (!data?.sessionId && ctx.sessionManager.getHeader?.()?.parentSession) return undefined;
+			return data?.slot ?? undefined;
 		}
 	}
 	return undefined;
@@ -282,6 +288,7 @@ export default function xlatchSession(pi: ExtensionAPI) {
 	installAdapter();
 	let server: net.Server | undefined;
 	let boundSlot: string | undefined;
+	let activeSessionId: string | undefined;
 	let ctxRef: ExtensionContext | undefined;
 	let received = 0;
 	let endpoint: SlotEndpoint | undefined;
@@ -375,6 +382,7 @@ export default function xlatchSession(pi: ExtensionAPI) {
 			throw new Error(`This session already holds slot "${boundSlot}". Disconnect first.`);
 		}
 
+		const sessionId = ctx.sessionManager.getSessionId();
 		const sock = slotSocket(slot);
 		fs.mkdirSync(SLOT_DIR, { recursive: true, mode: 0o700 });
 
@@ -429,13 +437,13 @@ export default function xlatchSession(pi: ExtensionAPI) {
 		const claims = readClaims();
 		claims[slot] = {
 			token: owned.token,
-			sessionId: ctx.sessionManager.getSessionId(),
+			sessionId,
 			pid: process.pid,
 			cwd: ctx.cwd,
 			sessionName: ctx.sessionManager.getSessionName(),
 		};
 		writeClaims(claims);
-		pi.appendEntry(STATE_ENTRY, { slot });
+		pi.appendEntry(STATE_ENTRY, { slot, sessionId });
 		setStatus();
 
 		let reg: Awaited<ReturnType<typeof registerSlot>>;
@@ -484,12 +492,15 @@ export default function xlatchSession(pi: ExtensionAPI) {
 				writeClaims(claims);
 			}
 		}
-		if (explicit) pi.appendEntry(STATE_ENTRY, { slot: null });
+		if (explicit) pi.appendEntry(STATE_ENTRY, { slot: null, sessionId: ctxRef?.sessionManager.getSessionId() });
 		setStatus();
 		return slot;
 	}
 
 	pi.on("session_start", (event, ctx) => {
+		const sessionId = ctx.sessionManager.getSessionId();
+		if (activeSessionId !== undefined && activeSessionId !== sessionId) release();
+		activeSessionId = sessionId;
 		ctxRef = ctx;
 		setStatus();
 		// /reload and resume both re-enter here after release(); restore the link

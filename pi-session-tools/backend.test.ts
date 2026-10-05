@@ -74,7 +74,10 @@ test("tmux launch targets calling session, keeps focus, forks and quotes hostile
 		},
 		execute
 	);
-	expect(result).toEqual({ name: "side", tabId: "@2", paneId: "%3" });
+	expect(result).toMatchObject({ tabId: "@2", paneId: "%3" });
+	expect(result.name).toMatch(/^\[side\] side \[[a-z0-9-]+\]$/);
+	expect(calls[1].at(-1)).toContain("'--name'");
+	expect(calls[1].at(-1)).toContain("Session boundary:");
 	expect(calls[1]).toContain("$9:");
 	expect(calls[1]).toContain("-d");
 	expect(calls[1].at(-1)).toContain("'--fork'");

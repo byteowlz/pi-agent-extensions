@@ -35,13 +35,12 @@ test("isolated tmux server: side window forks safely and preserves parent focus"
 				await new Promise((resolve) => setTimeout(resolve, 10));
 			}
 		}
-		expect((await readFile(argsFile, "utf8")).split("\n")).toEqual([
-			"--fork",
-			"/synthetic session.jsonl",
-			"--",
-			"$(touch /never) ' literal",
-			"",
-		]);
+		const argv = (await readFile(argsFile, "utf8")).split("\n");
+		expect(argv.slice(0, 2)).toEqual(["--fork", "/synthetic session.jsonl"]);
+		expect(argv[argv.indexOf("--name") + 1]).toBe(receipt.name);
+		expect(argv).toContain("--session-id");
+		expect(argv[argv.indexOf("--append-system-prompt") + 1]).toContain("NEW, independently named side session");
+		expect(argv.slice(-3)).toEqual(["--", "$(touch /never) ' literal", ""]);
 		expect(await execute("tmux", ["display-message", "-p", "-t", "fixture", "#{window_id}"])).toBe(before);
 		expect(receipt.paneId).not.toBe(parent);
 	} finally {

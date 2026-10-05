@@ -89,6 +89,7 @@ import { openTmuxSide, resolveRoute } from "./backend.js";
 import { isLiveSession, shouldReconnect } from "./lifecycle.js";
 import { fitEntries } from "./output-budget.js";
 import { subagentOutputSchema, subagentResult } from "./output.js";
+import { forkBoundaryMessage, sideLaunch } from "./side-launch.js";
 
 /** A named subagent profile: model allowlist plus optional mode/cap/kind. */
 export interface PresetLoadout {
@@ -1087,21 +1088,39 @@ async function openSideTab(opts: {
 			label: opts.label,
 			cwd,
 			sessionFile,
+			parentSessionId: opts.ctx.sessionManager.getSessionId(),
 			model: opts.model,
 			instruction: opts.instruction,
 		});
 	}
 	if (route.owner !== "herdr") throw new Error("Side windows require an active Herdr or tmux session.");
 
-	const tabRes = await herdr(["tab", "create", "--label", opts.label, "--cwd", cwd, "--no-focus"]);
+	if (!route.workspaceId) throw new Error("Cannot determine spawning workspace; refusing focused-workspace fallback.");
+	const launch = sideLaunch({
+		label: opts.label,
+		cwd,
+		sessionFile,
+		parentSessionId: opts.ctx.sessionManager.getSessionId(),
+		model: opts.model,
+	});
+	const tabRes = await herdr([
+		"tab",
+		"create",
+		"--workspace",
+		route.workspaceId,
+		"--label",
+		launch.name,
+		"--cwd",
+		cwd,
+		"--no-focus",
+	]);
 	const paneId = tabRes?.result?.root_pane?.pane_id;
 	const tabId = tabRes?.result?.tab?.tab_id;
 	if (!paneId) {
 		throw new Error(`herdr tab create failed: ${JSON.stringify(tabRes).slice(0, 400)}`);
 	}
 
-	const piArgs: string[] = ["--fork", sessionFile];
-	if (opts.model) piArgs.push("--model", opts.model);
+	const piArgs = launch.argv;
 	const startRes = await startAgentWithRetry(["agent", "start", name, "--kind", "pi", "--pane", paneId, "--", ...piArgs]);
 	if (startRes?.error || !startRes?.result?.agent?.name) {
 		throw new Error(`herdr agent start failed: ${JSON.stringify(startRes).slice(0, 400)}`);
@@ -1111,7 +1130,7 @@ async function openSideTab(opts: {
 		await herdr(["agent", "prompt", name, opts.instruction]);
 	}
 
-	return { name, tabId, paneId };
+	return { name: launch.name, tabId, paneId };
 }
 
 const SUBAGENT_ACTIONS = ["spawn", "list", "info"] as const;
@@ -2460,6 +2479,11 @@ export default function sessionTools(pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (_event, ctx) => {
 		ensureSessionState(ctx);
 		const message = settingsChange(ctx);
+		const boundary = forkBoundaryMessage(ctx);
+		if (boundary) {
+			if (message) boundary.content += `\n\n${message.content}`;
+			return { message: boundary };
+		}
 		return message ? { message } : undefined;
 	});
 
