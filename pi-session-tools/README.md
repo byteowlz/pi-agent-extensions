@@ -9,7 +9,19 @@ tmux side-window support does **not** imply those capabilities are implemented.
 
 Optional introspection contributes route owner/presentation/reason and effective
 spawn policy to `self_reflection { info: "all" }` through a versioned event query.
-No credentials, prompts or private transcripts are contributed.
+No credentials, prompts or private transcripts are contributed. The snapshot
+includes `spawnEnabled`, effective `allowMode`, allowance, selected loadout,
+allowlist source/patterns, kinds, timeout policy and `availableSubagentModels`
+(provider/model identifiers with registry credentials and effective allowlist).
+Lists are bounded; counts and truncation flags report omissions. Model eligibility
+is not a claim that the current backend can launch it.
+
+Settings changed through `/subagent` send a status message to the agent without
+starting an extra model turn. External config changes are detected before the
+next model request. No-op/invalid commands do not duplicate updates. Choosing
+`mode auto`, `noconfirm`, or applying an auto-mode loadout also enables spawning;
+explicit `off` still disables it until you enable it again. Other spawn gates
+remain enforced.
 
 This source rename does not migrate existing live extension installs. The
 `subagent-config.json` and persisted session-state locations are retained because
@@ -100,7 +112,7 @@ Loadouts resolve to a set of allowed model ids + spawn kinds, which gates
 |---------|--------|
 | `/subagent status` | Show config + per-session state + active subagents |
 | `/subagent on` / `off` | Enable / disable **agent-initiated** spawning (kill switch) |
-| `/subagent mode <auto\|confirm\|timeout>` | Set **this session's** allow mode |
+| `/subagent mode <auto\|confirm\|timeout>` | Set **this session's** allow mode; `auto` also enables spawning |
 | `/subagent decide <allow\|deny>` | What a timed prompt does when it times out |
 | `/subagent timeout <ms>` | Timed prompt's auto-decide delay (default 60000) |
 | `/subagent max <n>` | Set **this session's** concurrent allowance (`0` = unlimited, `default` = fall back to config) |

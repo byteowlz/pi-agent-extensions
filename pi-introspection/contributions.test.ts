@@ -22,6 +22,38 @@ test("optional contributors: no provider yields empty; bounds snapshot and isola
 	expect(result).toHaveLength(1);
 	expect(result[0].details.large).toHaveLength(1000);
 });
+test("identifier lists are bounded and nested objects cannot leak through", async () => {
+	const result = await collectContributions(
+		api((_event, q) =>
+			q.reply({
+				id: "models",
+				version: 1,
+				status: "ok",
+				details: {
+					models: Array.from({ length: 100 }, (_, i) => `provider/model-${i}`),
+				},
+			})
+		),
+		"s"
+	);
+	expect(result[0].details.models).toHaveLength(64);
+	expect((result[0].details.models as string[])[0]).toBe("provider/model-0");
+	const invalid = await collectContributions(
+		api((_event, q) =>
+			q.reply({
+				id: "models",
+				version: 1,
+				status: "ok",
+				details: {
+					models: ["provider/ok", { secret: "fixture" } as never, "x".repeat(1001)],
+				},
+			})
+		),
+		"s"
+	);
+	expect(invalid[0].details.models).toEqual(["provider/ok"]);
+});
+
 test("hung contributors settle within bounded deadline", async () => {
 	const result = await collectContributions(
 		api((_event, q) => q.reply(new Promise(() => {}))),

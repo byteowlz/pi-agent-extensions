@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export const STATUS_QUERY = "pi:introspection:status:v1";
-export type StatusValue = string | number | boolean | null;
+export type StatusValue = string | number | boolean | null | string[];
 export interface Contribution {
 	id: string;
 	version: 1;
@@ -78,7 +78,10 @@ function sanitize(value: Contribution): Contribution | null {
 	for (const [key, item] of Object.entries(value.details ?? {}).slice(0, 32)) {
 		if (!/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(key)) continue;
 		if (typeof item === "string") details[key] = item.slice(0, 1000);
-		else if (item === null || typeof item === "boolean" || (typeof item === "number" && Number.isFinite(item)))
+		else if (Array.isArray(item)) {
+			// Bounded lists of public identifiers, never arbitrary nested objects.
+			details[key] = item.filter((v): v is string => typeof v === "string" && v.length <= 1000).slice(0, 64);
+		} else if (item === null || typeof item === "boolean" || (typeof item === "number" && Number.isFinite(item)))
 			details[key] = item;
 	}
 	return { id: value.id, version: 1, status: value.status, details };

@@ -4,6 +4,19 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Live subagent settings and introspection (2.5.0)
+
+- `/subagent mode auto`, `noconfirm`, and explicitly applied auto-mode loadouts
+  now enable spawning. Explicit `off` remains respected until enabled again;
+  model/kind/allowance/backend gates are unchanged.
+- Introspection contributions expose effective policy, eligible registry model
+  identifiers, model counts and truncation indicators as bounded structured data.
+- Actual command setting changes send one non-triggering agent-visible status
+  update. Out-of-band changes are attached once before the next model request.
+  No-op commands, invalid input and session replacement do not duplicate notices.
+- Add isolated-HOME command/lifecycle regressions, bounded contributor list tests,
+  and native exact Pi 1 model-list assertions. Issue: piext-m69f.
+
 ### Coherent Pi 1 integration (2.4.1)
 
 - Consolidate the exact Pi 1 migration, maintained/archive split, Selection and
