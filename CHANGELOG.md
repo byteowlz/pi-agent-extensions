@@ -4,6 +4,20 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Coherent Pi 1 integration (2.4.1)
+
+- Consolidate the exact Pi 1 migration, maintained/archive split, Selection and
+  capability foundation, structured codemode contracts and reviewed security
+  fixes, and session-backend/introspection contributor foundation into main.
+- Preserve arbitrary-file xlatch delivery and unify `/todo` controls. Port the
+  real-theme background-safe, width-aware Todo result renderer to pi-todolist.
+- Adapt the print-exit Herdr lifecycle fix to renamed pi-session-tools and test
+  actual print mode with every maintained extension, not a partial legacy list.
+- Cancel deferred history startup on shutdown/replacement and capture plain cwd
+  before scheduling, so callbacks never access disposed extension contexts.
+- This source integration does not deploy extensions, advance Oqto release pins,
+  implement history worker isolation, or authorize unsupported runner operations.
+
 ### pi-oqto-todos: background-safe truncation and width-aware result renderer (1.25.1)
 
 - Fixed the dark "strip" that appeared on the right of truncated Todo tool-result
