@@ -20,7 +20,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { type Server, createServer } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -120,7 +120,7 @@ describe("pi print-mode lifecycle (piext-ge92)", () => {
 		await rm(temp, { recursive: true, force: true });
 	});
 
-	test("culprit pi-herdr-tools: `pi -p` prints answer and exits 0 within seconds", async () => {
+	test("session tools: `pi -p` prints answer and exits 0 within seconds", async () => {
 		child = spawn(
 			PI_BIN,
 			[
@@ -132,7 +132,7 @@ describe("pi print-mode lifecycle (piext-ge92)", () => {
 				"--model",
 				"fixture",
 				"-e",
-				join(repoRoot, "pi-herdr-tools", "index.ts"),
+				join(repoRoot, "pi-session-tools", "index.ts"),
 			],
 			{
 				cwd: temp,
@@ -165,14 +165,7 @@ describe("pi print-mode lifecycle (piext-ge92)", () => {
 		// Globally load every pi-* extension from the repo (the reported config
 		// loads these globally), in print mode with a reachable herdr socket.
 		const extensions: string[] = [];
-		for (const name of [
-			"pi-herdr-tools",
-			"pi-history-search",
-			"pi-tui-rpc",
-			"pi-xlatch-session",
-			"pi-crosstalk",
-			"pi-statusline",
-		]) {
+		for (const name of (await readdir(repoRoot)).filter((entry) => entry.startsWith("pi-"))) {
 			try {
 				require("node:fs").accessSync(join(repoRoot, name, "index.ts"));
 				extensions.push("-e", join(repoRoot, name, "index.ts"));

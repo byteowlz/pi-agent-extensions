@@ -297,15 +297,14 @@ export async function runSearch(ctx: ExtensionContext, config: HistorySearchConf
 
 export default function historySearch(pi: ExtensionAPI): void {
 	let indexing = false;
+	let startupTimer: ReturnType<typeof setTimeout> | undefined;
+	const cancelStartup = () => {
+		clearTimeout(startupTimer);
+		startupTimer = undefined;
+	};
 
-	async function ensureCurrentIndex(ctx: ExtensionContext): Promise<void> {
+	async function ensureCurrentIndex(cwd: string): Promise<void> {
 		if (indexing) return;
-		// Resolve the config synchronously here, while the ctx is still valid.
-		// `ctx.cwd` is a live getter that throws once the session is stale
-		// (after session_shutdown in single-shot print/json mode, see
-		// piext-ge92); capturing it here prevents a deferred timer from
-		// touching a stale ctx after `pi -p` has already answered.
-		const cwd = ctx.cwd;
 		const config = loadConfig(cwd);
 		if (!config.enabled || !config.indexOnStart) return;
 		indexing = true;
@@ -320,19 +319,20 @@ export default function historySearch(pi: ExtensionAPI): void {
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
-		// Don't index in single-shot (print/json) mode: the session ends right
-		// after the answer and there is no long-lived session to index for.
-		// hasUI is false there (true for TUI/RPC), so it is the type-safe
-		// signal; the runtime `mode` is also consulted when present.
-		const mode = (ctx as unknown as { mode?: string }).mode;
-		if (!ctx.hasUI && mode !== "rpc" && mode !== "tui") return;
-		// Defer slightly so startup isn't blocked by a first-run full index.
-		setTimeout(() => {
-			void ensureCurrentIndex(ctx);
+		cancelStartup();
+		if (ctx.mode !== "rpc" && ctx.mode !== "tui") return;
+		// Capture plain data now; a deferred callback must never retain ctx.
+		const cwd = ctx.cwd;
+		startupTimer = setTimeout(() => {
+			startupTimer = undefined;
+			void ensureCurrentIndex(cwd).catch(() => {
+				// Startup indexing is best effort; queries retain their fallback.
+			});
 		}, 100);
 	});
 
 	pi.on("session_shutdown", async () => {
+		cancelStartup();
 		closeAll();
 	});
 
