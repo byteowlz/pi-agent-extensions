@@ -1,0 +1,24 @@
+{
+	"name": "@byteowlz/pi-durable-workflow-core",
+	"version": "1.0.0",
+	"description": "Portable, dependency-free core for durable workflow proposals (validate, digest, propose, review).",
+	"type": "module",
+	"keywords": ["pi-package", "workflow", "durable-workflow", "portable"],
+	"files": ["*.ts", "README.md"],
+	"main": "./index.ts",
+	"types": "./index.ts",
+	"exports": {
+		".": "./index.ts"
+	},
+	"scripts": {
+		"test": "bun test",
+		"typecheck": "tsgo --config tsconfig.json"
+	},
+	"devDependencies": {
+		"@rslint/tsgo": "^0.4.2",
+		"@types/bun": "latest",
+		"typescript": "^5.7.0"
+	},
+	"license": "MIT",
+	"private": true
+}

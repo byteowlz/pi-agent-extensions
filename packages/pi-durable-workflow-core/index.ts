@@ -1,0 +1,879 @@
+/**
+ * pi-durable-workflow-core
+ *
+ * Portable, dependency-free core for durable workflow proposals.
+ *
+ * Design principles:
+ *  - NO imports from Pi (no `@earendil-works/pi-*`), no `node:*` modules. Runs in
+ *    Bun, browsers and Node >= 18 where `globalThis.crypto.subtle` (WebCrypto) exists.
+ *  - This core only *validates*, *hashes*, *proposes* and *reviews* workflow
+ *    definitions. It never executes, schedules, calls models, grants tools, or
+ *    touches permissions.
+ *  - Exposing a list of requested `tools` in a definition is only an expression of
+ *    intent. The core never grants access. An adapter decides authorization.
+ */
+
+// ---------------------------------------------------------------------------
+// Constants / bounds
+// ---------------------------------------------------------------------------
+
+/** Proposal envelope schema version. Bump only on breaking shape change. */
+export const PROPOSAL_SCHEMA_VERSION = 1 as const;
+
+/** Minimum allowed interval: 1 minute (ms). */
+export const MIN_INTERVAL_MS = 60_000;
+/** Maximum allowed interval: 365 days (ms). */
+export const MAX_INTERVAL_MS = 365 * 24 * 60 * 60 * 1000; // 31_536_000_000
+
+/** The core never enables subagents unless a definition explicitly opts in. */
+export const DEFAULT_ALLOW_SUBAGENTS = false;
+
+/** String/array length bounds used to keep hostile inputs bounded. */
+export const LIMITS = {
+	name: { max: 120 },
+	/** prompt bounded by UTF-8 bytes. */
+	promptBytes: { max: 8_000 },
+	sessionId: { max: 200 },
+	cwd: { max: 4_096 },
+	/** source context bounded by UTF-8 bytes. */
+	contextBytes: { max: 64_000 },
+	entryIds: { max: 512 },
+	entryIdLen: { max: 500 },
+	tools: { max: 64 },
+	toolLen: { max: 200 },
+	artifacts: { max: 64 },
+	artifactPathLen: { max: 4_096 },
+} as const;
+
+/** Numeric bound for `limits`. All values are safe positive integers. */
+export const LIMIT_BOUNDS = {
+	maxRuns: { min: 1, max: 1_000 },
+	maxDurationMs: { min: 1, max: 3_600_000 },
+	maxOutputBytes: { min: 1, max: 32_000 },
+} as const;
+
+export const PROPOSAL_STATES = ["draft", "approved", "rejected", "revoked"] as const;
+export type ProposalState = (typeof PROPOSAL_STATES)[number];
+
+export const REVIEW_DECISIONS = ["approved", "rejected"] as const;
+export type ReviewDecision = (typeof REVIEW_DECISIONS)[number];
+
+/**
+ * Receipt effect classification an adapter must choose from when reporting
+ * whether it can perform a workflow. `unsupported` = the adapter cannot run this
+ * workflow; `no-effects` = it ran but produced no durable effect;
+ * `possible-effects` = it ran and may have had effects.
+ */
+export const RECEIPT_EFFECTS = ["unsupported", "no-effects", "possible-effects"] as const;
+export type ReceiptEffect = (typeof RECEIPT_EFFECTS)[number];
+
+/** Receipt envelope version. */
+export const RECEIPT_SCHEMA_VERSION = 1 as const;
+
+/** Maximum size (UTF-8 bytes) of a serialized public snapshot. */
+export const SNAPSHOT_MAX_JSON_BYTES = 16_000;
+/** Maximum size (UTF-8 bytes) of a receipt `note`. */
+export const RECEIPT_NOTE_MAX_BYTES = 1_600;
+
+// ---------------------------------------------------------------------------
+// Public types
+// ---------------------------------------------------------------------------
+
+export interface WorkflowSource {
+	/** Session that originated (or produced) the workflow. */
+	sessionId: string;
+	/** Working directory the workflow is anchored to. */
+	cwd: string;
+	/** Ids of the transcript entries the workflow derives from. */
+	entryIds: string[];
+	/** Full source context (prompt/session transcript). NEVER surfaced in public snapshots. */
+	context: string;
+	/** True when `context` is the complete source, false when it was truncated. */
+	contextComplete: boolean;
+	/** Number of source entries dropped when building the definition. */
+	droppedEntries: number;
+}
+
+export interface WorkflowModel {
+	provider: string;
+	id: string;
+}
+
+export interface WorkflowArtifact {
+	path: string;
+	sha256: string;
+}
+
+export interface WorkflowLimits {
+	maxRuns: number;
+	maxDurationMs: number;
+	maxOutputBytes: number;
+}
+
+export interface WorkflowDefinition {
+	name: string;
+	prompt: string;
+	intervalMs: number;
+	source: WorkflowSource;
+	model: WorkflowModel;
+	tools: string[];
+	artifacts: WorkflowArtifact[];
+	/** Defaults to `false`. The core never grants tool access; this is intent only. */
+	allowSubagents: boolean;
+	limits: WorkflowLimits;
+}
+
+export interface WorkflowReview {
+	decision: ReviewDecision;
+	/** Digest of the exact definition this review applies to. */
+	digest: string;
+	reviewedAt: string;
+}
+
+export interface WorkflowProposal {
+	schemaVersion: typeof PROPOSAL_SCHEMA_VERSION;
+	id: string;
+	revision: number;
+	definition: WorkflowDefinition;
+	/** Canonical SHA-256 over the validated, normalized definition. */
+	digest: string;
+	state: ProposalState;
+	/** Present only after `reviewProposal`; removed whenever the definition changes. */
+	review?: WorkflowReview;
+	createdAt: string;
+}
+
+/**
+ * A public, bounded projection of a proposal. It NEVER contains the full source
+ * `context` string, the concrete `entryIds`, or the `prompt`.
+ *
+ * Opaque identifiers (workflow id, digest, session id, cwd) and artifact hashes
+ * are preserved. The whole serialized snapshot is capped at
+ * `SNAPSHOT_MAX_JSON_BYTES`; `flags.truncated` is `true` when nested name/item
+ * lists had to be dropped to fit under the cap. Omissions are always explicit.
+ */
+export interface WorkflowSnapshot {
+	schemaVersion: typeof PROPOSAL_SCHEMA_VERSION;
+	kind: "workflow-snapshot";
+	id: string;
+	revision: number;
+	state: ProposalState;
+	digest: string;
+	createdAt: string;
+	flags: {
+		/** True when some nested content (tool names / artifact items) was truncated to fit the cap. */
+		truncated: boolean;
+		/** What is intentionally never included in a public snapshot. */
+		omissions: { fullContext: true; prompt: true; entryIds: true };
+	};
+	counts: {
+		entryIds: number;
+		tools: number;
+		artifacts: number;
+		/** UTF-8 byte size of the prompt (content not included). */
+		promptBytes: number;
+		/** UTF-8 byte size of the source context (content not included). */
+		contextBytes: number;
+	};
+	definition: {
+		name: string;
+		intervalMs: number;
+		model: WorkflowModel;
+		allowSubagents: boolean;
+		limits: WorkflowLimits;
+		tools: { count: number; names?: string[] };
+		artifacts: { count: number; items?: { path: string; sha256: string }[] };
+		source: {
+			/** Number of source transcript entries the workflow derives from. */
+			entries: number;
+			droppedEntries: number;
+			contextComplete: boolean;
+			sessionId: string;
+			cwd: string;
+		};
+	};
+	review?: WorkflowReview;
+}
+
+/**
+ * Receipt an adapter returns when it has processed a proposal. The `effect`
+ * field is explicit: `unsupported` | `no-effects` | `possible-effects`.
+ */
+export interface WorkflowReceipt {
+	schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
+	kind: "workflow-receipt";
+	proposalId: string;
+	revision: number;
+	digest: string;
+	effect: ReceiptEffect;
+	note?: string;
+}
+
+export type ValidationResult<T> = { ok: true; value: T } | { ok: false; errors: string[] };
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+export class WorkflowError extends Error {
+	override name = "WorkflowError";
+}
+
+export class WorkflowValidationError extends WorkflowError {
+	override name = "WorkflowValidationError";
+	constructor(public readonly errors: string[]) {
+		super(`Workflow validation failed (${errors.length} error(s))`);
+	}
+}
+
+export class InvalidIntervalError extends WorkflowError {
+	override name = "InvalidIntervalError";
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSafePositiveInt(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+/** SHA-256 hex digest of a UTF-8 string using WebCrypto (portable, no Node/Pi imports). */
+export async function sha256Hex(text: string): Promise<string> {
+	const subtle = globalThis.crypto?.subtle;
+	if (!subtle) {
+		throw new WorkflowError("WebCrypto `crypto.subtle` is not available in this environment");
+	}
+	const data = new TextEncoder().encode(text);
+	const hash = await subtle.digest("SHA-256", data);
+	return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Produce a canonical string form of a JSON-able value: object keys are sorted
+ * recursively, arrays preserve order, primitives are rendered deterministically.
+ */
+export function canonicalString(value: unknown): string {
+	if (value === null) return "null";
+	const t = typeof value;
+	if (t === "string") return JSON.stringify(value);
+	if (t === "number") {
+		if (!Number.isFinite(value)) throw new WorkflowError("Non-finite number in definition");
+		return String(value);
+	}
+	if (t === "boolean") return value ? "true" : "false";
+	if (t === "object") {
+		if (Array.isArray(value)) {
+			return `[${value.map((v) => canonicalString(v)).join(",")}]`;
+		}
+		const keys = Object.keys(value as Record<string, unknown>).sort();
+		const parts = keys.map((k) => `${JSON.stringify(k)}:${canonicalString((value as Record<string, unknown>)[k])}`);
+		return `{${parts.join(",")}}`;
+	}
+	throw new WorkflowError(`Unsupported value type in definition: ${t}`);
+}
+
+// ---------------------------------------------------------------------------
+// Definition validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Strictly validate an unknown value as a `WorkflowDefinition`.
+ * Returns a discriminated `ValidationResult`. A valid result carries a freshly
+ * normalized definition (unknown extra fields stripped, `allowSubagents`
+ * defaulted to `false`, all bounds enforced).
+ */
+export function validateDefinition(input: unknown): ValidationResult<WorkflowDefinition> {
+	const errors: string[] = [];
+	if (!isRecord(input)) {
+		return { ok: false, errors: ["definition must be an object"] };
+	}
+
+	const name = validateString(input.name, "name", LIMITS.name.max, true, errors);
+	const prompt = validateUtf8String(input.prompt, "prompt", LIMITS.promptBytes.max, true, errors);
+	const intervalMs = validateInterval(input.intervalMs, errors);
+	const source = validateSource(input.source, errors);
+	const model = validateModel(input.model, errors);
+	const tools = validateStringArray(input.tools, "tools", LIMITS.tools.max, LIMITS.toolLen.max, "tool", errors);
+	const artifacts = validateArtifacts(input.artifacts, errors);
+	const allowSubagents = validateAllowSubagents(input.allowSubagents, errors);
+	const limits = validateLimits(input.limits, errors);
+
+	if (errors.length > 0) {
+		return { ok: false, errors };
+	}
+
+	// Build a normalized value with fixed key order and no extra fields.
+	return { ok: true, value: { name, prompt, intervalMs, source, model, tools, artifacts, allowSubagents, limits } };
+}
+
+function validateString(v: unknown, field: string, max: number, required: boolean, errors: string[]): string {
+	if (v === undefined && !required) return "";
+	if (typeof v !== "string") {
+		errors.push(`${field} must be a string`);
+		return "";
+	}
+	if (v.length > max) {
+		errors.push(`${field} exceeds max length ${max}`);
+		return "";
+	}
+	return v;
+}
+
+function utf8ByteLength(value: string): number {
+	return new TextEncoder().encode(value).length;
+}
+
+function validateUtf8String(v: unknown, field: string, maxBytes: number, required: boolean, errors: string[]): string {
+	if (v === undefined && !required) return "";
+	if (typeof v !== "string") {
+		errors.push(`${field} must be a string`);
+		return "";
+	}
+	if (utf8ByteLength(v) > maxBytes) {
+		errors.push(`${field} exceeds max ${maxBytes} UTF-8 bytes`);
+		return "";
+	}
+	return v;
+}
+
+function validateInterval(v: unknown, errors: string[]): number {
+	if (typeof v !== "number" || !Number.isSafeInteger(v)) {
+		errors.push("intervalMs must be a safe integer");
+		return 0;
+	}
+	if (v < MIN_INTERVAL_MS || v > MAX_INTERVAL_MS) {
+		errors.push(`intervalMs must be between ${MIN_INTERVAL_MS} (1m) and ${MAX_INTERVAL_MS} (365d)`);
+		return 0;
+	}
+	return v;
+}
+
+function validateSource(v: unknown, errors: string[]): WorkflowSource {
+	if (!isRecord(v)) {
+		errors.push("source must be an object");
+		return { sessionId: "", cwd: "", entryIds: [], context: "", contextComplete: false, droppedEntries: 0 };
+	}
+	const sessionId = validateString(v.sessionId, "source.sessionId", LIMITS.sessionId.max, true, errors);
+	const cwd = validateString(v.cwd, "source.cwd", LIMITS.cwd.max, true, errors);
+	const context = validateUtf8String(v.context, "source.context", LIMITS.contextBytes.max, true, errors);
+	const contextComplete = typeof v.contextComplete === "boolean" ? v.contextComplete : undefined;
+	if (contextComplete === undefined) errors.push("source.contextComplete must be a boolean");
+
+	const entryIds = validateStringArray(
+		v.entryIds,
+		"source.entryIds",
+		LIMITS.entryIds.max,
+		LIMITS.entryIdLen.max,
+		"entryIds",
+		errors
+	);
+
+	let droppedEntries = 0;
+	if (!isSafePositiveInt(v.droppedEntries) && v.droppedEntries !== 0) {
+		errors.push("source.droppedEntries must be a non-negative safe integer");
+	} else if (typeof v.droppedEntries === "number") {
+		droppedEntries = v.droppedEntries;
+	}
+
+	return {
+		sessionId,
+		cwd,
+		entryIds,
+		context,
+		contextComplete: contextComplete ?? false,
+		droppedEntries,
+	};
+}
+
+function validateModel(v: unknown, errors: string[]): WorkflowModel {
+	if (!isRecord(v)) {
+		errors.push("model must be an object");
+		return { provider: "", id: "" };
+	}
+	const provider = validateString(v.provider, "model.provider", LIMITS.toolLen.max, true, errors);
+	const id = validateString(v.id, "model.id", LIMITS.toolLen.max, true, errors);
+	return { provider, id };
+}
+
+function validateStringArray(
+	v: unknown,
+	field: string,
+	countMax: number,
+	itemMax: number,
+	itemLabel: string,
+	errors: string[]
+): string[] {
+	if (!Array.isArray(v)) {
+		errors.push(`${field} must be an array`);
+		return [];
+	}
+	if (v.length > countMax) {
+		errors.push(`${field} exceeds max length ${countMax}`);
+		return [];
+	}
+	return v.map((item) => {
+		if (typeof item !== "string" || item.length > itemMax) {
+			errors.push(`${itemLabel} entries must be strings of max length ${itemMax}`);
+			return "";
+		}
+		return item;
+	});
+}
+
+function validateArtifacts(v: unknown, errors: string[]): WorkflowArtifact[] {
+	if (!Array.isArray(v)) {
+		errors.push("artifacts must be an array");
+		return [];
+	}
+	if (v.length > LIMITS.artifacts.max) {
+		errors.push(`artifacts exceeds max length ${LIMITS.artifacts.max}`);
+		return [];
+	}
+	return v.map((item) => {
+		if (!isRecord(item)) {
+			errors.push("artifact must be an object");
+			return { path: "", sha256: "" };
+		}
+		const path = validateString(item.path, "artifacts[].path", LIMITS.artifactPathLen.max, true, errors);
+		const sha256 = validateString(item.sha256, "artifacts[].sha256", 64, true, errors);
+		if (sha256 && !/^[0-9a-f]{64}$/i.test(sha256)) {
+			errors.push("artifacts[].sha256 must be 64 hex chars");
+		}
+		return { path, sha256 };
+	});
+}
+
+function validateAllowSubagents(v: unknown, errors: string[]): boolean {
+	if (v === undefined) return DEFAULT_ALLOW_SUBAGENTS;
+	if (typeof v !== "boolean") {
+		errors.push("allowSubagents must be a boolean");
+		return DEFAULT_ALLOW_SUBAGENTS;
+	}
+	return v;
+}
+
+function validateLimits(v: unknown, errors: string[]): WorkflowLimits {
+	if (!isRecord(v)) {
+		errors.push("limits must be an object");
+		return { maxRuns: 0, maxDurationMs: 0, maxOutputBytes: 0 };
+	}
+	const maxRuns = validateBounded(v.maxRuns, "maxRuns", LIMIT_BOUNDS.maxRuns.min, LIMIT_BOUNDS.maxRuns.max, errors);
+	const maxDurationMs = validateBounded(
+		v.maxDurationMs,
+		"maxDurationMs",
+		LIMIT_BOUNDS.maxDurationMs.min,
+		LIMIT_BOUNDS.maxDurationMs.max,
+		errors
+	);
+	const maxOutputBytes = validateBounded(
+		v.maxOutputBytes,
+		"maxOutputBytes",
+		LIMIT_BOUNDS.maxOutputBytes.min,
+		LIMIT_BOUNDS.maxOutputBytes.max,
+		errors
+	);
+	return { maxRuns, maxDurationMs, maxOutputBytes };
+}
+
+function validateBounded(v: unknown, key: string, min: number, max: number, errors: string[]): number {
+	if (!isSafePositiveInt(v)) {
+		errors.push(`limits.${key} must be a positive safe integer`);
+		return 0;
+	}
+	if (v < min || v > max) {
+		errors.push(`limits.${key} must be between ${min} and ${max}`);
+		return 0;
+	}
+	return v;
+}
+
+// ---------------------------------------------------------------------------
+// Digest
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute the canonical SHA-256 digest of a workflow definition.
+ * The definition is strictly validated first, so the digest is always over the
+ * normalized value (key order independent, `allowSubagents` defaulted).
+ * Throws `WorkflowValidationError` when the input is not a valid definition.
+ */
+export async function definitionDigest(definition: unknown): Promise<string> {
+	const result = validateDefinition(definition);
+	if (!result.ok) {
+		throw new WorkflowValidationError(result.errors);
+	}
+	return sha256Hex(canonicalString(result.value));
+}
+
+// ---------------------------------------------------------------------------
+// Proposal lifecycle
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a new draft proposal from a definition. Validates the definition and
+ * computes its canonical digest. Always starts at revision 1, state `draft`.
+ */
+export async function createProposal(definition: unknown, id: string, now: string): Promise<WorkflowProposal> {
+	const result = validateDefinition(definition);
+	if (!result.ok) {
+		throw new WorkflowValidationError(result.errors);
+	}
+	if (typeof id !== "string" || id.length === 0) {
+		throw new WorkflowValidationError(["proposal id must be a non-empty string"]);
+	}
+	const digest = await sha256Hex(canonicalString(result.value));
+	return {
+		schemaVersion: PROPOSAL_SCHEMA_VERSION,
+		id,
+		revision: 1,
+		definition: result.value,
+		digest,
+		state: "draft",
+		createdAt: now,
+	};
+}
+
+/**
+ * Revise an existing proposal with a (possibly changed) definition.
+ * Increments `revision`, recomputes the digest, and **invalidates any existing
+ * review**: state resets to `draft` and `review` is removed. Immutable — returns
+ * a new proposal.
+ */
+export async function reviseProposal(proposal: WorkflowProposal, definition: unknown, _now: string): Promise<WorkflowProposal> {
+	if (!isProposal(proposal)) {
+		throw new WorkflowValidationError(["proposal must be a valid WorkflowProposal"]);
+	}
+	const result = validateDefinition(definition);
+	if (!result.ok) {
+		throw new WorkflowValidationError(result.errors);
+	}
+	const digest = await sha256Hex(canonicalString(result.value));
+	return {
+		schemaVersion: proposal.schemaVersion,
+		id: proposal.id,
+		revision: proposal.revision + 1,
+		definition: result.value,
+		digest,
+		state: "draft",
+		createdAt: proposal.createdAt,
+	};
+}
+
+/**
+ * Review a proposal with `approved` or `rejected`. Sets `state` and attaches a
+ * `review` whose `digest` is the exact proposal digest. A proposal that has
+ * already been reviewed in the current revision cannot be re-reviewed: use
+ * `reviseProposal` first (which is what enforces "modifications invalidate
+ * reviews").
+ */
+export function reviewProposal(proposal: WorkflowProposal, decision: ReviewDecision, now: string): WorkflowProposal {
+	if (!isProposal(proposal)) {
+		throw new WorkflowValidationError(["proposal must be a valid WorkflowProposal"]);
+	}
+	if (decision !== "approved" && decision !== "rejected") {
+		throw new WorkflowValidationError(["review decision must be 'approved' or 'rejected'"]);
+	}
+	if (proposal.state === "revoked") {
+		throw new WorkflowValidationError(["cannot review a revoked proposal"]);
+	}
+	if (proposal.review) {
+		throw new WorkflowValidationError(["proposal already has a review for this revision; revise first to re-review"]);
+	}
+	return {
+		...proposal,
+		state: decision,
+		review: { decision, digest: proposal.digest, reviewedAt: now },
+	};
+}
+
+/**
+ * Revoke a proposal, moving it to state `revoked` (non-executable). A revoked
+ * proposal keeps its digest but can no longer be reviewed or executed.
+ */
+export function revokeProposal(proposal: WorkflowProposal): WorkflowProposal {
+	if (!isProposal(proposal)) {
+		throw new WorkflowValidationError(["proposal must be a valid WorkflowProposal"]);
+	}
+	if (proposal.state === "revoked") {
+		return proposal;
+	}
+	return { ...proposal, state: "revoked", review: undefined };
+}
+
+/**
+ * Validate whether a proposal carries current, authoritative execution approval.
+ *
+ * Strictly: it must be in state `approved`, carry a review whose `decision` is
+ * `approved`, whose `digest` exactly equals the proposal's current digest, AND
+ * the proposal digest must actually match a re-computation over the proposal's
+ * definition. A merely descriptive review (or a stale/mismatched digest, or a
+ * `rejected` decision) is NOT execution authority.
+ *
+ * This recomputes the digest, so it is async.
+ */
+export async function validateReviewedProposal(proposal: unknown): Promise<ValidationResult<WorkflowProposal>> {
+	// Validate the envelope (schema/field types) BEFORE dereferencing any nested field.
+	const envelopeErrors = validateProposalEnvelope(proposal);
+	if (envelopeErrors.length > 0) {
+		return { ok: false, errors: envelopeErrors };
+	}
+	const p = proposal as WorkflowProposal;
+	if (p.state !== "approved") {
+		return { ok: false, errors: [`proposal state is '${p.state}', not 'approved'`] };
+	}
+	if (!p.review) {
+		return { ok: false, errors: ["proposal has no review"] };
+	}
+	if (p.review.decision !== "approved") {
+		return { ok: false, errors: ["review decision is not 'approved'"] };
+	}
+	if (p.review.digest !== p.digest) {
+		return { ok: false, errors: ["review digest does not match proposal digest"] };
+	}
+	// Recompute the digest over the definition to catch mutation, even if the
+	// cached digest field happens to agree with the review digest.
+	let recomputed: string;
+	try {
+		recomputed = await definitionDigest(p.definition);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : "unknown error";
+		return { ok: false, errors: [`definition invalid: ${message}`] };
+	}
+	if (recomputed !== p.digest) {
+		return { ok: false, errors: ["proposal digest does not match its definition"] };
+	}
+	return { ok: true, value: p };
+}
+
+function validateProposalEnvelope(value: unknown): string[] {
+	if (!isRecord(value)) return ["proposal must be a valid WorkflowProposal"];
+	const errors: string[] = [];
+	if (value.schemaVersion !== PROPOSAL_SCHEMA_VERSION) {
+		errors.push(`unsupported proposal schemaVersion ${String(value.schemaVersion)}`);
+	}
+	if (typeof value.id !== "string" || value.id.length === 0) errors.push("proposal id must be a non-empty string");
+	if (!Number.isSafeInteger(value.revision) || (value.revision as number) < 1) {
+		errors.push("revision must be a positive safe integer");
+	}
+	if (typeof value.digest !== "string" || !/^[0-9a-f]{64}$/i.test(value.digest)) {
+		errors.push("digest must be 64 hex chars");
+	}
+	if (typeof value.state !== "string" || !PROPOSAL_STATES.includes(value.state as ProposalState)) {
+		errors.push(`state must be one of ${PROPOSAL_STATES.join("/")}`);
+	}
+	if (typeof value.createdAt !== "string") errors.push("createdAt must be a string");
+	if (!isRecord(value.definition)) errors.push("definition must be an object");
+	validateProposalReview(value.review, errors);
+	return errors;
+}
+
+function validateProposalReview(review: unknown, errors: string[]): void {
+	if (review === undefined) return;
+	if (!isRecord(review)) {
+		errors.push("review must be an object");
+		return;
+	}
+	if (review.decision !== "approved" && review.decision !== "rejected") {
+		errors.push("review decision must be 'approved' or 'rejected'");
+	}
+	if (typeof review.digest !== "string" || !/^[0-9a-f]{64}$/i.test(review.digest)) {
+		errors.push("review digest must be 64 hex chars");
+	}
+	if (typeof review.reviewedAt !== "string") errors.push("review.reviewedAt must be a string");
+}
+
+function isProposal(value: unknown): value is WorkflowProposal {
+	if (!isRecord(value)) return false;
+	if ((value as { schemaVersion?: unknown }).schemaVersion !== PROPOSAL_SCHEMA_VERSION) return false;
+	if (typeof (value as { id?: unknown }).id !== "string") return false;
+	if (typeof (value as { revision?: unknown }).revision !== "number") return false;
+	if (typeof (value as { digest?: unknown }).digest !== "string") return false;
+	if (typeof (value as { state?: unknown }).state !== "string") return false;
+	if (typeof (value as { createdAt?: unknown }).createdAt !== "string") return false;
+	if (!isRecord((value as { definition?: unknown }).definition)) return false;
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Public snapshot
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a bounded public snapshot of a proposal. It omits the full source
+ * `context`, the `prompt`, and the concrete `entryIds`. Opaque ids/hashes are
+ * preserved. The whole serialized snapshot is capped at
+ * `SNAPSHOT_MAX_JSON_BYTES`; tool names / artifact items are dropped (with
+ * counts retained and `flags.truncated` set) until it fits.
+ */
+export function publicSnapshot(proposal: WorkflowProposal): WorkflowSnapshot {
+	if (!isProposal(proposal)) {
+		throw new WorkflowValidationError(["proposal must be a valid WorkflowProposal"]);
+	}
+	// Try progressively less inclusive candidates until the snapshot fits the cap.
+	const attempts: { tools: boolean; artifacts: boolean }[] = [
+		{ tools: true, artifacts: true },
+		{ tools: true, artifacts: false },
+		{ tools: false, artifacts: false },
+	];
+	for (const attempt of attempts) {
+		const snapshot = renderSnapshot(proposal, attempt);
+		if (utf8ByteLength(JSON.stringify(snapshot)) <= SNAPSHOT_MAX_JSON_BYTES) return snapshot;
+	}
+	// Fallback: counts only (should never exceed the cap, but be safe).
+	return renderSnapshot(proposal, { tools: false, artifacts: false });
+}
+
+function renderSnapshot(proposal: WorkflowProposal, options: { tools: boolean; artifacts: boolean }): WorkflowSnapshot {
+	const def = proposal.definition;
+	const truncated = !options.tools || !options.artifacts;
+	return {
+		schemaVersion: proposal.schemaVersion,
+		kind: "workflow-snapshot",
+		id: proposal.id,
+		revision: proposal.revision,
+		state: proposal.state,
+		digest: proposal.digest,
+		createdAt: proposal.createdAt,
+		flags: {
+			truncated,
+			omissions: { fullContext: true, prompt: true, entryIds: true },
+		},
+		counts: {
+			entryIds: def.source.entryIds.length,
+			tools: def.tools.length,
+			artifacts: def.artifacts.length,
+			promptBytes: utf8ByteLength(def.prompt),
+			contextBytes: utf8ByteLength(def.source.context),
+		},
+		definition: {
+			name: def.name,
+			intervalMs: def.intervalMs,
+			model: { provider: def.model.provider, id: def.model.id },
+			allowSubagents: def.allowSubagents,
+			limits: { ...def.limits },
+			tools: options.tools ? { count: def.tools.length, names: [...def.tools] } : { count: def.tools.length },
+			artifacts: options.artifacts
+				? {
+						count: def.artifacts.length,
+						items: def.artifacts.map((a) => ({ path: a.path, sha256: a.sha256 })),
+					}
+				: { count: def.artifacts.length },
+			source: {
+				entries: def.source.entryIds.length,
+				droppedEntries: def.source.droppedEntries,
+				contextComplete: def.source.contextComplete,
+				sessionId: def.source.sessionId,
+				cwd: def.source.cwd,
+			},
+		},
+		...(proposal.review ? { review: { ...proposal.review } } : {}),
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Receipt
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a receipt for an adapter. `effect` must be one of `unsupported`,
+ * `no-effects`, `possible-effects` — the adapter explicitly declares whether it
+ * ran the workflow and whether it may have produced effects.
+ */
+export function createReceipt(proposal: WorkflowProposal, effect: ReceiptEffect, note?: string): WorkflowReceipt {
+	if (!isProposal(proposal)) {
+		throw new WorkflowValidationError(["proposal must be a valid WorkflowProposal"]);
+	}
+	if (!RECEIPT_EFFECTS.includes(effect)) {
+		throw new WorkflowValidationError([`effect must be one of ${RECEIPT_EFFECTS.join(", ")}`]);
+	}
+	if (note !== undefined) {
+		if (typeof note !== "string") {
+			throw new WorkflowValidationError(["receipt note must be a string"]);
+		}
+		if (utf8ByteLength(note) > RECEIPT_NOTE_MAX_BYTES) {
+			throw new WorkflowValidationError([`receipt note exceeds max ${RECEIPT_NOTE_MAX_BYTES} UTF-8 bytes`]);
+		}
+	}
+	const receipt: WorkflowReceipt = {
+		schemaVersion: RECEIPT_SCHEMA_VERSION,
+		kind: "workflow-receipt",
+		proposalId: proposal.id,
+		revision: proposal.revision,
+		digest: proposal.digest,
+		effect,
+	};
+	return note ? { ...receipt, note } : receipt;
+}
+
+// ---------------------------------------------------------------------------
+// Interval parsing
+// ---------------------------------------------------------------------------
+
+const UNIT_FACTORS: Record<string, number> = {
+	ms: 1,
+	millisecond: 1,
+	milliseconds: 1,
+	s: 1_000,
+	sec: 1_000,
+	secs: 1_000,
+	second: 1_000,
+	seconds: 1_000,
+	m: 60_000,
+	min: 60_000,
+	mins: 60_000,
+	minute: 60_000,
+	minutes: 60_000,
+	h: 3_600_000,
+	hr: 3_600_000,
+	hrs: 3_600_000,
+	hour: 3_600_000,
+	hours: 3_600_000,
+	d: 86_400_000,
+	day: 86_400_000,
+	days: 86_400_000,
+	w: 604_800_000,
+	week: 604_800_000,
+	weeks: 604_800_000,
+};
+
+/**
+ * Parse a human interval into milliseconds. Supports compact (`30m`, `2h`,
+ * `1d`) and spelled-out (`90 seconds`, `2 hours`, `1 week`) units, with optional
+ * decimals (`1.5h`).
+ *
+ * Result is bounded: >= 1 minute (`MIN_INTERVAL_MS`) and <= 365 days
+ * (`MAX_INTERVAL_MS`), and must be a safe integer.
+ *
+ * @throws {InvalidIntervalError} on malformed units or out-of-bounds values.
+ */
+export function parseInterval(input: string): number {
+	if (typeof input !== "string") {
+		throw new InvalidIntervalError("interval must be a string");
+	}
+	const match = /^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$/.exec(input);
+	if (!match) {
+		throw new InvalidIntervalError(`unrecognized interval '${input}'`);
+	}
+	const value = Number(match[1]);
+	const unit = match[2].toLowerCase();
+	const factor = UNIT_FACTORS[unit];
+	if (factor === undefined) {
+		throw new InvalidIntervalError(`unknown interval unit '${unit}'`);
+	}
+	const total = value * factor;
+	if (!Number.isFinite(total) || !Number.isSafeInteger(total)) {
+		throw new InvalidIntervalError(`interval '${input}' is not a safe integer number of ms`);
+	}
+	if (total < MIN_INTERVAL_MS) {
+		throw new InvalidIntervalError(`interval '${input}' is below the 1 minute minimum`);
+	}
+	if (total > MAX_INTERVAL_MS) {
+		throw new InvalidIntervalError(`interval '${input}' exceeds the 365 day maximum`);
+	}
+	return total;
+}

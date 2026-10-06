@@ -1,0 +1,17 @@
+{
+  "name": "@byteowlz/pi-durable-workflow-executor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Isolated native Durable workflow executor qualification; production authority adapters are explicit",
+  "engines": { "node": ">=24.14.1" },
+  "scripts": {
+    "build": "bun build ../pi-durable-workflow-core/index.ts --target=node --format=esm --outfile=dist/core.js",
+    "qualify": "node cli.mjs qualify"
+  },
+  "dependencies": {
+    "@earendil-works/pi-durable": "1.0.4",
+    "@earendil-works/pi-ai": "1.0.4",
+    "@earendil-works/chord": "1.0.4"
+  }
+}
