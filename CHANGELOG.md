@@ -4,6 +4,12 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Standalone workflow extension installation (2.8.1)
+
+- Fix startup failure when copying only `pi-durable-workflow/` into the agent extensions directory: replace parent-directory runtime imports with shipped, generated local core/budget modules.
+- Add deterministic runtime synchronization and freshness/import-boundary regressions; exercise the real Pi loader and RPC review from an isolated copied installation rather than only the source checkout.
+
+
 ### Experimental durable-workflow foundation (2.8.0)
 
 - Add portable bounded definitions, canonical digests, revision/review/receipt contracts and 55 core regressions. Reviews are descriptive, never execution authority.

@@ -5,6 +5,7 @@ scripts/*
 !scripts/test-pi-1-catalog.mjs
 !scripts/test-selection-rpc.mjs
 !scripts/test-selection-tool.mjs
+!scripts/sync-durable-workflow-runtime.mjs
 !scripts/pi-1-imports.test.ts
 !scripts/review-regressions.test.ts
 !scripts/fixtures/

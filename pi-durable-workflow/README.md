@@ -2,7 +2,9 @@
 
 Experimental first slice: portable workflow intent, human review, and isolated native Durable qualification. **It does not enable live recurrence.**
 
-Load `pi-durable-workflow/index.ts` from the canonical collection checkout (keep `packages/pi-durable-workflow-core` alongside it). Ordinary Pi SDK dependencies remain 1.0.0; the native executor has its own isolated 1.0.4 dependencies.
+Copy the **entire `pi-durable-workflow/` directory** into `~/.pi/agent/extensions/`, or load its `index.ts` from the collection checkout. The deployed directory is self-contained: `core.ts` and `output-budget.ts` are generated local runtime copies, so no sibling `packages/` or `pi-session-tools/` directories are required. Ordinary Pi SDK dependencies remain 1.0.0; the native executor has its own isolated 1.0.4 dependencies.
+
+Maintainers: after changing the canonical portable core or output-budget helper, run `npm run build:workflow` and commit regenerated runtime files. Packaging tests reject stale copies and parent-directory runtime imports. The native host probe installs only this directory in a temporary agent extensions directory and exercises real Pi loading/RPC review.
 
 ## Pi surface
 

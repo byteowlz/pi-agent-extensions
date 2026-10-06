@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { WorkflowSource } from "../packages/pi-durable-workflow-core/index.js";
-import { clipText } from "../pi-session-tools/output-budget.js";
+import type { WorkflowSource } from "./core.js";
+import { clipText } from "./output-budget.js";
 
 /** A bounded TEXT PROJECTION, not an importer or a recoverable execution checkpoint. */
 export function capturePriming(ctx: ExtensionContext, maxBytes = 24000, maxEntries = 200): WorkflowSource {

@@ -2,7 +2,7 @@
 // Exact Pi 1 pipeline + QuickJS probe. Only temporary synthetic configuration is used.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -16,6 +16,10 @@ assert.equal(execFileSync(binary, ["--version"], { encoding: "utf8" }).trim(), "
 const temp = await mkdtemp(join(tmpdir(), "pi-structured-host-"));
 const agent = join(temp, "agent");
 await mkdir(agent);
+// Reproduce deployment: copy ONLY the extension directory, without the repo's
+// packages or sibling extensions. Resolve its imports through the real Pi loader.
+const installedWorkflow = join(agent, "extensions", "pi-durable-workflow");
+await cp(join(root, "pi-durable-workflow"), installedWorkflow, { recursive: true });
 const parentFile = join(temp, "parent.jsonl");
 await writeFile(parentFile, [
  {type:"session",version:3,id:"11111111-1111-4111-9111-111111111111",timestamp:new Date().toISOString(),cwd:temp},
@@ -109,7 +113,7 @@ const server = createServer(async (req, res) => {
 });
 await new Promise(r=>server.listen(0,"127.0.0.1",r));
 await writeFile(join(agent,"models.json"),JSON.stringify({providers:{fixture:{baseUrl:`http://127.0.0.1:${server.address().port}/v1`,api:"openai-completions",apiKey:"synthetic",models:[{id:"fixture",input:["text"],contextWindow:8192,maxTokens:512}]}}}));
-const child = spawn(binary,["--mode","rpc","--fork",parentFile,"--append-system-prompt",sideHint,"--name",childSessionName,"--session-id",childSessionId,"--offline","-ne","-ns","-np","-nc","-na","--provider","fixture","--model","fixture","-e","builtin:codemode","-e",fixture,...["pi-auto-rename", "pi-introspection", "pi-todolist", "pi-history-search", "pi-sudo", "pi-kyz", "pi-mmry", "pi-xlatch-session", "pi-session-tools", "pi-durable-workflow", "pi-read-file-guard", "pi-read-image-guard"].flatMap(name=>["-e",join(root,name,"index.ts")]),"--tools","codemode,object,error_data,throws,plain,redacted,blocked,wait,rename_session,self_reflection,Todo,HistorySearch,HistoryRead,HistoryGrep,HistoryBranches,sudo_exec,bash,read,memory,xlatch_later,subagent,workflow"],{cwd:temp,env:{PATH:`${join(temp,"bin")}:${process.env.PATH}`,HOME:temp,PI_CODING_AGENT_DIR:agent,PI_OFFLINE:"1"},stdio:["pipe","pipe","pipe"]});
+const child = spawn(binary,["--mode","rpc","--fork",parentFile,"--append-system-prompt",sideHint,"--name",childSessionName,"--session-id",childSessionId,"--offline","-ne","-ns","-np","-nc","-na","--provider","fixture","--model","fixture","-e","builtin:codemode","-e",fixture,...["pi-auto-rename", "pi-introspection", "pi-todolist", "pi-history-search", "pi-sudo", "pi-kyz", "pi-mmry", "pi-xlatch-session", "pi-session-tools", "pi-durable-workflow", "pi-read-file-guard", "pi-read-image-guard"].flatMap(name=>["-e",join(name === "pi-durable-workflow" ? installedWorkflow : join(root,name),"index.ts")]),"--tools","codemode,object,error_data,throws,plain,redacted,blocked,wait,rename_session,self_reflection,Todo,HistorySearch,HistoryRead,HistoryGrep,HistoryBranches,sudo_exec,bash,read,memory,xlatch_later,subagent,workflow"],{cwd:temp,env:{PATH:`${join(temp,"bin")}:${process.env.PATH}`,HOME:temp,PI_CODING_AGENT_DIR:agent,PI_OFFLINE:"1"},stdio:["pipe","pipe","pipe"]});
 let buffer="", stderr=""; const rows=[];
 child.stderr.on("data",c=>{stderr+=c;});
 child.stdout.on("data",c=>{
