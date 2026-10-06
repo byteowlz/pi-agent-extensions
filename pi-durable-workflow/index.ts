@@ -3,6 +3,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Type } from "typebox";
 import { capturePriming } from "./context.js";
 import {
+	INTERVAL_FORMAT_HINT,
 	type WorkflowDefinition,
 	type WorkflowProposal,
 	createProposal,
@@ -52,7 +53,7 @@ const parameters = Type.Object({
 	id: Type.Optional(Type.String({ maxLength: 200 })),
 	name: Type.Optional(Type.String({ maxLength: 120 })),
 	prompt: Type.Optional(Type.String({ maxLength: 8000 })),
-	interval: Type.Optional(Type.String({ maxLength: 100 })),
+	interval: Type.Optional(Type.String({ maxLength: 100, description: INTERVAL_FORMAT_HINT })),
 	tools: Type.Optional(Type.Array(Type.String({ maxLength: 200 }), { maxItems: 64 })),
 	allowSubagents: Type.Optional(Type.Boolean()),
 });
@@ -313,8 +314,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "workflow",
 		label: "Workflow",
-		description:
-			"Prepare, inspect and review versioned durable-workflow intent. Proposals ask human Y/N/Edit approval. Review does not activate recurrence; unavailable authority/executor adapters fail closed.",
+		description: `Prepare, inspect and review versioned durable-workflow intent. Proposals ask human Y/N/Edit approval. Interval: ${INTERVAL_FORMAT_HINT} Review does not activate recurrence; unavailable authority/executor adapters fail closed. This is a custom pi-durable-workflow extension, not a Pi builtin.`,
 		parameters,
 		outputSchema: outputSchema,
 		annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
@@ -324,7 +324,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
 	});
 	pi.registerCommand("workflow", {
 		description:
-			"Prepare/review workflow intent: /workflow propose <30m|2h|1d> <prompt>, list, inspect/review/revoke/activate <id>.",
+			"Prepare/review workflow intent: /workflow propose <30m|2h|7d|weekly> <prompt>, list, inspect/review/revoke/activate <id>.",
 		async handler(args, ctx) {
 			const match = args.trim().match(/^propose\s+(\S+)\s+([\s\S]+)$/);
 			let params: Params;

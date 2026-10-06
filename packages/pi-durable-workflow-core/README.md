@@ -15,7 +15,10 @@ for SHA-256, which is available in Bun, browsers, and Node >= 18.
 - **Creates / revises / reviews / revokes** `WorkflowProposal` objects.
 - **Verifies execution authority** via `validateReviewedProposal`.
 - **Projects** a bounded `publicSnapshot` that never leaks source context.
-- **Parses** human intervals into milliseconds.
+- **Parses** human intervals into milliseconds: `30m`, `2h`, `7d`, `1 week`,
+  decimals, and minutely/hourly/daily/weekly aliases. All are elapsed durations
+  bounded to 1 minute–365 days; calendar/cron/ISO formats are not inferred.
+  `INTERVAL_FORMAT_HINT` is shared with adapters and validation errors.
 - **Builds** explicit effect-typed `WorkflowReceipt`s for adapters.
 
 ## What it does NOT do (by design)

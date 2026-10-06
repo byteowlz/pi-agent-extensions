@@ -814,6 +814,18 @@ export function createReceipt(proposal: WorkflowProposal, effect: ReceiptEffect,
 // Interval parsing
 // ---------------------------------------------------------------------------
 
+export const INTERVAL_FORMAT_HINT =
+	"Use an elapsed duration such as '30m', '2h', '7d', '1 week' or '1.5h' (1 minute–365 days). Aliases: minutely=1m, hourly=1h, daily=24h, weekly=7d. These are elapsed intervals, not calendar/weekday, cron or ISO-8601 schedules; monthly is not supported.";
+const INTERVAL_ALIASES = new Map<string, string>([
+	["minutely", "1m"],
+	["hourly", "1h"],
+	["daily", "24h"],
+	["weekly", "7d"],
+]);
+function invalidInterval(message: string): never {
+	throw new InvalidIntervalError(`${message}. ${INTERVAL_FORMAT_HINT}`);
+}
+
 const UNIT_FACTORS: Record<string, number> = {
 	ms: 1,
 	millisecond: 1,
@@ -853,27 +865,29 @@ const UNIT_FACTORS: Record<string, number> = {
  */
 export function parseInterval(input: string): number {
 	if (typeof input !== "string") {
-		throw new InvalidIntervalError("interval must be a string");
+		invalidInterval("interval must be a string");
 	}
-	const match = /^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$/.exec(input);
+	// Normalize aliases, then apply the SAME unit and safety-bound checks.
+	const normalized = INTERVAL_ALIASES.get(input.trim().toLowerCase()) ?? input;
+	const match = /^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$/.exec(normalized);
 	if (!match) {
-		throw new InvalidIntervalError(`unrecognized interval '${input}'`);
+		invalidInterval(`unrecognized interval '${input}'`);
 	}
 	const value = Number(match[1]);
 	const unit = match[2].toLowerCase();
 	const factor = UNIT_FACTORS[unit];
 	if (factor === undefined) {
-		throw new InvalidIntervalError(`unknown interval unit '${unit}'`);
+		invalidInterval(`unknown interval unit '${unit}'`);
 	}
 	const total = value * factor;
 	if (!Number.isFinite(total) || !Number.isSafeInteger(total)) {
-		throw new InvalidIntervalError(`interval '${input}' is not a safe integer number of ms`);
+		invalidInterval(`interval '${input}' is not a safe integer number of ms`);
 	}
 	if (total < MIN_INTERVAL_MS) {
-		throw new InvalidIntervalError(`interval '${input}' is below the 1 minute minimum`);
+		invalidInterval(`interval '${input}' is below the 1 minute minimum`);
 	}
 	if (total > MAX_INTERVAL_MS) {
-		throw new InvalidIntervalError(`interval '${input}' exceeds the 365 day maximum`);
+		invalidInterval(`interval '${input}' exceeds the 365 day maximum`);
 	}
 	return total;
 }

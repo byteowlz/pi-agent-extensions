@@ -4,6 +4,18 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Discoverable workflow intervals (2.9.0)
+
+- Advertise accepted interval formats, examples, bounds and elapsed-time semantics
+  in the workflow tool schema/prose, identifying it as a custom extension.
+- Support minutely/hourly/daily/weekly aliases through the same bounded parser;
+  weekly means seven elapsed days, not a chosen weekday. Ambiguous calendar,
+  cron and ISO formats return immediate accepted-format hints.
+- Use one shared hint in portable-core errors and model discovery; regenerate
+  self-contained runtime copies. Approval/execution gates remain unchanged.
+- Add regression and actual native provider/copied-extension discovery proof.
+  Issue: piext-rd1z.
+
 ### Standalone workflow extension installation (2.8.1)
 
 - Fix startup failure when copying only `pi-durable-workflow/` into the agent extensions directory: replace parent-directory runtime imports with shipped, generated local core/budget modules.

@@ -7,12 +7,15 @@ function fixture() {
 	const hooks = new Map<string, Handler>();
 	const entries: unknown[] = [];
 	let tool: {
+		parameters: unknown;
+		description: string;
 		execute: (...args: unknown[]) => Promise<{
 			structuredContent: {
 				ok: boolean;
 				recurrenceActive: boolean;
 				code?: string;
-				proposals: { id: string; revision: number; state: string; allowSubagents: boolean }[];
+				message: string;
+				proposals: { id: string; revision: number; state: string; allowSubagents: boolean; intervalMs: number }[];
 			};
 		}>;
 	};
@@ -55,6 +58,7 @@ function fixture() {
 	} as unknown as ExtensionAPI);
 	return {
 		ctx,
+		schema: () => JSON.stringify({ parameters: tool.parameters, description: tool.description }),
 		hooks,
 		entries,
 		setId: (v: string) => {
@@ -72,6 +76,21 @@ function fixture() {
 const propose = { action: "propose", name: "Test Job", prompt: "Use the priming token", interval: "30m" };
 
 describe("workflow proposal and review without granting execution authority", () => {
+	test("model-visible interval hints prevent filesystem discovery; weekly remains approval-gated", async () => {
+		const f = fixture();
+		expect(f.schema()).toContain("weekly=7d");
+		expect(f.schema()).toContain("30m");
+		expect(f.schema()).toContain("not a Pi builtin");
+		await f.hooks.get("session_start")?.({}, f.ctx);
+		f.setAnswer("N — Reject");
+		const rejected = await f.call({ ...propose, interval: "weekly" });
+		expect(rejected.structuredContent.proposals[0].intervalMs).toBe(604800000);
+		expect(rejected.structuredContent.proposals[0].state).toBe("rejected");
+		expect(rejected.structuredContent.recurrenceActive).toBe(false);
+		const invalid = await f.call({ ...propose, interval: "P7D" });
+		expect(invalid.structuredContent.message).toContain("Use an elapsed duration");
+		expect(invalid.structuredContent.message).toContain("7d");
+	});
 	test("Y reviews the exact version, defaults subagents off, activation fails closed", async () => {
 		const f = fixture();
 		await f.hooks.get("session_start")?.({}, f.ctx);

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -17,6 +17,8 @@ const project = join(temp, "project");
 const store = join(temp, "reviews");
 await mkdir(agent, { recursive: true });
 await mkdir(project);
+const workflowCopy = join(temp, "installed-workflow");
+await cp(join(root, "pi-durable-workflow"), workflowCopy, { recursive: true });
 let calls = 0;
 const server = createServer(async (req, res) => {
 	try {
@@ -30,6 +32,10 @@ const server = createServer(async (req, res) => {
 		if (calls === 1) {
 			const selected = body.tools.find((tool) => tool.function?.name.endsWith("Selection"));
 			assert(selected, "Selection must be exposed to the real provider");
+			const workflow = body.tools.find((tool) => tool.function?.name === "workflow");
+			assert(workflow, "copied workflow extension must be exposed to the native provider");
+			assert(workflow.function.parameters.properties.interval.description.includes("weekly=7d"));
+			assert(workflow.function.description.includes("not a Pi builtin"));
 			const specSchema = JSON.stringify(selected.function.parameters.properties.spec);
 			for (const field of ['"questions"', '"title"', '"kind"', '"options"', '"label"'])
 				assert(specSchema.includes(field), `Selection spec discovery must expose ${field}`);
@@ -120,6 +126,8 @@ const child = spawn(
 		"fixture",
 		"-e",
 		join(root, "pi-selection/index.ts"),
+		"-e",
+		join(workflowCopy, "index.ts"),
 		"--selection-state-dir",
 		store,
 	],
