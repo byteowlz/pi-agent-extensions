@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- 2.7.1: publish the complete Questions/Review spec schema to model tool discovery
+  rather than opaque input. Add prompt-field/kind hints, complete example and
+  question-index validation paths; preserve strict unknown-field rejection.
+
 - 2.2.1: close controls accept caller-observed revision CAS; stale views cannot cancel a newer saved draft when the host forwards the observed revision.
 
 - Content-only version 1 Questions and Review specs, shared validated results and private scoped revision-CAS store.

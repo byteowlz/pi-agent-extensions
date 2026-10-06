@@ -4,6 +4,17 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Selection schema discovery and validation hints (2.7.1)
+
+- Replace opaque Selection `spec` input with a model-visible version 1 schema
+  for Questions and Review, including canonical fields, bounds and an example.
+- Explain that question prompts use `title`, not `text`/`question`; free-text
+  answers use `kind:"text"`, and choice options use `{id,label}`.
+- Report question-index paths, canonical field suggestions, allowed fields and
+  supported kinds while retaining strict semantic/prototype validation.
+- Regression tests reproduce the reported failure; the exact native Pi 1
+  provider/tool probe verifies the actual advertised schema. Issue: piext-jeyy.
+
 ### Independent side-session identity and connections (2.7.0)
 
 - `/side` and `/btw` launch an explicitly named `[side] Title [readable-id]`

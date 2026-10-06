@@ -16,7 +16,16 @@ function object(value: unknown): Record<string, unknown> {
 	return result;
 }
 function fields(value: Record<string, unknown>, allowed: readonly string[]): void {
-	for (const key of Object.keys(value)) if (!allowed.includes(key)) fail(`Unknown field: ${key}`);
+	for (const key of Object.keys(value)) {
+		if (allowed.includes(key)) continue;
+		const hint =
+			(key === "text" || key === "question") && allowed.includes("title")
+				? " Use 'title' for the displayed prompt, not 'text' or 'question'; use kind:'text' for free-text answers."
+				: key === "choices" && allowed.includes("options")
+					? " Use 'options' for question choices; each option has id and label."
+					: "";
+		fail(`Unknown field: ${key}.${hint} Allowed fields: ${allowed.join(", ")}.`);
+	}
 }
 function text(value: unknown, maximum = 10000): string {
 	if (typeof value !== "string" || value.length > maximum) fail("Invalid text");
@@ -92,7 +101,9 @@ function question(value: unknown): Question {
 		"multiline",
 		"note",
 	]);
-	if (!["single", "multiple", "text"].includes(row.kind as string)) fail("Invalid kind");
+	if (!["single", "multiple", "text"].includes(row.kind as string))
+		fail("Question kind must be 'single', 'multiple', or 'text'. Choice questions require options:[{id,label}].");
+	if (row.title === undefined) fail("Question title is required: use title for the prompt, not text or question.");
 	const result: Question = {
 		id: id(row.id),
 		title: label(row.title),
@@ -158,7 +169,18 @@ export function normalizeSpec(input: unknown): NormalizedSpec {
 			return { id: id(group.id), title: label(group.title) };
 		})
 	);
-	const questions = row.mode === "questions" ? unique(list(row.questions).map(question)) : reviewQuestions(row);
+	const questions =
+		row.mode === "questions"
+			? unique(
+					list(row.questions).map((value, index) => {
+						try {
+							return question(value);
+						} catch (error) {
+							fail(`spec.questions[${index}]: ${error instanceof Error ? error.message : "Invalid question"}`);
+						}
+					})
+				)
+			: reviewQuestions(row);
 	if (!questions.length) fail("Empty inventory");
 	for (const entry of questions) if (entry.groupId && !groups.some((group) => group.id === entry.groupId)) fail("Unknown group");
 	return { version: 1, mode: row.mode, title: label(row.title), description: optionalText(row.description), questions, groups };
