@@ -5,6 +5,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { Type } from "typebox";
 import type { Answers } from "./model.js";
 import { type SelectionRequest, type SelectionResult, SelectionRuntime } from "./runtime.js";
+import { selectionSpecSchema } from "./schema.js";
 
 const actions = ["ask", "create", "get", "open", "close"] as const;
 const modes = ["auto", "tui", "browser", "host", "none"] as const;
@@ -120,12 +121,12 @@ export default function selection(pi: ExtensionAPI): void {
 		label: "Selection",
 		exposure: "model-only",
 		description:
-			"Ask structured questions or review inventories with single/multiple choices, Other text, standalone text and notes. Supply version:1 spec with mode questions/review. Native TUI, negotiated host or protected browser fallback. ask waits for submission; create returns a draft/presentation; get retrieves it; open resumes; close cancels. Never interprets answers as permission grants. No pairwise labeling or secret entry.",
+			"Ask structured questions or review inventories with single/multiple choices, Other text, standalone text and notes. Supply version:1 spec with mode questions/review and a root title. Questions use {id,title,kind}, NOT text/question as the prompt field; kind is single/multiple/text. single/multiple require options:[{id,label}]; text omits options. See the spec schema for a complete example. Native TUI, negotiated host or protected browser fallback. ask waits for submission; create returns a draft/presentation; get retrieves it; open resumes; close cancels. Never interprets answers as permission grants. No pairwise labeling or secret entry.",
 		annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
 		parameters: Type.Object(
 			{
 				action: Type.Optional(Type.String({ enum: [...actions] })),
-				spec: Type.Optional(Type.Unknown()),
+				spec: Type.Optional(selectionSpecSchema),
 				id: Type.Optional(Type.String()),
 				presentation: Type.Optional(Type.String({ enum: [...modes] })),
 				bindingId: Type.Optional(Type.String()),

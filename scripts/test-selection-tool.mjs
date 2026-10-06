@@ -30,6 +30,10 @@ const server = createServer(async (req, res) => {
 		if (calls === 1) {
 			const selected = body.tools.find((tool) => tool.function?.name.endsWith("Selection"));
 			assert(selected, "Selection must be exposed to the real provider");
+			const specSchema = JSON.stringify(selected.function.parameters.properties.spec);
+			for (const field of ['"questions"', '"title"', '"kind"', '"options"', '"label"'])
+				assert(specSchema.includes(field), `Selection spec discovery must expose ${field}`);
+			assert(specSchema.includes("NOT text"), "model-visible schema must explain the reported prompt-field mistake");
 			delta = {
 				role: "assistant",
 				tool_calls: [
