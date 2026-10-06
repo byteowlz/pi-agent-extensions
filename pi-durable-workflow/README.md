@@ -1,5 +1,15 @@
 # pi-durable-workflow
 
+## Interval formats
+
+Use `30m`, `2h`, `7d`, `1 week`, or `1.5h` (minimum 1 minute, maximum
+365 days). Natural aliases: `minutely` = 1m, `hourly` = 1h, `daily` = 24h,
+`weekly` = 7d. These mean **elapsed durations**, not a selected calendar weekday
+or time. Monthly/calendar, cron and ISO-8601 schedules are not supported by this
+proposal parser. The tool schema and invalid-interval errors expose these rules
+and examples directly; no Pi builtin documentation/filesystem search is needed.
+Aliases do not approve or activate recurrence.
+
 Experimental first slice: portable workflow intent, human review, and isolated native Durable qualification. **It does not enable live recurrence.**
 
 Copy the **entire `pi-durable-workflow/` directory** into `~/.pi/agent/extensions/`, or load its `index.ts` from the collection checkout. The deployed directory is self-contained: `core.ts` and `output-budget.ts` are generated local runtime copies, so no sibling `packages/` or `pi-session-tools/` directories are required. Ordinary Pi SDK dependencies remain 1.0.0; the native executor has its own isolated 1.0.4 dependencies.
