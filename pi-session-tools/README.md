@@ -16,9 +16,12 @@ allowlist source/patterns, kinds, timeout policy and `availableSubagentModels`
 Lists are bounded; counts and truncation flags report omissions. Model eligibility
 is not a claim that the current backend can launch it.
 
-Settings changed through `/subagent` send a status message to the agent without
-starting an extra model turn. External config changes are detected before the
-next model request. No-op/invalid commands do not duplicate updates. Choosing
+Settings changed through `/subagent` send a compact, hidden agent-context hint
+without starting an extra model turn or adding a JSON dump to the transcript.
+Full diagnostic details remain available through introspection. External policy
+changes are detected before the next model request. Registry refreshes, model
+availability/count/order changes, equivalent policy-list ordering and no-op/invalid
+commands do not produce notices. Policy checks do not enumerate the model registry. Choosing
 `mode auto`, `noconfirm`, or applying an auto-mode loadout also enables spawning;
 explicit `off` still disables it until you enable it again. Other spawn gates
 remain enforced.

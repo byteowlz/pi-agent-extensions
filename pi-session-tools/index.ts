@@ -87,7 +87,7 @@ import { buildSubagentSessionName } from "../pi-auto-rename/index.js";
 import { STATUS_QUERY, type StatusQuery } from "../pi-introspection/contributions.js";
 import { openTmuxSide, resolveRoute } from "./backend.js";
 import { isLiveSession, shouldReconnect } from "./lifecycle.js";
-import { fitEntries } from "./output-budget.js";
+import { fitEntries, fitText } from "./output-budget.js";
 import { subagentOutputSchema, subagentResult } from "./output.js";
 import { forkBoundaryMessage, sideLaunch } from "./side-launch.js";
 
@@ -2462,16 +2462,36 @@ export default function sessionTools(pi: ExtensionAPI) {
 	let observedSession: string | undefined;
 	const settingsChange = (ctx: ExtensionContext) => {
 		const sessionId = ctx.sessionManager.getSessionId();
-		const snapshot = settingsSnapshot(ctx);
-		const fingerprint = JSON.stringify(snapshot);
+		const config = loadConfig();
+		const effective = effectiveAllowlist(config);
+		// Registry availability/count/order are diagnostics, not permission edits.
+		// Don't enumerate the registry here; full discovery belongs to introspection.
+		const policy = {
+			spawnEnabled: config.enabled,
+			allowMode: sessionAllowMode(config),
+			autoDecision: sessionAutoDecision(config),
+			confirmTimeoutMs: sessionConfirmTimeout(config),
+			maxSubagents: sessionMaxSubagents(config),
+			loadout: currentState?.forceLoadout ?? null,
+			allowlistSource: effective.source,
+			allowlistPatterns: [...new Set(effective.patterns)].sort(),
+			allowedKinds: [...new Set(sessionAllowedKinds(config))].sort(),
+			allowGlobalLoadouts: sessionAllowGlobalLoadouts(),
+			localLoadouts: Object.keys(currentState?.loadouts ?? {}).sort(),
+			globalLoadouts: Object.keys(config.loadouts).sort(),
+		};
+		const fingerprint = JSON.stringify(policy);
 		const changed = observedSession === sessionId && observedSettings !== undefined && observedSettings !== fingerprint;
 		observedSession = sessionId;
 		observedSettings = fingerprint;
 		return changed
 			? {
 					customType: "subagent-settings-changed",
-					content: `Subagent settings changed. Current effective settings (model eligibility does not imply backend availability):\n${fingerprint}`,
-					display: true,
+					content: fitText(
+						`Subagent policy updated: spawning ${policy.spawnEnabled ? "on" : "off"}; mode ${policy.allowMode}; auto decision ${policy.autoDecision}; max ${policy.maxSubagents}. Allowed kinds: ${policy.allowedKinds.join(", ") || "none"}. Model scope: ${policy.allowlistPatterns.join(", ") || "none"}. Model eligibility does not imply backend availability. Full settings: self_reflection(info="all").`,
+						1100
+					),
+					display: false,
 				}
 			: undefined;
 	};
