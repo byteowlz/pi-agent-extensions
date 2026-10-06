@@ -24,9 +24,11 @@ fs.mkdirSync(path.join(process.env.HOME,'.pi/agent'),{recursive:true});
 const configPath=path.join(process.env.HOME,'.pi/agent/subagent-config.json');
 fs.writeFileSync(configPath,JSON.stringify({enabled:false,allowedModels:['local/*'],loadouts:{automatic:{models:['other/m2'],mode:'auto'}}}));
 let id='session-a';
+let registryReads=0;
+let registry=[{provider:'local',id:'m1',name:'One'},{provider:'other',id:'m2',name:'Two'}];
 const ctx={mode:'print',hasUI:false,cwd:process.env.HOME,
  sessionManager:{getSessionId:()=>id,getSessionFile:()=>null,getEntries:()=>[]},
- modelRegistry:{getAvailable:()=>[{provider:'local',id:'m1',name:'One'},{provider:'other',id:'m2',name:'Two'}]},
+ modelRegistry:{getAvailable:()=>{registryReads++;return registry}}, 
  ui:{notify:()=>{},setStatus:()=>{}},
 };
 extension(pi);
@@ -34,6 +36,17 @@ await handlers.get('session_start')({},ctx);
 const snapshot=async()=> (await collectContributions(pi,id))[0].details;
 assert.deepEqual((await snapshot()).availableSubagentModels,['local/m1']);
 assert.equal((await snapshot()).spawnEnabled,false);
+const readsBeforeCheck=registryReads;
+registry.push({provider:'unrelated',id:'refresh',name:'Refresh'});
+assert.equal(await handlers.get('before_agent_start')({},ctx),undefined,'Registry refresh is not a settings change');
+registry.reverse();
+assert.equal(await handlers.get('before_agent_start')({},ctx),undefined,'Registry order is not a settings change');
+registry.reverse();
+assert.equal(registryReads,readsBeforeCheck,'Policy checks must not enumerate the model registry');
+const equivalent=JSON.parse(fs.readFileSync(configPath));
+equivalent.allowedModels=['local/*','local/*'];equivalent.allowedKinds=['pi','pi'];
+fs.writeFileSync(configPath,JSON.stringify(equivalent));
+assert.equal(await handlers.get('before_agent_start')({},ctx),undefined,'Equivalent duplicated policy lists must not announce a change');
 await commands.get('subagent')('mode auto',ctx);
 assert.equal(JSON.parse(fs.readFileSync(configPath)).enabled,true);
 assert.equal((await snapshot()).allowMode,'auto');
@@ -41,7 +54,10 @@ assert.equal((await snapshot()).spawnEnabled,true);
 assert.equal(messages.length,1);
 assert.equal(messages[0].options.triggerTurn,false);
 assert.equal(messages[0].message.customType,'subagent-settings-changed');
-assert.match(messages[0].message.content,/"spawnEnabled":true/);
+assert.equal(messages[0].message.display,false,'Agent context notices must not clutter the transcript');
+assert.match(messages[0].message.content,/spawning on/);
+assert(messages[0].message.content.length < 1200);
+assert(!messages[0].message.content.includes('registryAvailableModelCount')); 
 assert.equal(await handlers.get('before_agent_start')({},ctx),undefined);
 await commands.get('subagent')('mode auto',ctx);
 assert.equal(messages.length,1,'No duplicate notice for unchanged settings');
@@ -62,7 +78,10 @@ assert.equal((await snapshot()).maxSubagents,3);
 // Out-of-band config changes are exposed on the next model request, not silently swallowed.
 const raw=JSON.parse(fs.readFileSync(configPath));raw.enabled=false;fs.writeFileSync(configPath,JSON.stringify(raw));
 const changed=await handlers.get('before_agent_start')({},ctx);
-assert.match(changed.message.content,/"spawnEnabled":false/);
+assert.match(changed.message.content,/spawning off/);
+assert.equal(changed.message.display,false);
+registry.push({provider:'other',id:'new-eligible',name:'New'});
+assert.equal(await handlers.get('before_agent_start')({},ctx),undefined,'Eligible model availability is not a policy edit');
 assert.equal(await handlers.get('before_agent_start')({},ctx),undefined);
 await handlers.get('session_shutdown')({},ctx);
 id='session-b';

@@ -4,6 +4,13 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Quiet, stable subagent policy notices (2.9.1)
+
+- Replace visible full-JSON settings messages with bounded, hidden agent-context hints; full diagnostic snapshots remain available through introspection.
+- Compare canonical actual policy rather than volatile model registry availability/order/count/truncation. Registry refreshes no longer masquerade as settings edits, and policy checks no longer enumerate the registry.
+- Regress registry-only refreshes/reordering, compact hidden updates, explicit/external changes, no-op commands and session isolation.
+
+
 ### Discoverable workflow intervals (2.9.0)
 
 - Advertise accepted interval formats, examples, bounds and elapsed-time semantics
