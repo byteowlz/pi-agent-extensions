@@ -65,6 +65,8 @@ const dataError = await tools.error_data({});
 const plain = await tools.plain({});
 const redacted = await tools.redacted({});
 const failures = await Promise.allSettled([tools.throws({}),tools.blocked({})]);
+const workflow = await tools.workflow({action:"propose",name:"Contract Workflow",prompt:"Use the primed context",interval:"30m"});
+const workflowActivation = await tools.workflow({action:"activate",id:workflow.proposals[0].id});
 const initialSession = await tools.self_reflection({info:"session"});
 const renamed = await tools.rename_session({name:"Contract Fixture"});
 const reflection = await tools.self_reflection({info:"all"});
@@ -91,7 +93,7 @@ const spawnDenied = await tools.subagent({task:"Must not execute"});
 const guardedText = await tools.read({});
 const guardedImage = await tools.read({image:true});
 const spill = await tools.bash({command: 'node -e \\'process.stdout.write("x".repeat(1100000)+JSON.stringify(process.env.TEST_FIXTURE)+process.env.TEST_FIXTURE)\\''});
-text({good,dataError,plain,redacted,initialSession:initialSession.session,renamed,reflectionInfo:reflection.info,reflectionContributions:reflection.extensions.contributions,todo,history:history.map(r=>({ok:r.ok,hits:r.hits,completeness:r.completeness})),evidence:evidence.map(r=>r.messages),grepMatches:historyGrep.matches,branchIds:historyBranches.branches.map(b=>b.branchId),deniedSudo,bash,jsonBash,memory,memoryCreate,memoryEdit,memoryRemove,parked,parkedRead,parkedRemove,catalog,children,spawnDenied,guardedText,guardedImage,spillPath:spill.full_output_path,failures:failures.map(r => ({status:r.status,message:r.reason?.message}))});`;
+text({good,dataError,plain,redacted,workflow,workflowActivation,initialSession:initialSession.session,renamed,reflectionInfo:reflection.info,reflectionContributions:reflection.extensions.contributions,todo,history:history.map(r=>({ok:r.ok,hits:r.hits,completeness:r.completeness})),evidence:evidence.map(r=>r.messages),grepMatches:historyGrep.matches,branchIds:historyBranches.branches.map(b=>b.branchId),deniedSudo,bash,jsonBash,memory,memoryCreate,memoryEdit,memoryRemove,parked,parkedRead,parkedRemove,catalog,children,spawnDenied,guardedText,guardedImage,spillPath:spill.full_output_path,failures:failures.map(r => ({status:r.status,message:r.reason?.message}))});`;
 let calls = 0;
 let receivedSideHint = false;
 const server = createServer(async (req, res) => {
@@ -107,12 +109,12 @@ const server = createServer(async (req, res) => {
 });
 await new Promise(r=>server.listen(0,"127.0.0.1",r));
 await writeFile(join(agent,"models.json"),JSON.stringify({providers:{fixture:{baseUrl:`http://127.0.0.1:${server.address().port}/v1`,api:"openai-completions",apiKey:"synthetic",models:[{id:"fixture",input:["text"],contextWindow:8192,maxTokens:512}]}}}));
-const child = spawn(binary,["--mode","rpc","--fork",parentFile,"--append-system-prompt",sideHint,"--name",childSessionName,"--session-id",childSessionId,"--offline","-ne","-ns","-np","-nc","-na","--provider","fixture","--model","fixture","-e","builtin:codemode","-e",fixture,...["pi-auto-rename", "pi-introspection", "pi-todolist", "pi-history-search", "pi-sudo", "pi-kyz", "pi-mmry", "pi-xlatch-session", "pi-session-tools", "pi-read-file-guard", "pi-read-image-guard"].flatMap(name=>["-e",join(root,name,"index.ts")]),"--tools","codemode,object,error_data,throws,plain,redacted,blocked,wait,rename_session,self_reflection,Todo,HistorySearch,HistoryRead,HistoryGrep,HistoryBranches,sudo_exec,bash,read,memory,xlatch_later,subagent"],{cwd:temp,env:{PATH:`${join(temp,"bin")}:${process.env.PATH}`,HOME:temp,PI_CODING_AGENT_DIR:agent,PI_OFFLINE:"1"},stdio:["pipe","pipe","pipe"]});
+const child = spawn(binary,["--mode","rpc","--fork",parentFile,"--append-system-prompt",sideHint,"--name",childSessionName,"--session-id",childSessionId,"--offline","-ne","-ns","-np","-nc","-na","--provider","fixture","--model","fixture","-e","builtin:codemode","-e",fixture,...["pi-auto-rename", "pi-introspection", "pi-todolist", "pi-history-search", "pi-sudo", "pi-kyz", "pi-mmry", "pi-xlatch-session", "pi-session-tools", "pi-durable-workflow", "pi-read-file-guard", "pi-read-image-guard"].flatMap(name=>["-e",join(root,name,"index.ts")]),"--tools","codemode,object,error_data,throws,plain,redacted,blocked,wait,rename_session,self_reflection,Todo,HistorySearch,HistoryRead,HistoryGrep,HistoryBranches,sudo_exec,bash,read,memory,xlatch_later,subagent,workflow"],{cwd:temp,env:{PATH:`${join(temp,"bin")}:${process.env.PATH}`,HOME:temp,PI_CODING_AGENT_DIR:agent,PI_OFFLINE:"1"},stdio:["pipe","pipe","pipe"]});
 let buffer="", stderr=""; const rows=[];
 child.stderr.on("data",c=>{stderr+=c;});
 child.stdout.on("data",c=>{
  buffer+=c;
- while(buffer.includes("\n")) {const i=buffer.indexOf("\n"); const line=buffer.slice(0,i);buffer=buffer.slice(i+1); const row=JSON.parse(line);rows.push(row);if(row.type==="agent_settled")child.stdin.end();}
+ while(buffer.includes("\n")) {const i=buffer.indexOf("\n"); const line=buffer.slice(0,i);buffer=buffer.slice(i+1); const row=JSON.parse(line);rows.push(row);if(row.type === "extension_ui_request" && row.method === "select") child.stdin.write(`${JSON.stringify({type:"extension_ui_response",id:row.id,value:row.options[0]})}\n`);if(row.type==="agent_settled")child.stdin.end();}
 });
 const timer=setTimeout(()=>child.kill("SIGKILL"),30000);
 child.stdin.write(`${JSON.stringify({type:"prompt",message:"Probe structured contract"})}\n`);
@@ -130,6 +132,10 @@ try {
  assert.deepEqual(data.dataError,{value:"error_data"});
  assert.equal(data.plain,"plain text");
  assert.equal(data.renamed.ok,true);
+ assert.equal(data.workflow.proposals[0].state,"approved","native RPC Y must review exact version");
+ assert.equal(data.workflow.proposals[0].allowSubagents,false);
+ assert.equal(data.workflow.recurrenceActive,false);
+ assert.equal(data.workflowActivation.code,"adapter_unavailable","review must not activate without authority");
  assert(receivedSideHint, "the first native model request must contain the fork identity hint");
  assert(!(await readdir(temp)).includes("unexpected-xlatch-restore"), "CLI startup fork must not restore inherited xlatch state");
  const childHeader = JSON.parse((await readFile(data.initialSession.file,"utf8")).split("\n")[0]);

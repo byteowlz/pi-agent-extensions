@@ -4,6 +4,14 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Experimental durable-workflow foundation (2.8.0)
+
+- Add portable bounded definitions, canonical digests, revision/review/receipt contracts and 55 core regressions. Reviews are descriptive, never execution authority.
+- Add `/workflow` and structured `workflow` proposal/inspection/Y-N-Edit review. Fork ownership and session-generation fences prevent inherited/stale approvals. Activation remains fail-closed.
+- Isolate exact native Durable/AI/Chord1.0.4 from ordinary Pi1.0.0. Qualify text-only priming, two occurrences, same conversation, reopen/dedup, frozen version/run cap and revoked request with zero provider calls.
+- Enforce authorization at model transport: Durable1.0.4 hook errors alone do not block execution. No generated tools, production grants, live schedules or installation changes are enabled.
+
+
 ### Independent side-session identity and connections (2.7.0)
 
 - `/side` and `/btw` launch an explicitly named `[side] Title [readable-id]`

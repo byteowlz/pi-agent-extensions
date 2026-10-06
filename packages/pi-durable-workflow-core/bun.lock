@@ -1,0 +1,39 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "@byteowlz/pi-durable-workflow-core",
+      "devDependencies": {
+        "@rslint/tsgo": "^0.4.2",
+        "@types/bun": "latest",
+        "typescript": "^5.7.0",
+      },
+    },
+  },
+  "packages": {
+    "@rslint/tsgo": ["@rslint/tsgo@0.4.2", "", { "optionalDependencies": { "@rslint/tsgo-darwin-arm64": "0.4.2", "@rslint/tsgo-darwin-x64": "0.4.2", "@rslint/tsgo-linux-arm64": "0.4.2", "@rslint/tsgo-linux-x64": "0.4.2", "@rslint/tsgo-win32-arm64": "0.4.2", "@rslint/tsgo-win32-x64": "0.4.2" }, "bin": { "tsgo": "bin/tsgo.cjs" } }, "sha512-PR7IAXXArAQ/YBLaGm5D60QXd5VzDIfJyU44errhMpQG8kM4tpORuc6JNMkslccEUXvQ23RbwOzQS5dhgqGu5Q=="],
+
+    "@rslint/tsgo-darwin-arm64": ["@rslint/tsgo-darwin-arm64@0.4.2", "", { "os": "darwin", "cpu": "arm64" }, "sha512-zjxjOlUxrGMoLN5K3yHfyuBPjHBCK06YdpjjL3/0X8+2CANvIDRiihILrc6GW7IiM6oKYjhZQKAXaxDsBxDYNA=="],
+
+    "@rslint/tsgo-darwin-x64": ["@rslint/tsgo-darwin-x64@0.4.2", "", { "os": "darwin", "cpu": "x64" }, "sha512-TRMPD9nyO8bT73QbJvYMQ4lgivk2/1TOKYIxCmmd5WRptlUFgzQWqnpa/fn5ihDnF0fQC/xmiWlITm5BrxRsDA=="],
+
+    "@rslint/tsgo-linux-arm64": ["@rslint/tsgo-linux-arm64@0.4.2", "", { "os": "linux", "cpu": "arm64" }, "sha512-FR5jgcctjl0RKjVGH1CImJrcKKTCVA5steuUlur6HXE75q7Hn5lMK2bDz+6xbelJl4fDNcw2JFeOTRlMsCfgoQ=="],
+
+    "@rslint/tsgo-linux-x64": ["@rslint/tsgo-linux-x64@0.4.2", "", { "os": "linux", "cpu": "x64" }, "sha512-Z7hinUBhrKxvl0GwXgIDyQ6ASwg4fbjKKKByiQhVtqE/MhFAW6ypqcvjR0Dx5u1eiZ7IxHJ9SnWD+OHeRwz65g=="],
+
+    "@rslint/tsgo-win32-arm64": ["@rslint/tsgo-win32-arm64@0.4.2", "", { "os": "win32", "cpu": "arm64" }, "sha512-1kAuv5wM9XhF7DsCK9PfSoYhvPSBly689pHJZ9Tu9FM2JHPft3Ka9o8NvOaKg6um3G6WWBWj1qlzeRuwKoTmAg=="],
+
+    "@rslint/tsgo-win32-x64": ["@rslint/tsgo-win32-x64@0.4.2", "", { "os": "win32", "cpu": "x64" }, "sha512-N0cE6ZzKcHR5C5dQVJR8IYhPLjAGkY17GcZkZsDoZE4rsvZkjazQcygt8uMDIU8CFDPkjA8nPRF3voWx+uOFcQ=="],
+
+    "@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
+
+    "@types/node": ["@types/node@26.6.4", "", { "dependencies": { "undici-types": "~8.9.0" } }, "sha512-ldVPDCzj7fsaGZrLB0NuHuTvJcsNasysBAqMolr/cgxrLd1xbqxIr3XJiPnHHJUCxj5sNF1vnRj9aWnrVh5Jcg=="],
+
+    "bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
+
+    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
+  }
+}
