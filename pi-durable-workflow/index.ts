@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { capturePriming } from "./context.js";
 import {
 	type WorkflowDefinition,
 	type WorkflowProposal,
@@ -12,9 +13,8 @@ import {
 	revokeProposal,
 	validateDefinition,
 	validateReviewedProposal,
-} from "../packages/pi-durable-workflow-core/index.js";
-import { fitText } from "../pi-session-tools/output-budget.js";
-import { capturePriming } from "./context.js";
+} from "./core.js";
+import { fitText } from "./output-budget.js";
 
 const ENTRY = "pi-durable-workflow:proposal:v1";
 const choices = ["Y — Approve reviewed version", "N — Reject", "Edit"];
