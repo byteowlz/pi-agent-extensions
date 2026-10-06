@@ -1,5 +1,15 @@
 # pi-selection
 
+## Agent schema hints
+
+The Selection tool advertises the version 1 spec schema and a complete example.
+Both modes require a root `title`. In Questions, each question uses `id`, `title`
+(the displayed prompt) and `kind`: `single`, `multiple`, or `text`. Choice questions
+require `options: [{id, label}]`; free-text questions omit options. **`text` is a
+kind, not the question prompt field.** Review instead uses `items` and `choices`.
+Invalid question fields report the question index, allowed fields and canonical
+suggestions. Unknown fields remain rejected rather than silently interpreted.
+
 Reusable, content-only Questions and Review interfaces for **Pi 1.0.0**. Agents provide structured content; the extension owns native TUI, protected browser presentation, validation and private durable results. No task-specific HTML/CSS/server code is needed.
 
 ## Install and use

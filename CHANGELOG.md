@@ -11,6 +11,16 @@ All notable changes to pi-agent-extensions will be documented in this file.
 - Isolate exact native Durable/AI/Chord1.0.4 from ordinary Pi1.0.0. Qualify text-only priming, two occurrences, same conversation, reopen/dedup, frozen version/run cap and revoked request with zero provider calls.
 - Enforce authorization at model transport: Durable1.0.4 hook errors alone do not block execution. No generated tools, production grants, live schedules or installation changes are enabled.
 
+### Selection schema discovery and validation hints (2.7.1)
+
+- Replace opaque Selection `spec` input with a model-visible version 1 schema
+  for Questions and Review, including canonical fields, bounds and an example.
+- Explain that question prompts use `title`, not `text`/`question`; free-text
+  answers use `kind:"text"`, and choice options use `{id,label}`.
+- Report question-index paths, canonical field suggestions, allowed fields and
+  supported kinds while retaining strict semantic/prototype validation.
+- Regression tests reproduce the reported failure; the exact native Pi 1
+  provider/tool probe verifies the actual advertised schema. Issue: piext-jeyy.
 
 ### Independent side-session identity and connections (2.7.0)
 
