@@ -133,7 +133,7 @@ describe("exportAll", () => {
 			fakeHost()
 		);
 
-		expect(env[VAR_VERSION]).toBe("2");
+		expect(env[VAR_VERSION]).toBe("3");
 		expect(env[VAR_HARNESS]).toBe("pi");
 		expect(env[VAR_SESSION_ID]).toBe("sess_123");
 		expect(env[VAR_MODEL]).toBe("anthropic/claude-3-7-sonnet");
@@ -146,6 +146,29 @@ describe("exportAll", () => {
 		expect(env[VAR_MACHINE_ID]).toBe("node-studio");
 		expect(env[VAR_NODE_HOSTNAME]).toBe("node-studio");
 		expect(env[VAR_OS_ARCH]).toBe("darwin/arm64");
+		// Harness does not OWN exec env or live status. When the upstream env
+		// has no EXEC_ENV, exportAll must NOT manufacture one (absent = unknown).
+		expect(env.AGENT_CTX_EXEC_ENV).toBeUndefined();
+		expect(env.AGENT_CTX_STATUS).toBeUndefined();
+		expect(env.AGENT_CTX_PROGRESS).toBeUndefined();
+	});
+
+	test("preserves runner-owned EXEC_ENV instead of manufacturing or clearing it", () => {
+		// A runner/target adapter sets AGENT_CTX_EXEC_ENV before pi launches.
+		// exportAll must leave it as the producer supplied it, neither clearing
+		// it nor overwriting it with something the harness guessed.
+		const env = { AGENT_CTX_EXEC_ENV: "linux-container" };
+		exportAll(
+			makeCtx({
+				sessionId: "sess_123",
+				sessionName: "my-session",
+				model: { provider: "anthropic", id: "claude-3-7-sonnet" },
+			}),
+			env,
+			fakeHost()
+		);
+		expect(env.AGENT_CTX_EXEC_ENV).toBe("linux-container");
+		expect(env[VAR_VERSION]).toBe("3");
 	});
 
 	test("emits multiplexer bag when env shows herdr", () => {
@@ -160,7 +183,7 @@ describe("exportAll", () => {
 			fakeHost()
 		);
 
-		expect(env[VAR_VERSION]).toBe("2");
+		expect(env[VAR_VERSION]).toBe("3");
 		expect(env[VAR_HARNESS]).toBe("pi");
 		expect(env[VAR_MULTIPLEXER]).toBe("herdr");
 		expect(env[VAR_AGENT_ID]).toBe("pane_99");
@@ -177,7 +200,7 @@ describe("exportAll", () => {
 		};
 		exportAll(makeCtx(), env, fakeHost());
 
-		expect(env[VAR_VERSION]).toBe("2");
+		expect(env[VAR_VERSION]).toBe("3");
 		expect(env[VAR_HARNESS]).toBe("pi");
 		expect(env[VAR_SESSION_ID]).toBeUndefined();
 		expect(env[VAR_MODEL]).toBeUndefined();
@@ -271,6 +294,18 @@ describe("mutation behavior", () => {
 			expect(env[v]).toBeUndefined();
 		}
 	});
+
+	test("clearOwned leaves runner-owned EXEC_ENV untouched", () => {
+		const env = { AGENT_CTX_EXEC_ENV: "linux-container" };
+		exportAll(makeCtx(), env, fakeHost());
+		expect(env.AGENT_CTX_EXEC_ENV).toBe("linux-container");
+		clearOwned(env);
+		// EXEC_ENV belongs to the runner, not the harness, so it survives
+		// harness shutdown and is not manufactured/cleared by the extension.
+		expect(env.AGENT_CTX_EXEC_ENV).toBe("linux-container");
+		expect(env[VAR_VERSION]).toBeUndefined();
+		expect(env[VAR_HARNESS]).toBeUndefined();
+	});
 });
 
 describe("child process propagation", () => {
@@ -310,7 +345,7 @@ console.log(JSON.stringify(out));
 
 		expect(result.status).toBe(0);
 		const payload = JSON.parse(result.stdout.trim());
-		expect(payload.AGENT_CTX_VERSION).toBe("2");
+		expect(payload.AGENT_CTX_VERSION).toBe("3");
 		expect(payload.AGENT_CTX_HARNESS).toBe("pi");
 		expect(payload.AGENT_CTX_HARNESS_SESSION_ID).toBe("sess_child");
 		expect(payload.AGENT_CTX_MODEL).toBe("anthropic/claude-3-5-haiku");

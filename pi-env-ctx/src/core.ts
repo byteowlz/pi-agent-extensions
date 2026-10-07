@@ -1,7 +1,7 @@
 import { arch, hostname, platform } from "node:os";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-export const CTX_VERSION = "2";
+export const CTX_VERSION = "3";
 export const HARNESS = "pi";
 
 export const VAR_VERSION = "AGENT_CTX_VERSION";

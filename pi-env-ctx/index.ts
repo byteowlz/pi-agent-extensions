@@ -6,7 +6,7 @@
  * harness, session, and model they are running under.
  *
  * Ownership contract (this extension owns ONLY these vars):
- *   AGENT_CTX_VERSION             "2"          — contract version
+ *   AGENT_CTX_VERSION             "3"          — contract version
  *   AGENT_CTX_HARNESS             "pi"         — fixed harness identifier
  *   AGENT_CTX_HARNESS_SESSION_ID  <session id> — Pi session id (authoritative)
  *   AGENT_CTX_MODEL               provider/id  — currently active model
@@ -24,7 +24,13 @@
  *
  * Out of scope (owned by runner/sandbox/platform, not this extension):
  *   AGENT_CTX_WORKSPACE, AGENT_CTX_PLATFORM_*, AGENT_CTX_USER_ID, AGENT_LABEL,
- *   AGENT_CTX_REQUEST_ID, AGENT_CTX_CORRELATION_ID, etc.
+ *   AGENT_CTX_REQUEST_ID, AGENT_CTX_CORRELATION_ID, AGENT_CTX_EXEC_ENV, etc.
+ *
+ * EXEC_ENV: an optional open environment/profile label owned by the runner or
+ * target adapter. This harness extension does not know its execution profile,
+ * so it leaves AGENT_CTX_EXEC_ENV unset (absent = unknown) rather than
+ * fabricating one. It also never emits a mutable AGENT_CTX_STATUS/AGENT_CTX_PROGRESS
+ * — live status belongs to lifecycle events/OSC, not env.
  *
  * Semantics:
  *   - Optional: missing values leave the var UNSET (never an empty string) so

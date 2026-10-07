@@ -1,16 +1,16 @@
 # pi-env-ctx
 
-Export `AGENT_CTX_*` metadata (v2 of the schema in `byteowlz/schemas/agent-context-env`) into
+Export `AGENT_CTX_*` metadata (v3 of the contract in `byteowlz/agent-ctx`) into
 `process.env` so spawned tools/commands can identify the active harness, session, model, and —
 when running inside herdr — the multiplexer/agent and host layers.
 
 ## What this extension sets
 
-This extension owns only the following fields (v2 of the AGENT_CTX contract):
+This extension owns only the following fields (v3 of the AGENT_CTX contract):
 
 ### Harness bag (Pi-native)
 
-- `AGENT_CTX_VERSION=2`
+- `AGENT_CTX_VERSION=3`
 - `AGENT_CTX_HARNESS=pi`
 - `AGENT_CTX_HARNESS_SESSION_ID` (current Pi session id)
 - `AGENT_CTX_MODEL` (`provider/id`, e.g. `anthropic/claude-3-7-sonnet`)
@@ -53,16 +53,26 @@ Not owned by this extension (runner/sandbox/platform responsibility):
 - `AGENT_CTX_RUN_MODE`
 - `AGENT_CTX_REQUEST_ID`, `AGENT_CTX_CORRELATION_ID`
 - `AGENT_CTX_AGENT_LABEL` (deferred: needs a socket call to herdr for the tab/pane title)
+- `AGENT_CTX_EXEC_ENV` (owned by the runner/target adapter). The harness does **not**
+  manufacture an `AGENT_CTX_EXEC_ENV` value — it never guesses an execution profile. If the
+  runner has supplied one in the environment, exportAll and clearOwned leave it as the
+  producer sent it (preserved, neither cleared nor overwritten); if none is present it stays
+  absent (unknown).
+
+This extension must **never** emit mutable live status (`AGENT_CTX_STATUS`/`AGENT_CTX_PROGRESS`)
+via env. Working/blocked/done/error belong to lifecycle events (terminal OSC 7501 or a headless
+structured activity channel), not to spawn-time metadata.
 
 Out of scope for now (follow-up via pi-oqto-bridge once oqto↔herdr are integrated): the
 platform/oqto bag.
 
 ## Producer bridging: herdr
 
-v2 follows the producer-map layering (`platform → multiplexer → harness → host`); a bag is
-emitted **only when its producing layer is present**. pi-env-ctx currently produces the
-harness bag (always), the host bag (always), and the multiplexer/agent bag (only when
-`HERDR_ENV === "1"`). Consumers must tolerate snapshots with any combination of bags.
+v3 follows the producer-map layering (`platform → multiplexer → harness → host`, plus an
+independent execution layer); a bag is emitted **only when its producing layer is present**.
+pi-env-ctx currently produces the harness bag (always), the host bag (always), and the
+multiplexer/agent bag (only when `HERDR_ENV === "1"`). Consumers must tolerate snapshots with
+any combination of bags. Missing execution facts mean unknown, never local/trusted/idle.
 
 ## Security caveat
 

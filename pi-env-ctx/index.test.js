@@ -62,7 +62,7 @@ describe("pi-env-ctx event wiring", () => {
 				})
 			);
 
-			expect(process.env.AGENT_CTX_VERSION).toBe("2");
+			expect(process.env.AGENT_CTX_VERSION).toBe("3");
 			expect(process.env.AGENT_CTX_HARNESS).toBe("pi");
 			expect(process.env.AGENT_CTX_HARNESS_SESSION_ID).toBe("sess_wired");
 			expect(process.env.AGENT_CTX_MODEL).toBe("anthropic/claude-3-7-sonnet");
