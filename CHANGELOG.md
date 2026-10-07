@@ -4,6 +4,17 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### SSH-agent connection and cache recovery (2.9.2)
+
+- **pi-ssh-key 1.2.1:** bounded SSH protocol liveness checks replace inode/PID
+  assumptions, including borrowed agents with no PID. Rebind changed sockets
+  and clear stale key/passphrase bookkeeping; guard unload/lifetime refresh.
+- Inherited govnr/forwarded/host outages fail closed without private-agent
+  fallback; owned agents can restart keyless. Pending probes are fenced on
+  shutdown, stale PIDs aren't signalled, and absent env vars are truly deleted.
+- Six regression tests cover real stale Unix sockets, empty/policy/silent
+  agents, cache rebinding, shutdown and a disposable real owned ssh-agent.
+
 ### Quiet, stable subagent policy notices (2.9.1)
 
 - Replace visible full-JSON settings messages with bounded, hidden agent-context hints; full diagnostic snapshots remain available through introspection.

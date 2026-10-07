@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.1
+
+- Probe cached and inherited agents with a bounded SSH protocol round trip;
+  a socket inode or missing PID no longer passes as a live agent. Empty agents
+  and policy proxies refusing identity enumeration are correctly recognized.
+- Follow changed inherited sockets, clear stale cached keys/passphrases, and
+  refuse stale unload/timeout operations or private fallback for unavailable
+  inherited govnr/forwarded/host agents. Lost owned agents restart keyless.
+- Fence pending connection work on shutdown; don't signal known-stale owned
+  PIDs, and remove absent environment variables instead of assigning the
+  literal string `undefined`. Report failed loads as errors (mixed as warnings).
+- Regression coverage uses synthetic keys, real Unix sockets and a real
+  disposable ssh-agent; no private user keys or history are read.
+
 ## 1.2.0
 
 - **Fuzzy multi-select key picker.** `/ssh-key-load` now opens a picker with a

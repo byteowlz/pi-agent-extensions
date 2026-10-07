@@ -14,6 +14,8 @@ pi install npm:@byteowlz/pi-ssh-key
 
 Or for local development, drop the directory at
 `~/.pi/agent/extensions/pi-ssh-key/` — pi auto-discovers it on startup.
+When updating a copied installation, replace the **whole directory**, including
+`agent-connection.ts`, then reload/restart Pi; replacing `index.ts` alone is insufficient.
 
 ## Why
 
@@ -32,9 +34,17 @@ way to populate it:
   (never a GUI askpass, never a TTY). Multiple selected keys are loaded one
   at a time, so passphrase prompts appear sequentially, one per key.
 - **Scope** — the agent either reuses your already-running agent (so your other
-  identities stay intact) or, if none is reachable, starts a dedicated
+  identities stay intact) or, if `SSH_AUTH_SOCK` is unset, starts a dedicated
   `ssh-agent -a <private socket>` and points `SSH_AUTH_SOCK` / `SSH_AGENT_PID`
   at it for this process. Unload restores the environment exactly.
+  Connections are verified by a bounded SSH-agent protocol round trip, not
+  socket-file existence or PID metadata. Empty agents and policy refusals count
+  as live. Changed sockets invalidate cached keys/passphrases; stale sockets
+  block loading, unloading and lifetime refresh rather than targeting another
+  agent. A dead pi-owned agent can restart keyless. An unavailable inherited
+  govnr/forwarded/host agent **never** causes private-agent fallback: reconnect
+  that service and retry, or restart Pi with its current `SSH_AUTH_SOCK` if the
+  upstream socket path changed.
 - **herdr-aware** — while a passphrase prompt is open, the pane is reported to
   herdr as `blocked` (source `pi-ssh-key`) so herdr's sidebar shows it
   correctly; state authority is handed back to herdr's detection afterwards.
