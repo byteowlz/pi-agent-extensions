@@ -19,9 +19,11 @@
  *   - If pi's process already has a live `SSH_AUTH_SOCK` (e.g. the user's own
  *     agent), we add the key to it and track only the keys we added, so unload
  *     removes just ours — the user's other identities stay untouched.
- *   - Otherwise we start a dedicated, pi-owned `ssh-agent -a <sock>` with a
+ *   - Only when SSH_AUTH_SOCK is unset do we start a dedicated, pi-owned
+ *     `ssh-agent -a <sock>` with a
  *     private socket, set `SSH_AUTH_SOCK` / `SSH_AGENT_PID` into `process.env`,
- *     and restore the previous values on unload/shutdown.
+ *     and restore the previous values on unload/shutdown. Unavailable inherited
+ *     agents fail closed instead of bypassing govnr/forwarded/host restrictions.
  *
  * Passphrases are held only in module memory (never written to disk), cached
  * while a protected key is loaded so timeout refreshes don't re-prompt, and
@@ -45,6 +47,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Key, fuzzyFilter, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { probeAgent, socketIdentity } from "./agent-connection.js";
 
 // ---------------------------------------------------------------------------
 // herdr blocked-state reporting (best-effort; only inside a herdr pane)
@@ -96,6 +99,8 @@ interface LoadedKey {
 interface PiAgent {
 	/** Socket path we tell ssh/client programs to use. */
 	authSock: string;
+	/** Clear tracked keys when an endpoint is replaced. */
+	socketIdentity?: string;
 	/** The ssh-agent process pid (undefined when reusing the user's agent). */
 	pid?: number;
 	/** True when we started this agent and therefore own its lifetime. */
@@ -109,6 +114,8 @@ interface PiAgent {
 const DEFAULT_TIMEOUT_SECS = 0; // no expiry by default
 
 let agent: PiAgent | undefined;
+let agentEpoch = 0;
+let agentResolution: Promise<PiAgent> | undefined;
 /** Default timeout (seconds) applied to future `/ssh-key-load` calls. */
 let defaultTimeoutSecs = DEFAULT_TIMEOUT_SECS;
 const MAX_PROMPT_ATTEMPTS = 3;
@@ -430,70 +437,120 @@ async function oqtoProxyLoad(keyPath: string, ctx: ExtensionCommandContext): Pro
 // ssh-agent lifecycle
 // ---------------------------------------------------------------------------
 
-function socketAlive(sock: string): boolean {
-	return existsSync(sock) && statSync(sock).isSocket();
+async function ensureAgent(): Promise<PiAgent> {
+	if (agentResolution) return agentResolution;
+	const pending = resolveAgent(agentEpoch);
+	agentResolution = pending;
+	try {
+		return await pending;
+	} finally {
+		if (agentResolution === pending) agentResolution = undefined;
+	}
 }
 
-async function ensureAgent(): Promise<PiAgent> {
-	if (agent && (!agent.pid || socketAlive(agent.authSock))) return agent;
+function checkAgentEpoch(epoch: number): void {
+	if (epoch !== agentEpoch) throw new Error("SSH agent operation cancelled by session shutdown");
+}
 
+async function resolveAgent(epoch: number, attempts = 0): Promise<PiAgent> {
+	if (attempts > 3) throw new Error("SSH agent authority keeps changing; retry after it stabilizes");
+	const previous = agent;
+	const inherited = process.env.SSH_AUTH_SOCK;
+	if (previous && inherited === previous.authSock && previous.socketIdentity === socketIdentity(previous.authSock)) {
+		const alive = await probeAgent(previous.authSock);
+		checkAgentEpoch(epoch);
+		if (alive && process.env.SSH_AUTH_SOCK === previous.authSock && previous.socketIdentity === socketIdentity(previous.authSock))
+			return previous;
+	}
+	checkAgentEpoch(epoch);
+	if (previous) {
+		clearPassphrases();
+		// Cleanup only a verified owned endpoint; dead PIDs may be recycled.
+		// Do not overwrite authority supplied externally while probing/cleaning up.
+		if (previous.owned) {
+			await stopOwnedAgent(previous);
+			checkAgentEpoch(epoch);
+			if (process.env.SSH_AUTH_SOCK === previous.authSock) restoreEnv();
+		}
+		agent = undefined;
+	}
 	const existingSock = process.env.SSH_AUTH_SOCK;
-	if (existingSock && socketAlive(existingSock)) {
+	if (existingSock) {
+		const alive = await probeAgent(existingSock);
+		checkAgentEpoch(epoch);
+		if (process.env.SSH_AUTH_SOCK !== existingSock) return resolveAgent(epoch, attempts + 1);
+		if (!alive)
+			throw new Error(
+				"Inherited SSH agent is unavailable. Reconnect/restart the govnr, forwarded or host agent and retry; refusing a private-agent fallback."
+			);
 		agent = {
 			authSock: existingSock,
+			socketIdentity: socketIdentity(existingSock),
 			pid: Number.parseInt(process.env.SSH_AGENT_PID ?? "", 10) || undefined,
 			owned: false,
 			loadedKeys: new Map(),
 		};
 		return agent;
 	}
+	return createOwnedAgent(epoch, attempts);
+}
 
-	// Start a dedicated, pi-owned agent with a private socket.
+async function createOwnedAgent(epoch: number, attempts: number): Promise<PiAgent> {
+	const existingSock = process.env.SSH_AUTH_SOCK;
+	if (existingSock) return resolveAgent(epoch, attempts + 1);
+	// No inherited authority: create a dedicated, keyless pi-owned agent.
+	const previousPid = process.env.SSH_AGENT_PID;
 	const sock = join(tmpdir(), `pi-ssh-agent-${process.pid}-${randomUUID().slice(0, 8)}.sock`);
-	const res = await runProcess("ssh-agent", ["-a", sock]);
-	if (res.code !== 0 || !socketAlive(sock)) {
-		throw new Error(`failed to start ssh-agent: ${res.stderr.trim() || res.stdout.trim()}`);
-	}
-
+	const res = await runProcessInput("ssh-agent", ["-a", sock], "", process.env, 5000);
 	const parsedSock = /SSH_AUTH_SOCK=([^;]+)/.exec(res.stdout)?.[1]?.trim() ?? sock;
 	const parsedPid = Number.parseInt(/SSH_AGENT_PID=(\d+)/.exec(res.stdout)?.[1] ?? "", 10) || undefined;
-
-	agent = {
+	const created: PiAgent = {
 		authSock: parsedSock,
+		socketIdentity: socketIdentity(parsedSock),
 		pid: parsedPid,
 		owned: true,
 		loadedKeys: new Map(),
 		prevAuthSock: existingSock,
-		prevAgentPid: process.env.SSH_AGENT_PID,
+		prevAgentPid: previousPid,
 	};
-
+	const alive = res.code === 0 && (await probeAgent(parsedSock));
+	if (!alive || epoch !== agentEpoch) {
+		if (alive) await stopOwnedAgent(created);
+		checkAgentEpoch(epoch);
+		throw new Error(`failed to start responsive ssh-agent: ${res.stderr.trim() || "agent unavailable"}`);
+	}
+	if (process.env.SSH_AUTH_SOCK !== existingSock) {
+		await stopOwnedAgent(created);
+		checkAgentEpoch(epoch);
+		return resolveAgent(epoch, attempts + 1);
+	}
+	agent = created;
 	process.env.SSH_AUTH_SOCK = parsedSock;
 	if (parsedPid) process.env.SSH_AGENT_PID = String(parsedPid);
-	else process.env.SSH_AGENT_PID = undefined;
-
-	return agent;
+	else delete process.env.SSH_AGENT_PID;
+	return created;
 }
 
 function restoreEnv(): void {
 	if (!agent?.owned) return;
 	if (agent.prevAuthSock) process.env.SSH_AUTH_SOCK = agent.prevAuthSock;
-	else process.env.SSH_AUTH_SOCK = undefined;
+	else delete process.env.SSH_AUTH_SOCK;
 	if (agent.prevAgentPid) process.env.SSH_AGENT_PID = agent.prevAgentPid;
-	else process.env.SSH_AGENT_PID = undefined;
+	else delete process.env.SSH_AGENT_PID;
 }
 
-async function stopOwnedAgent(): Promise<void> {
-	if (!agent?.owned) return;
-	if (agent.pid) {
+async function stopOwnedAgent(owned = agent): Promise<void> {
+	if (!owned?.owned || !owned.socketIdentity || owned.socketIdentity !== socketIdentity(owned.authSock)) return;
+	if (owned.pid && (await probeAgent(owned.authSock)) && owned.socketIdentity === socketIdentity(owned.authSock)) {
 		try {
-			process.kill(agent.pid, "SIGTERM");
+			process.kill(owned.pid, "SIGTERM");
 		} catch {
 			// already gone
 		}
 	}
-	if (existsSync(agent.authSock)) {
+	if (owned.socketIdentity === socketIdentity(owned.authSock)) {
 		try {
-			unlinkSync(agent.authSock);
+			unlinkSync(owned.authSock);
 		} catch {
 			// ignore
 		}
@@ -679,11 +736,16 @@ async function agentIdentities(a: PiAgent): Promise<string> {
 }
 
 async function loadKey(keyPath: string, timeoutSecs: number, ctx: ExtensionCommandContext): Promise<LoadedKey> {
+	const epoch = agentEpoch;
 	const name = basename(keyPath);
 	const a = await ensureAgent();
+	checkAgentEpoch(epoch);
 	const passphrase = await getPassphraseForKey(keyPath, name, ctx);
+	checkAgentEpoch(epoch);
 	const fp = await fingerprint(keyPath);
-
+	checkAgentEpoch(epoch);
+	if (agent !== a || process.env.SSH_AUTH_SOCK !== a.authSock || a.socketIdentity !== socketIdentity(a.authSock))
+		throw new Error("SSH agent authority changed during key loading; retry against the current agent");
 	const res = await addKeyToAgent(a, keyPath, passphrase, timeoutSecs);
 
 	// macOS `ssh-add` can exit 1 (printing "No such file or directory") yet still
@@ -702,14 +764,33 @@ async function loadKey(keyPath: string, timeoutSecs: number, ctx: ExtensionComma
 		throw new Error(`failed to add key ${name}: ${msg}`);
 	}
 
+	checkAgentEpoch(epoch);
 	const loaded: LoadedKey = { keyPath, name, fingerprint: fp, protected: Boolean(passphrase), passphrase };
 	a.loadedKeys.set(keyPath, loaded);
 	return loaded;
 }
 
-async function unloadKey(keyPath: string): Promise<string> {
+async function trackedAgent(): Promise<PiAgent> {
+	const epoch = agentEpoch;
 	const a = agent;
-	if (!a) return "no ssh key is loaded";
+	if (!a) throw new Error("No tracked SSH agent");
+	const matches = () =>
+		agent === a && process.env.SSH_AUTH_SOCK === a.authSock && a.socketIdentity === socketIdentity(a.authSock);
+	const alive = matches() && (await probeAgent(a.authSock));
+	checkAgentEpoch(epoch);
+	if (!alive || !matches()) {
+		for (const key of a.loadedKeys.values()) key.passphrase = undefined;
+		a.loadedKeys.clear();
+		throw new Error(
+			"Tracked SSH agent is unavailable or changed. Reload keys against the current agent; refusing stale identity operations."
+		);
+	}
+	return a;
+}
+
+async function unloadKey(keyPath: string): Promise<string> {
+	if (!agent) return "no ssh key is loaded";
+	const a = await trackedAgent();
 	if (!a.loadedKeys.has(keyPath)) return `key ${basename(keyPath)} is not loaded`;
 	const res = await removeKeyFromAgent(a, keyPath);
 	a.loadedKeys.delete(keyPath);
@@ -727,8 +808,8 @@ async function unloadKey(keyPath: string): Promise<string> {
 }
 
 async function unloadAll(): Promise<string> {
-	const a = agent;
-	if (!a) return "no ssh key is loaded";
+	if (!agent) return "no ssh key is loaded";
+	const a = await trackedAgent();
 	const removed: string[] = [];
 	for (const path of [...a.loadedKeys.keys()]) {
 		const res = await runProcess("ssh-add", ["-d", path], { ...process.env, SSH_AUTH_SOCK: a.authSock });
@@ -751,6 +832,7 @@ async function setTimeouts(timeoutSecs: number): Promise<string> {
 		defaultTimeoutSecs = timeoutSecs;
 		return `no keys loaded; default timeout set to ${timeoutSecs > 0 ? `${timeoutSecs}s` : "no expiry"}`;
 	}
+	await trackedAgent();
 	const results: string[] = [];
 	for (const [path, key] of a.loadedKeys) {
 		const res = await addKeyToAgent(a, path, key.passphrase, timeoutSecs);
@@ -963,6 +1045,7 @@ function formatTimeout(secs: number): string {
 
 export default function piSshKey(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", async () => {
+		agentEpoch++;
 		const a = agent;
 		if (a?.owned) {
 			await stopOwnedAgent();
@@ -976,6 +1059,7 @@ export default function piSshKey(pi: ExtensionAPI): void {
 		description:
 			"Pick one or more SSH private keys (fuzzy search, multi-select) and load them into an ssh-agent for this process",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			const epoch = agentEpoch;
 			const cwd = process.cwd();
 			const config = loadConfig(cwd);
 			const { path: argPath, timeout } = parseArgs(args);
@@ -1005,6 +1089,7 @@ export default function piSshKey(pi: ExtensionAPI): void {
 			const results: string[] = [];
 			let loadedAny = false;
 			for (const keyPath of keyPaths) {
+				if (epoch !== agentEpoch) return;
 				const keyName = basename(keyPath);
 				// In an oqto proxy session the agent socket is not a real ssh-agent
 				// (it blocks add-identity) and keys live on the host, so a load
@@ -1023,8 +1108,13 @@ export default function piSshKey(pi: ExtensionAPI): void {
 					results.push(`failed ${keyName}: ${error instanceof Error ? error.message : "error"}`);
 				}
 			}
+			if (epoch !== agentEpoch) return;
 			if (loadedAny) defaultTimeoutSecs = timeoutSecs;
-			if (results.length > 0) ctx.ui.notify(results.join("\n"), "info");
+			if (results.length > 0)
+				ctx.ui.notify(
+					results.join("\n"),
+					loadedAny ? (results.some((row) => row.startsWith("failed ")) ? "warning" : "info") : "error"
+				);
 		},
 	});
 
