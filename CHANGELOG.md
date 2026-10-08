@@ -4,6 +4,22 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Scoped prompt stash and editor-fill commands (2.10.0)
+
+- New **pi-prompt-stash 1.0.0**: Ctrl+Alt+S parks/stashes drafts without replacing
+  editor text; /stash, /park and /pop manage session, exact-cwd and global private
+  JSON sidecars. Save before clearing, verify restoration before removal.
+- Searchable user-role history multi-selection, all recorded branches and raw
+  pre-compaction prompts; full preview, attachment-omission confirmation,
+  stash/promote/both actions. Broader scans are explicit, asynchronous and bounded.
+- Reviewed scoped p- commands fill the editor only: no provider calls, submission,
+  executable generation or model tools. Nonempty/changed drafts, command collisions
+  and stale session UI are guarded. Atomic private stores with fail-fast locking.
+- Delegated /side tmux diagnosis added three whole-file fork regressions. Current
+  source and official Pi1 preserve raw pre-compaction and latest messages; the
+  reported loss was not reproduced. Compaction still limits projected/displayed
+  context intentionally; this is regression evidence, not a claimed tmux fix.
+
 ### SSH-agent connection and cache recovery (2.9.2)
 
 - **pi-ssh-key 1.2.1:** bounded SSH protocol liveness checks replace inode/PID
