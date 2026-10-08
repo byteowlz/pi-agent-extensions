@@ -20,6 +20,7 @@
     "pi-read-file-guard": {},
     "pi-read-image-guard": {},
     "pi-selection": { "Selection": "owner-coordination-pending" },
+    "pi-prompt-stash": {},
     "pi-ssh-key": {},
     "pi-statusline": {},
     "pi-sudo": { "sudo_exec": "implemented", "remote_sudo_exec": "implemented" },

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "09c5b51f-97b4-4d08-b67b-b5a8406ef38e",
+      "text": "Draft a dry-run report of stale issues; do not close anything.",
+      "createdAt": "2026-10-08T08:00:00.000Z",
+      "label": "Weekly issue report"
+    }
+  ],
+  "commands": [
+    {
+      "id": "d0e19156-642c-42b4-a57c-6fbfd70f46f1",
+      "name": "p-issue-report",
+      "text": "Draft a dry-run report of stale issues; do not close anything.",
+      "createdAt": "2026-10-08T08:00:00.000Z"
+    }
+  ]
+}

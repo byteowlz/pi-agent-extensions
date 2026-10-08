@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pi prompt stash sidecar v1",
+  "description": "Private text-only state; runtime also enforces UTF-8 byte/document/combined-entry limits and unique IDs/names.",
+  "type": "object",
+  "required": ["version", "entries", "commands"],
+  "properties": {
+    "version": {"const": 1},
+    "entries": {"type": "array", "maxItems": 2000, "items": {"$ref": "#/$defs/entry"}},
+    "commands": {"type": "array", "maxItems": 2000, "items": {"$ref": "#/$defs/command"}}
+  },
+  "$defs": {
+    "entry": {
+      "type": "object", "required": ["id", "text", "createdAt"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "text": {"type": "string", "maxLength": 131072},
+        "createdAt": {"type": "string"},
+        "label": {"type": "string"},
+        "source": {"type": "object", "properties": {"sessionId": {"type": "string"}, "entryId": {"type": "string"}, "sessionFile": {"type": "string"}}}
+      }
+    },
+    "command": {
+      "type": "object", "required": ["id", "name", "text", "createdAt"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "pattern": "^p-[a-z][a-z0-9-]{0,45}$"},
+        "text": {"type": "string", "maxLength": 131072},
+        "createdAt": {"type": "string"}
+      }
+    }
+  }
+}

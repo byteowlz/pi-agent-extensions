@@ -15,6 +15,7 @@ extensions and [migration evidence](./docs/pi-1-baseline.md) for proof limits.
 | [pi-session-tools](./pi-session-tools/) | Session routing and subagent orchestration |
 | [pi-history-search](./pi-history-search/) | Search/read previous sessions |
 | [pi-introspection](./pi-introspection/) | Session/model/context information |
+| [pi-prompt-stash](./pi-prompt-stash/) | Scoped draft park/stash/pop, user-history multiselect and reusable editor-fill commands |
 | [pi-durable-workflow](./pi-durable-workflow/) | Experimental versioned intent/Y-N-Edit review; isolated native qualification, production recurrence unbound |
 | [pi-env-ctx](./pi-env-ctx/) | Pi-native child-process metadata |
 | [pi-oqto-bridge](./pi-oqto-bridge/) | Oqto runtime integration |
