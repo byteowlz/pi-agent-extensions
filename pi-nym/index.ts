@@ -13,7 +13,7 @@ import { basename, dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Bundle, FORMAT, decrypt, ensureSecret, listBackups, parseBundle, writeBackup } from "./backup.js";
 import { type BackupMode, type PiNymConfig, backupDir, loadConfig } from "./config.js";
-import { type Candidate, apply, findNym, findOnPath, isCapable, plan } from "./nym.js";
+import { type Candidate, type ProgressEvent, apply, findNym, findOnPath, fraction, isCapable, plan } from "./nym.js";
 import { type Decision, RedactionPicker, type Styler, groupLabel, printable } from "./picker.js";
 import { buildSession, hasUnredactedContent, residuals, sessionFileName, uuidv7 } from "./session.js";
 
@@ -73,6 +73,35 @@ async function confirmResiduals(ctx: ExtensionCommandContext, redacted: string, 
 	);
 }
 
+const PHASES: Record<ProgressEvent["phase"], string> = {
+	detect: "patterns",
+	ner: "names (NER)",
+	replace: "replacing",
+	done: "done",
+};
+
+/** Text progress bar, e.g. `[██████░░░░░░] 52%`. */
+export function bar(value: number, width = 24): string {
+	const clamped = Math.max(0, Math.min(1, value));
+	const filled = Math.round(clamped * width);
+	return `[${"█".repeat(filled)}${"░".repeat(width - filled)}] ${Math.round(clamped * 100)}%`;
+}
+
+/** A widget above the editor showing one nym pass. */
+function progressWidget(ctx: ExtensionCommandContext, title: string) {
+	const started = Date.now();
+	let shown = 0;
+	const draw = (event?: ProgressEvent) => {
+		// Never move backwards, even if a phase reports an empty total first.
+		shown = Math.max(shown, event ? fraction(event) : 0);
+		const seconds = Math.round((Date.now() - started) / 1000);
+		const detail = event ? `${PHASES[event.phase]} • ${seconds}s` : "starting";
+		ctx.ui.setWidget("pi-nym", [`nym: ${title} ${bar(shown)}  ${detail}`]);
+	};
+	draw();
+	return { onProgress: draw, clear: () => ctx.ui.setWidget("pi-nym", undefined) };
+}
+
 interface Prepared {
 	original: string;
 	newPath: string;
@@ -102,9 +131,8 @@ async function prepare(ctx: ExtensionCommandContext, config: PiNymConfig, work: 
 	const snapshot = join(work, basename(original));
 	copyFileSync(original, snapshot);
 	const paths = { work, snapshot };
-	ctx.ui.setStatus("pi-nym", "nym: scanning session…");
-	const candidates = await plan(binary, paths, config, ctx.signal);
-	ctx.ui.setStatus("pi-nym", undefined);
+	const scanning = progressWidget(ctx, "scanning session (1/2)");
+	const candidates = await plan(binary, paths, config, ctx.signal, undefined, scanning.onProgress).finally(scanning.clear);
 	if (!candidates.length) {
 		ctx.ui.notify("nym found nothing to redact in this session.", "info");
 		return undefined;
@@ -123,15 +151,16 @@ async function prepare(ctx: ExtensionCommandContext, config: PiNymConfig, work: 
 	) {
 		return undefined;
 	}
-	ctx.ui.setStatus("pi-nym", "nym: redacting…");
+	const redacting = progressWidget(ctx, "redacting (2/2)");
 	const applied = await apply(
 		binary,
 		paths,
 		decision.keep.map((c) => c.value),
 		config,
-		ctx.signal
-	);
-	ctx.ui.setStatus("pi-nym", undefined);
+		ctx.signal,
+		undefined,
+		redacting.onProgress
+	).finally(redacting.clear);
 	const sessionText = readFileSync(snapshot, "utf8");
 	const id = uuidv7();
 	const now = new Date();
@@ -196,7 +225,7 @@ async function redactSession(ctx: ExtensionCommandContext, config: PiNymConfig):
 			ctx.ui.notify(`Switch cancelled. The redacted session is at ${prepared.newPath}; the original is unchanged.`, "warning");
 		}
 	} catch (error) {
-		ctx.ui.setStatus("pi-nym", undefined);
+		ctx.ui.setWidget("pi-nym", undefined);
 		ctx.ui.notify(`pi-nym: ${(error as Error).message}. The session is unchanged.`, "error");
 	} finally {
 		rmSync(work, { recursive: true, force: true });
@@ -245,7 +274,9 @@ export async function nymStatus(config: PiNymConfig, env: NodeJS.ProcessEnv = pr
 	const onPath = findOnPath("nym", env);
 	if (onPath && (await isCapable(onPath))) return undefined;
 	const fallback = await findNym(config, undefined, env).catch(() => undefined);
-	const problem = onPath ? `nym on PATH (${onPath}) is too old for /nym (needs \`traces anon --plan\`)` : "nym is not on PATH";
+	const problem = onPath
+		? `nym on PATH (${onPath}) is too old for /nym (needs \`traces anon --plan --progress-json\`)`
+		: "nym is not on PATH";
 	return fallback
 		? `pi-nym: ${problem}; using ${fallback}. Install a current nym to silence this.`
 		: `pi-nym: ${problem} and no usable local build was found; /nym will not work until nym is installed.`;

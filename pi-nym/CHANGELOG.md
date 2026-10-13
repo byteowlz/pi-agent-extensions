@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0
+
+- Progress bar above the editor while nym scans and redacts (`scanning session (1/2)`, `redacting (2/2)`), driven by `nym traces anon --progress-json`; it never moves backwards. Requires a nym with `--progress-json`; older builds are reported at session start.
+
 ## 0.1.0
 
 - `/nym` redacts the current session locally with `nym traces anon`: scan a snapshot, choose values in a grouped checklist (all selected by default, secrets first, context preview), redact into a new session file and switch to it. Selected values still present afterwards (short numbers, dates, URLs that nym only replaces where detected) require confirmation.
