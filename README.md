@@ -5,7 +5,7 @@ Custom extensions for the [pi coding agent](https://github.com/badlogic/pi-mono)
 ## Maintained extensions
 
 The 2.2.0 collection targets **Pi 1.0.0**. Pre-1.0 host compatibility is no
-longer promised. There are 25 active extensions: 17 selected to keep, six
+longer promised. There are 26 active extensions: 17 selected to keep, six
 still under review and the new selection/capabilities pair. See [the archive](./archive/README.md) for the five retired
 extensions and [migration evidence](./docs/pi-1-baseline.md) for proof limits.
 
@@ -24,6 +24,7 @@ extensions and [migration evidence](./docs/pi-1-baseline.md) for proof limits.
 | [pi-capabilities](./pi-capabilities/) | Optional versioned presentation discovery; not permission grants |
 | [pi-custom-context-files](./pi-custom-context-files/) | Additional instruction files |
 | [pi-kyz](./pi-kyz/) | Secret injection and output scrubbing |
+| [pi-nym](./pi-nym/) | Local session redaction with nym before cloud models; encrypted backups |
 | [pi-mmry](./pi-mmry/) | Scoped memory integration |
 | [pi-sudo](./pi-sudo/) | Guarded privilege elevation |
 | [pi-trx-picker](./pi-trx-picker/) | Issue picker |

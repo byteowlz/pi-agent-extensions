@@ -1,0 +1,41 @@
+{
+  "name": "@byteowlz/pi-nym",
+  "version": "0.1.0",
+  "description": "Redact the current Pi session locally with nym before using a cloud model, with an encrypted backup of the original",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "privacy",
+    "redaction"
+  ],
+  "files": [
+    "*.ts",
+    "!*.test.ts",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "*.schema.json",
+    "*.example.json"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "homepage": "https://github.com/byteowlz/pi-agent-extensions/tree/main/pi-nym",
+  "bugs": {
+    "url": "https://github.com/byteowlz/pi-agent-extensions/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/byteowlz/pi-agent-extensions.git",
+    "directory": "pi-nym"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.0.0",
+    "@earendil-works/pi-tui": "1.0.0"
+  },
+  "license": "MIT"
+}

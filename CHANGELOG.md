@@ -4,6 +4,14 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Local session redaction (2.11.0)
+
+- New **pi-nym 0.1.0**: `/nym` redacts the current session with nym's local trace
+  anonymization, after a grouped checklist of every value it would replace, into a
+  new session it switches to. The original is kept, deleted, or stored as a
+  verified GnuPG backup keyed by a kyz secret; `/nym-restore` brings it back.
+  Cloud-model guard and a startup warning when `nym` is missing from PATH.
+
 ### Scoped prompt stash and editor-fill commands (2.10.0)
 
 - New **pi-prompt-stash 1.0.0**: Ctrl+Alt+S parks/stashes drafts without replacing
