@@ -60,7 +60,10 @@ export const run: Runner = (binary, args, { signal, timeoutMs, onStderrLine }) =
 export async function isCapable(binary: string, runner: Runner = run): Promise<boolean> {
 	try {
 		const result = await runner(binary, ["traces", "anon", "--help"], { timeoutMs: 15000 });
-		return result.code === 0 && ["--plan", "--keep-values-file", "--progress-json"].every((flag) => result.stdout.includes(flag));
+		return (
+			result.code === 0 &&
+			["--plan", "--apply-plan", "--keep-values-file", "--progress-json"].every((flag) => result.stdout.includes(flag))
+		);
 	} catch {
 		return false;
 	}
@@ -96,8 +99,8 @@ export async function findNym(config: PiNymConfig, runner: Runner = run, env: No
 	}
 	throw new Error(
 		config.nymBinary
-			? "the configured nymBinary does not support `traces anon --plan --progress-json`; update nym"
-			: "no nym with `traces anon --plan --progress-json` found; install a current nym or set nymBinary in pi-nym.json"
+			? "the configured nymBinary does not support `traces anon --plan --apply-plan --progress-json`; update nym"
+			: "no nym with `traces anon --plan --apply-plan --progress-json` found; install a current nym or set nymBinary in pi-nym.json"
 	);
 }
 
@@ -201,23 +204,41 @@ export interface Applied {
 export async function apply(
 	binary: string,
 	paths: Paths,
-	keep: string[],
+	decision: { redact: Candidate[]; keep: Candidate[] },
 	config: PiNymConfig,
 	signal?: AbortSignal,
 	runner: Runner = run,
 	onProgress?: OnProgress
 ): Promise<Applied> {
+	// Replace exactly the reviewed values; nym runs no detectors in this pass.
+	const name = basename(paths.snapshot);
+	const approvedPath = join(paths.work, "approved.json");
+	writeFileSync(approvedPath, JSON.stringify({ sessions: [{ session: name, candidates: decision.redact }] }), {
+		mode: 0o600,
+	});
 	const keepPath = join(paths.work, "keep.txt");
-	writeFileSync(keepPath, keep.map((v) => `${v}\n`).join(""), { mode: 0o600 });
+	writeFileSync(keepPath, decision.keep.map((c) => `${c.value}\n`).join(""), { mode: 0o600 });
 	const out = join(paths.work, "out");
 	const keys = join(paths.work, "keys");
 	const result = await withProgress(runner, onProgress)(
 		binary,
-		["traces", "anon", paths.snapshot, "-o", out, "--keys", keys, "--keep-values-file", keepPath, ...commonArgs(config)],
+		[
+			"traces",
+			"anon",
+			paths.snapshot,
+			"-o",
+			out,
+			"--keys",
+			keys,
+			"--apply-plan",
+			approvedPath,
+			"--keep-values-file",
+			keepPath,
+			...commonArgs(config),
+		],
 		{ signal, timeoutMs: config.timeoutMs }
 	);
 	if (result.code !== 0) throw failure("redaction", result);
-	const name = basename(paths.snapshot);
 	return {
 		redacted: readFileSync(join(out, name), "utf8"),
 		keys: readFileSync(join(keys, name.replace(/\.jsonl$/, ".keys.jsonl")), "utf8"),

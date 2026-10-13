@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+
+- Redaction no longer re-scans the session: the reviewed values are applied with `nym traces anon --apply-plan` (about 0.2 s instead of a second full scan), so the result is exactly what was selected. Repeated `/nym` runs reuse nym's NER cache and only scan new text. The leftover check uses nym's word-boundary rule, so digits inside longer numbers no longer count. Requires a nym with `--apply-plan`.
+
 ## 0.3.0
 
 - Categories are rows in the redaction menu: Space on a category selects or unselects all its values, `[-]` marks partial selections, and ←/→ fold and unfold categories. Lists longer than the view open as a folded category overview with sample values; typing a filter searches inside folded categories.
