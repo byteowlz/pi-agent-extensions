@@ -42,6 +42,20 @@ const reply = await new Promise((resolve, reject) => {
  c.once('data', data => { resolve(JSON.parse(data)); c.destroy(); });
 });
 assert.equal(reply.ok, true); assert.equal(messages.length, 1);
+async function shareFile(payload) {
+ return await new Promise((resolve, reject) => {
+  const c = net.connect(socket); c.once('error', reject);
+  c.once('connect', () => c.write(JSON.stringify(payload) + '\\n'));
+  c.once('data', data => { resolve(JSON.parse(data)); c.destroy(); });
+ });
+}
+assert.equal((await shareFile({kind:'file', path:'/incoming/one.png', bytes:1024, file_mime_type:'image/png', note:'Compare these photos'})).ok, true);
+assert.equal((await shareFile({kind:'file', path:'/incoming/two.png', bytes:2048, file_mime_type:'image/png'})).ok, true);
+const files = messages.slice(1).join('\\n');
+assert.equal(files.includes('Shared from phone via xlatch (file), saved to disk:'), false);
+assert.equal(files.split('Compare these photos').length - 1, 1);
+assert.ok(files.includes('/incoming/one.png')); assert.ok(files.includes('/incoming/two.png'));
+
 fs.unlinkSync(socket); fs.symlinkSync('/tmp/not-the-owned-session.sock', socket);
 await command('status', ctx);
 assert.ok(status.includes('(offline)'));

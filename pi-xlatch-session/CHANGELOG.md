@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.3
+
+- Keep file deliveries concise: show the sender note, local file path, MIME type and size without repeating the sharing boilerplate for every attachment.
+
 ## 2.0.2
 
 - Associate persisted slot state with the owning session UUID. CLI startup forks
