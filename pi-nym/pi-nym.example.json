@@ -1,0 +1,9 @@
+{
+  "$schema": "./pi-nym.schema.json",
+  "profiles": ["work"],
+  "ner": true,
+  "nerScope": "auto",
+  "defaultBackup": "encrypted",
+  "guard": "confirm",
+  "localProviders": ["ollama", "lmstudio", "llamacpp", "LM-Studio", "zgx"]
+}

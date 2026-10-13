@@ -1,0 +1,155 @@
+/**
+ * Thin wrapper around `nym traces anon`: plan (report candidates) and apply
+ * (redact with explicit keep decisions). nym does all detection locally.
+ */
+
+import { spawn } from "node:child_process";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { basename, delimiter, join } from "node:path";
+import { type PiNymConfig, xdgHome } from "./config.js";
+
+export interface Candidate {
+	value: string;
+	class: string;
+	source: "detected" | "listed" | "propagated";
+	credential: boolean;
+	count: number;
+	context: string;
+}
+
+export interface RunResult {
+	code: number | null;
+	stdout: string;
+	stderr: string;
+}
+
+export type Runner = (binary: string, args: string[], options: { signal?: AbortSignal; timeoutMs: number }) => Promise<RunResult>;
+
+export const run: Runner = (binary, args, { signal, timeoutMs }) =>
+	new Promise((resolve, reject) => {
+		const child = spawn(binary, args, { stdio: ["ignore", "pipe", "pipe"], signal });
+		const out: Buffer[] = [];
+		const err: Buffer[] = [];
+		const timer = setTimeout(() => child.kill("SIGTERM"), timeoutMs);
+		child.stdout.on("data", (b: Buffer) => out.push(b));
+		child.stderr.on("data", (b: Buffer) => err.push(b));
+		child.on("error", (error) => {
+			clearTimeout(timer);
+			reject(error);
+		});
+		child.on("close", (code) => {
+			clearTimeout(timer);
+			resolve({ code, stdout: Buffer.concat(out).toString("utf8"), stderr: Buffer.concat(err).toString("utf8") });
+		});
+	});
+
+export async function isCapable(binary: string, runner: Runner = run): Promise<boolean> {
+	try {
+		const result = await runner(binary, ["traces", "anon", "--help"], { timeoutMs: 15000 });
+		return result.code === 0 && result.stdout.includes("--plan") && result.stdout.includes("--keep-values-file");
+	} catch {
+		return false;
+	}
+}
+
+/** First executable named `name` on PATH. */
+export function findOnPath(name: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+	return onPath(name, env)[0];
+}
+
+function onPath(name: string, env: NodeJS.ProcessEnv): string[] {
+	return (env.PATH ?? "")
+		.split(delimiter)
+		.filter(Boolean)
+		.map((dir) => join(dir, name))
+		.filter((path) => existsSync(path));
+}
+
+function localBuilds(env: NodeJS.ProcessEnv): string[] {
+	const root = join(xdgHome("XDG_DATA_HOME", ".local/share", env), "nym", "builds");
+	if (!existsSync(root)) return [];
+	return readdirSync(root)
+		.map((dir) => join(root, dir, "nym"))
+		.filter((path) => existsSync(path))
+		.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+}
+
+/** First nym that supports trace plans: configured, then PATH, then newest local build. */
+export async function findNym(config: PiNymConfig, runner: Runner = run, env: NodeJS.ProcessEnv = process.env): Promise<string> {
+	const candidates = config.nymBinary ? [config.nymBinary] : [...onPath("nym", env), ...localBuilds(env)];
+	for (const binary of candidates) {
+		if (await isCapable(binary, runner)) return binary;
+	}
+	throw new Error(
+		config.nymBinary
+			? "the configured nymBinary does not support `traces anon --plan`; update nym"
+			: "no nym with `traces anon --plan` found; install a current nym or set nymBinary in pi-nym.json"
+	);
+}
+
+function commonArgs(config: PiNymConfig): string[] {
+	const args = ["--no-progress"];
+	if (!config.ner) args.push("--no-ner");
+	else args.push("--ner-scope", config.nerScope);
+	for (const profile of config.profiles) args.push("--redaction-profile", profile);
+	return args;
+}
+
+function failure(step: string, result: RunResult): Error {
+	const detail = result.stderr.trim().split("\n").pop() ?? "";
+	return new Error(`nym ${step} failed${detail ? `: ${detail}` : ""}`);
+}
+
+export interface Paths {
+	work: string;
+	snapshot: string;
+}
+
+/** Report what nym would replace in the snapshot, without writing outputs. */
+export async function plan(
+	binary: string,
+	paths: Paths,
+	config: PiNymConfig,
+	signal?: AbortSignal,
+	runner: Runner = run
+): Promise<Candidate[]> {
+	const planPath = join(paths.work, "plan.json");
+	const result = await runner(binary, ["traces", "anon", paths.snapshot, "--plan", planPath, ...commonArgs(config)], {
+		signal,
+		timeoutMs: config.timeoutMs,
+	});
+	if (result.code !== 0) throw failure("scan", result);
+	const parsed = JSON.parse(readFileSync(planPath, "utf8")) as { sessions: { candidates: Candidate[] }[] };
+	return parsed.sessions[0]?.candidates ?? [];
+}
+
+export interface Applied {
+	redacted: string;
+	keys: string;
+}
+
+/** Redact the snapshot, never replacing the explicitly kept values. */
+export async function apply(
+	binary: string,
+	paths: Paths,
+	keep: string[],
+	config: PiNymConfig,
+	signal?: AbortSignal,
+	runner: Runner = run
+): Promise<Applied> {
+	const keepPath = join(paths.work, "keep.txt");
+	writeFileSync(keepPath, keep.map((v) => `${v}\n`).join(""), { mode: 0o600 });
+	const out = join(paths.work, "out");
+	const keys = join(paths.work, "keys");
+	const result = await runner(
+		binary,
+		["traces", "anon", paths.snapshot, "-o", out, "--keys", keys, "--keep-values-file", keepPath, ...commonArgs(config)],
+		{ signal, timeoutMs: config.timeoutMs }
+	);
+	if (result.code !== 0) throw failure("redaction", result);
+	const name = basename(paths.snapshot);
+	return {
+		redacted: readFileSync(join(out, name), "utf8"),
+		keys: readFileSync(join(keys, name.replace(/\.jsonl$/, ".keys.jsonl")), "utf8"),
+	};
+}
