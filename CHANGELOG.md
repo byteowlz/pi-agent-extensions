@@ -4,6 +4,10 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Concise xlatch file sharing (2.14.1)
+
+- **pi-xlatch-session 2.0.3**: remove repeated file-sharing boilerplate; keep the sender note and local paths visible.
+
 ### Faster pi-nym redaction (2.14.0)
 
 - **pi-nym 0.4.0**: the reviewed values are applied without a second scan, and
