@@ -4,6 +4,11 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-nym progress bar (2.12.0)
+
+- **pi-nym 0.2.0**: progress bar while nym scans and redacts, from nym's new
+  `--progress-json` events.
+
 ### Local session redaction (2.11.0)
 
 - New **pi-nym 0.1.0**: `/nym` redacts the current session with nym's local trace

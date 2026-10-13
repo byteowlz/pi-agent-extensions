@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FORMAT, decrypt, ensureSecret, parseBundle, writeBackup } from "./backup.js";
 import { DEFAULTS, backupDir, parseConfig, xdgHome } from "./config.js";
-import { isLocalModel, nymStatus } from "./index.js";
-import { type Candidate, apply, findNym, plan } from "./nym.js";
+import { bar, isLocalModel, nymStatus } from "./index.js";
+import { type Candidate, type ProgressEvent, apply, findNym, fraction, parseProgress, plan } from "./nym.js";
 
 const noop = () => undefined;
 import { RedactionPicker, groupLabel, grouped } from "./picker.js";
@@ -122,6 +122,27 @@ describe("picker", () => {
 	});
 });
 
+describe("progress", () => {
+	test("parses nym events, weights phases monotonically and draws a bar", () => {
+		expect(parseProgress('{"nym_progress":{"phase":"ner","done":5,"total":10}}')).toEqual({ phase: "ner", done: 5, total: 10 });
+		expect(parseProgress("error: something")).toBeUndefined();
+		expect(parseProgress('{"nym_progress":broken')).toBeUndefined();
+		const steps: ProgressEvent[] = [
+			{ phase: "detect", done: 0, total: 100 },
+			{ phase: "detect", done: 100, total: 100 },
+			{ phase: "ner", done: 0, total: 100 },
+			{ phase: "ner", done: 50, total: 100 },
+			{ phase: "replace", done: 10, total: 20 },
+			{ phase: "done", done: 20, total: 20 },
+		];
+		const values = steps.map(fraction);
+		expect(values).toEqual([...values].sort((a, b) => a - b));
+		expect([values[0], values.at(-1)]).toEqual([0, 1]);
+		expect(bar(0.5, 10)).toBe("[█████░░░░░] 50%");
+		expect(bar(2, 4)).toBe("[████] 100%");
+	});
+});
+
 describe("nym discovery", () => {
 	test("warns when nym is missing from PATH and when it is too old", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "pi-nym-path-"));
@@ -131,9 +152,9 @@ describe("nym discovery", () => {
 		expect(await nymStatus(DEFAULTS, env)).toContain("is too old");
 		const build = join(dir, "data", "nym", "builds", "b1");
 		mkdirSync(build, { recursive: true });
-		writeFileSync(join(build, "nym"), "#!/bin/sh\necho '--plan --keep-values-file'\n", { mode: 0o755 });
+		writeFileSync(join(build, "nym"), "#!/bin/sh\necho '--plan --keep-values-file --progress-json'\n", { mode: 0o755 });
 		expect(await nymStatus(DEFAULTS, env)).toContain(`using ${join(build, "nym")}`);
-		writeFileSync(join(dir, "nym"), "#!/bin/sh\necho '--plan --keep-values-file'\n", { mode: 0o755 });
+		writeFileSync(join(dir, "nym"), "#!/bin/sh\necho '--plan --keep-values-file --progress-json'\n", { mode: 0o755 });
 		expect(await nymStatus(DEFAULTS, env)).toBeUndefined();
 		expect(await findNym(DEFAULTS, undefined, env)).toBe(join(dir, "nym"));
 		rmSync(dir, { recursive: true, force: true });
@@ -147,7 +168,10 @@ describe.skipIf(!realNym)("real nym", () => {
 		const snapshot = join(work, "s.jsonl");
 		writeFileSync(snapshot, SESSION);
 		const config = { ...DEFAULTS, ner: false, nymBinary: realNym };
-		const candidates = await plan(realNym as string, { work, snapshot }, config);
+		const events: ProgressEvent[] = [];
+		const candidates = await plan(realNym as string, { work, snapshot }, config, undefined, undefined, (e) => events.push(e));
+		expect(events[0]?.phase).toBe("detect");
+		expect(events.at(-1)).toMatchObject({ phase: "done" });
 		const values = candidates.map((c) => c.value);
 		expect(values).toContain("ada.quill@example.org");
 		expect(candidates.find((c) => c.value === "Sup3rSecretValue1")?.credential).toBe(true);
