@@ -104,10 +104,25 @@ export function contentStrings(sessionText: string): string[] {
 	return out;
 }
 
-function occurrences(text: string, value: string): number {
+const WORD = /[\p{L}\p{N}]/u;
+
+/**
+ * Occurrences nym would treat as the value: not continuing a longer word on
+ * an alphanumeric edge (digits inside a longer number are not the value).
+ */
+export function occurrences(text: string, value: string): number {
 	if (!value) return 0;
+	const first = WORD.test(Array.from(value)[0] ?? "");
+	const last = WORD.test(Array.from(value).at(-1) ?? "");
 	let count = 0;
-	for (let i = text.indexOf(value); i !== -1; i = text.indexOf(value, i + value.length)) count++;
+	for (let i = text.indexOf(value); i !== -1; i = text.indexOf(value, i + 1)) {
+		const before = Array.from(text.slice(Math.max(0, i - 2), i)).at(-1) ?? "";
+		const after = Array.from(text.slice(i + value.length, i + value.length + 2))[0] ?? "";
+		if (!(first && WORD.test(before)) && !(last && WORD.test(after))) {
+			count++;
+			i += value.length - 1;
+		}
+	}
 	return count;
 }
 

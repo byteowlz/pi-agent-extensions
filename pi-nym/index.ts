@@ -152,15 +152,9 @@ async function prepare(ctx: ExtensionCommandContext, config: PiNymConfig, work: 
 		return undefined;
 	}
 	const redacting = progressWidget(ctx, "redacting (2/2)");
-	const applied = await apply(
-		binary,
-		paths,
-		decision.keep.map((c) => c.value),
-		config,
-		ctx.signal,
-		undefined,
-		redacting.onProgress
-	).finally(redacting.clear);
+	const applied = await apply(binary, paths, decision, config, ctx.signal, undefined, redacting.onProgress).finally(
+		redacting.clear
+	);
 	const sessionText = readFileSync(snapshot, "utf8");
 	const id = uuidv7();
 	const now = new Date();
@@ -275,7 +269,7 @@ export async function nymStatus(config: PiNymConfig, env: NodeJS.ProcessEnv = pr
 	if (onPath && (await isCapable(onPath))) return undefined;
 	const fallback = await findNym(config, undefined, env).catch(() => undefined);
 	const problem = onPath
-		? `nym on PATH (${onPath}) is too old for /nym (needs \`traces anon --plan --progress-json\`)`
+		? `nym on PATH (${onPath}) is too old for /nym (needs \`traces anon --plan --apply-plan --progress-json\`)`
 		: "nym is not on PATH";
 	return fallback
 		? `pi-nym: ${problem}; using ${fallback}. Install a current nym to silence this.`

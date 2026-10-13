@@ -4,6 +4,11 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Faster pi-nym redaction (2.14.0)
+
+- **pi-nym 0.4.0**: the reviewed values are applied without a second scan, and
+  repeated scans reuse nym's NER cache.
+
 ### pi-nym category selection (2.13.0)
 
 - **pi-nym 0.3.0**: whole categories can be selected or unselected in the

@@ -10,7 +10,15 @@ import { type Candidate, type ProgressEvent, apply, findNym, fraction, parseProg
 
 const noop = () => undefined;
 import { RedactionPicker, groupLabel, grouped } from "./picker.js";
-import { buildSession, contentStrings, hasUnredactedContent, residuals, sessionFileName, uuidv7 } from "./session.js";
+import {
+	buildSession,
+	contentStrings,
+	hasUnredactedContent,
+	occurrences,
+	residuals,
+	sessionFileName,
+	uuidv7,
+} from "./session.js";
 
 const HEADER =
 	'{"type":"session","version":3,"id":"orig","timestamp":"2026-10-13T07:00:00.000Z","cwd":"/Users/zorbaxtester/app"}';
@@ -81,6 +89,9 @@ describe("session", () => {
 		]);
 		const kept = residuals(text, [candidate("ada", "first_name")], ["ada.quill@example.org"]);
 		expect(kept).toEqual([]);
+		// Word-boundary aware like nym: digits inside a longer number are not the value.
+		expect(occurrences("at 12:30.42 and 42 and 1423 and x42", "42")).toBe(2);
+		expect(occurrences("mail ada@x.org,ada@x.org", "ada@x.org")).toBe(2);
 	});
 });
 
@@ -182,9 +193,13 @@ describe("nym discovery", () => {
 		expect(await nymStatus(DEFAULTS, env)).toContain("is too old");
 		const build = join(dir, "data", "nym", "builds", "b1");
 		mkdirSync(build, { recursive: true });
-		writeFileSync(join(build, "nym"), "#!/bin/sh\necho '--plan --keep-values-file --progress-json'\n", { mode: 0o755 });
+		writeFileSync(join(build, "nym"), "#!/bin/sh\necho '--plan --apply-plan --keep-values-file --progress-json'\n", {
+			mode: 0o755,
+		});
 		expect(await nymStatus(DEFAULTS, env)).toContain(`using ${join(build, "nym")}`);
-		writeFileSync(join(dir, "nym"), "#!/bin/sh\necho '--plan --keep-values-file --progress-json'\n", { mode: 0o755 });
+		writeFileSync(join(dir, "nym"), "#!/bin/sh\necho '--plan --apply-plan --keep-values-file --progress-json'\n", {
+			mode: 0o755,
+		});
 		expect(await nymStatus(DEFAULTS, env)).toBeUndefined();
 		expect(await findNym(DEFAULTS, undefined, env)).toBe(join(dir, "nym"));
 		rmSync(dir, { recursive: true, force: true });
@@ -205,7 +220,13 @@ describe.skipIf(!realNym)("real nym", () => {
 		const values = candidates.map((c) => c.value);
 		expect(values).toContain("ada.quill@example.org");
 		expect(candidates.find((c) => c.value === "Sup3rSecretValue1")?.credential).toBe(true);
-		const applied = await apply(realNym as string, { work, snapshot }, ["Sup3rSecretValue1"], config);
+		const keep = candidates.filter((c) => c.value === "Sup3rSecretValue1");
+		const applied = await apply(
+			realNym as string,
+			{ work, snapshot },
+			{ redact: candidates.filter((c) => !keep.includes(c)), keep },
+			config
+		);
 		expect(applied.redacted).not.toContain("Writing to ada.quill@example.org");
 		expect(applied.redacted).toContain("Sup3rSecretValue1");
 		expect(applied.keys).toContain("ada.quill@example.org");

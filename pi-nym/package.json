@@ -1,6 +1,6 @@
 {
   "name": "@byteowlz/pi-nym",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Redact the current Pi session locally with nym before using a cloud model, with an encrypted backup of the original",
   "type": "module",
   "keywords": [
