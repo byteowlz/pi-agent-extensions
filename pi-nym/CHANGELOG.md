@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0
+
+- Categories are rows in the redaction menu: Space on a category selects or unselects all its values, `[-]` marks partial selections, and ←/→ fold and unfold categories. Lists longer than the view open as a folded category overview with sample values; typing a filter searches inside folded categories.
+
 ## 0.2.0
 
 - Progress bar above the editor while nym scans and redacts (`scanning session (1/2)`, `redacting (2/2)`), driven by `nym traces anon --progress-json`; it never moves backwards. Requires a nym with `--progress-json`; older builds are reported at session start.

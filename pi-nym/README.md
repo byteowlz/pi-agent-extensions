@@ -4,7 +4,7 @@ Redact the current Pi session locally with [nym](https://github.com/byteowlz/nym
 
 ## Commands
 
-- `/nym` scans a snapshot of the session with `nym traces anon`, shows every value it would replace, and lets you untick what may stay (Space: one value, Ctrl+G: its group, Ctrl+A: all, type to filter). The redacted copy becomes a new session in the same project and Pi switches to it. Pseudonyms are consistent within the session.
+- `/nym` scans a snapshot of the session with `nym traces anon`, shows every value it would replace, and lets you untick what may stay. Values are grouped into categories (secrets, names, emails, ...): Space on a category toggles all its values, Space on a value toggles just that one, ←/→ fold categories, Ctrl+A toggles everything visible, and typing filters. Long lists open as a folded category overview. The redacted copy becomes a new session in the same project and Pi switches to it. Pseudonyms are consistent within the session.
 - `/nym-restore` decrypts a backup and switches back to the original session.
 
 ## The original session

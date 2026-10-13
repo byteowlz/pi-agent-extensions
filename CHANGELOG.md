@@ -4,6 +4,11 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-nym category selection (2.13.0)
+
+- **pi-nym 0.3.0**: whole categories can be selected or unselected in the
+  redaction menu, with folding and a category overview for long lists.
+
 ### pi-nym progress bar (2.12.0)
 
 - **pi-nym 0.2.0**: progress bar while nym scans and redacts, from nym's new

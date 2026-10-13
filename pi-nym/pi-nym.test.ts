@@ -94,26 +94,56 @@ describe("picker", () => {
 	test("secrets come first, then groups by occurrences", () => {
 		expect(grouped(items).map(groupLabel)).toEqual(["secrets", "first names", "emails", "last names"]);
 	});
-	test("everything starts selected; space, group and all toggles decide what is kept", () => {
+	test("category rows toggle whole categories; values toggle individually", () => {
 		let result: unknown;
 		const picker = new RedactionPicker(items, noop, (d) => {
 			result = d;
 		});
-		picker.handleInput("\u001b[B"); // down to first names
-		picker.handleInput(" "); // keep Jolanta
+		const DOWN = "\u001b[B";
+		picker.handleInput(" "); // row 0: secrets category -> keep all secrets
+		expect(picker.render(100).join("\n")).toContain("SECRETS KEPT");
+		picker.handleInput(" "); // select them again
+		picker.handleInput(DOWN);
+		picker.handleInput(DOWN); // row 2: first names category
+		picker.handleInput(" "); // keep every first name
+		picker.handleInput(DOWN);
+		picker.handleInput(DOWN);
+		picker.handleInput(DOWN); // row 5: the email value
+		picker.handleInput(" ");
+		const lines = picker.render(100).join("\n");
+		expect(lines).toContain("2/4 values selected");
+		expect(lines).toMatch(/\[ \] first names {2}0\/1 values/);
 		picker.handleInput("\r");
-		expect(result).toEqual({
-			redact: [items[1], items[2], items[3]],
-			keep: [items[0]],
-		});
-		const lines = picker.render(80).join("\n");
-		expect(lines).toContain("3/4 values selected");
-		expect(lines).toContain("── secrets (1/1)");
-		const second = new RedactionPicker(items, noop, (d) => {
+		expect(result).toEqual({ redact: [items[1], items[3]], keep: [items[0], items[2]] });
+	});
+	test("long lists open as a collapsed category overview; arrows expand, filter searches inside", () => {
+		const many = [
+			...Array.from({ length: 10 }, (_, i) => candidate(`user${i}`, "username")),
+			...Array.from({ length: 10 }, (_, i) => candidate(`h${i}.example.org`, "url")),
+		];
+		let result: { keep: Candidate[] } | undefined;
+		const picker = new RedactionPicker(many, noop, (d) => {
 			result = d;
 		});
-		second.handleInput("\u0001"); // ctrl+a: unselect all
-		second.handleInput("\u001b");
+		const overview = picker.render(100).filter((l) => l.includes("values •"));
+		expect(overview).toHaveLength(2);
+		expect(picker.render(100).join("\n")).not.toMatch(/\[x\] user3/);
+		picker.handleInput("\u001b[C"); // expand accounts
+		expect(picker.render(100).join("\n")).toMatch(/\[x\] user3/);
+		picker.handleInput("\u001b[B"); // first account value
+		picker.handleInput(" ");
+		expect(picker.render(100).join("\n")).toMatch(/\[-\] accounts {2}9\/10 values/);
+		picker.handleInput("\u001b[D"); // collapse again, cursor back on the category
+		picker.handleInput(" "); // partial -> select all accounts
+		for (const ch of "h7.") picker.handleInput(ch); // filter reaches into the collapsed URL category
+		expect(picker.render(100).join("\n")).toContain("h7.example.org");
+		picker.handleInput("\u0001"); // Ctrl+A: unselect every visible match
+		picker.handleInput("\r");
+		expect(result?.keep.map((c) => c.value)).toEqual(["h7.example.org"]);
+		const cancelled = new RedactionPicker(many, noop, (d) => {
+			result = d as typeof result;
+		});
+		cancelled.handleInput("\u001b");
 		expect(result).toBeUndefined();
 	});
 	test("control characters are never written to the terminal", () => {
