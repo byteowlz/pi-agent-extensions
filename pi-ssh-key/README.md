@@ -28,7 +28,7 @@ This extension gives the agent a real, session-scoped agent and a one-command
 way to populate it:
 
 - **Load** — `ssh-keygen`-verified key discovery in `~/.ssh`, a fuzzy-search
-  multi-select picker (type to filter, `space` selects, `a` selects all,
+  multi-select picker (type to filter, `space` selects, `Ctrl+A` toggles all filtered keys; plain `a`/`A` filter normally,
   `Enter` loads the selection — protected keys are marked `[locked]`), and a
   masked passphrase prompt that reaches `ssh-add` through `SSH_ASKPASS`
   (never a GUI askpass, never a TTY). Multiple selected keys are loaded one

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.2
+
+- Require Ctrl+A to toggle selection of all filtered keys. Plain a/A now remain
+  filter input instead of unexpectedly selecting every SSH key.
+- Update picker help and cover actual picker input/render/selection behavior.
+
 ## 1.2.1
 
 - Probe cached and inherited agents with a bounded SSH protocol round trip;
