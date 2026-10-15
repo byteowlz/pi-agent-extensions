@@ -4,6 +4,18 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Selection portable kernel locking (2.10.2)
+
+- Use Python 3 stdlib fcntl locks on macOS and when Linux flock is absent;
+  preserve crash release, private persistent inodes and fail-closed updates.
+- Bound helper startup and report actionable missing-backend errors. Linux
+  exclusion/crash/interoperability regressions pass; native Mac smoke test pending.
+
+### SSH key picker shortcut safety (2.10.1)
+
+- **pi-ssh-key 1.2.2**: select-all now requires Ctrl+A; ordinary a/A remain
+  filter text. Updated help and picker interaction regressions.
+
 ### Scoped prompt stash and editor-fill commands (2.10.0)
 
 - New **pi-prompt-stash 1.0.0**: Ctrl+Alt+S parks/stashes drafts without replacing
