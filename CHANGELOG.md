@@ -4,6 +4,33 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Off-thread history and startup diagnosis (2.13.0)
+
+- Run history searches/indexing/reads/grep/branch enumeration and overlay previews
+  in bounded cancellable child processes. Debounce overlay queries, cancel stale
+  work and stop workers on session replacement/shutdown. Ship a self-contained
+  worker artifact with freshness/copied-install/UTF-8/responsiveness tests.
+- Add bounded isolated synthetic PTY startup probe. Bare regular/fullscreen and
+  history/TUI-RPC combinations respond; affected-host startup hang remains under
+  diagnosis, separate from eliminating main-thread history work.
+
+### Reviewed conversation rewrite branches (2.12.0)
+
+- New **pi-conversation-edit 1.0.0**: `/rewrite` selects whole projected text
+  messages for native/external-editor or optional tool-less AI rewriting. Require
+  per-message diff review and final confirmation before publishing/switching to
+  an independent native fork. Keep later context by default; optional restart.
+- Preserve source history and tool records, stage completed forks privately,
+  fence stale sessions and protect unsent drafts/non-text content. `/rewrite inspect`
+  previews future editable context; historical bubbles remain original.
+
+### Caller-owned terminal tab titles (2.11.0)
+
+- **pi-auto-rename 1.3.0**: independently toggleable Pi → Herdr/tmux title
+  projection. Preserve canonical readable IDs in Pi, strip known suffixes and
+  sub/side roles only for tab display. Never target UI focus; skip shared panes
+  and fence obsolete work on session replacement. Includes isolated tmux proof.
+
 ### Selection portable kernel locking (2.10.2)
 
 - Use Python 3 stdlib fcntl locks on macOS and when Linux flock is absent;

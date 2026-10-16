@@ -137,6 +137,11 @@
 			"description": "If true, append a deterministic readable-id (adjective-noun-noun) to the generated name.",
 			"default": false
 		},
+		"syncTabTitle": {
+			"type": "boolean",
+			"description": "Project the session title to the calling Herdr tab or tmux window, without the known readable ID or sub/side marker. Shared multi-pane tabs/windows are left unchanged. Independent of automatic title generation.",
+			"default": true
+		},
 		"readableIdEnv": {
 			"type": ["string", "null"],
 			"description": "Environment variable that can provide a readable-id suffix override. When set and non-empty, its value is used instead of the wordlist-derived suffix.",

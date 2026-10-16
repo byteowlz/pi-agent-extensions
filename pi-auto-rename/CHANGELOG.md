@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.0
+
+- Sync Pi session titles to caller-owned Herdr tabs and tmux windows, preserving
+  readable IDs in Pi. Add independent `syncTabTitle` toggle (default true).
+- Resolve live explicit host IDs, verify Herdr session ownership, skip shared
+  panes, revalidate before rename, and fence queued work on session replacement.
+- One-way, bounded best-effort integration: no focus changes, Herdr core changes
+  or fallback from failed Herdr to an outer tmux window.
+- Regression coverage includes an isolated real tmux server; no live tabs are
+  renamed during qualification. Refresh complete copied extension directories.
+
 ## 1.2.0
 
 - Export canonical spawn-time naming for session tools: `[sub] Title [readable-id]`

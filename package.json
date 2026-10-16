@@ -1,6 +1,6 @@
 {
 	"name": "pi-agent-extensions",
-	"version": "2.10.2",
+	"version": "2.13.0",
 	"description": "Extensions for the pi coding agent",
 	"type": "module",
 	"private": true,
@@ -9,6 +9,7 @@
 	},
 	"scripts": {
 		"build:workflow": "node scripts/sync-durable-workflow-runtime.mjs",
+		"build:history-worker": "node scripts/sync-history-worker.mjs",
 		"check": "npm run lint && npm run typecheck",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",

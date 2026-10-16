@@ -12,7 +12,6 @@
  * sandbox at all. See indexer.ts for the rationale.
  */
 
-import { basename } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -25,20 +24,13 @@ import {
 	type ReadResult,
 	branchScopeSessionIds,
 	closeAll,
-	findSessionPath,
-	getStats,
-	grepSession,
-	listBranchesInProject,
-	listProjectDirs,
-	prettyProject,
+	type listBranchesInProject,
 	projectDir,
-	readSession,
-	rebuildProjectIndex,
-	updateProjectIndex,
 } from "./indexer.js";
 import { historyFailure, historyOutputSchemas, historyResult } from "./output.js";
 import { HistoryOverlay } from "./overlay.js";
-import { type RecallParams, type RecallReport, formatRecall, searchRecall } from "./recall.js";
+import { type RecallParams, type RecallReport, formatRecall } from "./recall.js";
+import { HistoryWorker } from "./worker.js";
 
 // ── Tool parameter schemas ───────────────────────────────────────────
 
@@ -252,41 +244,15 @@ function disabled(action: string): AgentToolResult<unknown> {
 export async function runSearchReport(
 	ctx: ExtensionContext,
 	config: HistorySearchConfig,
-	params: RecallParams
+	params: RecallParams,
+	signal?: AbortSignal,
+	worker = new HistoryWorker()
 ): Promise<RecallReport> {
-	const base = resolveSessionsBase(config);
-	const currentDir = projectDir(base, ctx.cwd);
-	const scope = params.scope ?? "project";
-	const currentId = ctx.sessionManager.getSessionId?.() ?? null;
-	const exclude = config.excludeCurrentSession && scope !== "current-branch" ? currentId : null;
-	let allowed: Set<string> | undefined;
-	if (scope !== "all" && scope !== "project") {
-		const listing = listBranchesInProject(currentDir, currentId, config.branchAliases);
-		allowed = branchScopeSessionIds(
-			listing.branches,
-			listing.currentBranchId,
-			scope as "current-tree" | "current-branch" | "siblings" | "ancestors" | "descendants"
-		);
-	}
-	const dirs =
-		scope === "all"
-			? listProjectDirs(base).filter(
-					(dir) => !params.project || prettyProject(basename(dir)).toLowerCase().includes(params.project.toLowerCase())
-				)
-			: [currentDir];
-	const report = await searchRecall(
-		dirs.map((dir) => ({ dir, current: dir === currentDir, allowed })),
-		config,
-		params,
-		exclude
+	return worker.call(
+		"searchReport",
+		[{ cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId?.() ?? null }, config, params],
+		signal
 	);
-	if (params.verbose) {
-		for (const dir of dirs) {
-			const branches = listBranchesInProject(dir, currentId, config.branchAliases).branches;
-			for (const hit of report.hits) hit.branch ??= branches.find((b) => b.branchId === hit.sessionId);
-		}
-	}
-	return report;
 }
 
 export async function runSearch(ctx: ExtensionContext, config: HistorySearchConfig, params: RecallParams): Promise<HistoryHit[]> {
@@ -296,6 +262,7 @@ export async function runSearch(ctx: ExtensionContext, config: HistorySearchConf
 // ── Extension entry point ────────────────────────────────────────────
 
 export default function historySearch(pi: ExtensionAPI): void {
+	const worker = new HistoryWorker();
 	let indexing = false;
 	let startupTimer: ReturnType<typeof setTimeout> | undefined;
 	const cancelStartup = () => {
@@ -310,7 +277,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 		indexing = true;
 		try {
 			const base = resolveSessionsBase(config);
-			await updateProjectIndex(projectDir(base, cwd), config);
+			await worker.call("updateProjectIndex", [projectDir(base, cwd), config], undefined, 60000);
 		} catch {
 			// Index not writable here (e.g. read-only mount) — tools fall back at query time.
 		} finally {
@@ -320,6 +287,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		cancelStartup();
+		worker.reset();
 		if (ctx.mode !== "rpc" && ctx.mode !== "tui") return;
 		// Capture plain data now; a deferred callback must never retain ctx.
 		const cwd = ctx.cwd;
@@ -333,6 +301,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async () => {
 		cancelStartup();
+		worker.reset();
 		closeAll();
 	});
 
@@ -353,18 +322,17 @@ export default function historySearch(pi: ExtensionAPI): void {
 		}
 		const base = resolveSessionsBase(config);
 		const dir = projectDir(base, ctx.cwd);
-		// Refresh the index once up front so per-keystroke search stays instant.
-		ctx.ui.setStatus("history-search", "🔍 indexing…");
-		try {
-			await updateProjectIndex(dir, config);
-		} catch {
-			// Read-only: the overlay falls back to an existing index or live scan.
-		} finally {
-			ctx.ui.setStatus("history-search", undefined);
-		}
+		// Do not gate opening/input on indexing. The worker supplies live-scan fallback.
+		void ensureCurrentIndex(ctx.cwd);
 		await ctx.ui.custom<void>(
 			(tui, theme, _kb, done) =>
-				new HistoryOverlay(done, tui, theme, { base, dir, config, initialQuery }, opener ? (file) => opener(file) : undefined),
+				new HistoryOverlay(
+					done,
+					tui,
+					theme,
+					{ base, dir, config, initialQuery, worker },
+					opener ? (file) => opener(file) : undefined
+				),
 			{
 				overlay: true,
 				overlayOptions: { anchor: "center", width: "80%", maxHeight: "80%" },
@@ -403,7 +371,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 			if (!config.enabled) return disabled("search");
 			try {
 				_signal?.throwIfAborted();
-				const report = await runSearchReport(ctx, config, params);
+				const report = await runSearchReport(ctx, config, params, _signal, worker);
 				_signal?.throwIfAborted();
 				const emitted = JSON.parse(formatRecall(report, params.maxTotalChars)) as RecallReport;
 				return historyResult("search", emitted, ctx, config, params.maxTotalChars ?? 3000);
@@ -441,7 +409,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 			const base = resolveSessionsBase(config);
 			const dir = projectDir(base, ctx.cwd);
 			const currentSessionId = (ctx.sessionManager.getSessionId?.() as string | undefined) ?? null;
-			const listing = listBranchesInProject(dir, currentSessionId, config.branchAliases);
+			const listing = await worker.call("listBranchesInProject", [dir, currentSessionId, config.branchAliases], _signal);
 			const scope = params.scope ?? "current-tree";
 			const allowed = branchScopeSessionIds(
 				listing.branches,
@@ -498,25 +466,32 @@ export default function historySearch(pi: ExtensionAPI): void {
 					return historyFailure("read", "missing_id", "Provide either sessionId or branchId.");
 				}
 				const base = resolveSessionsBase(config);
-				const filePath = findSessionPath(base, id, projectDir(base, ctx.cwd));
+				const filePath = await worker.call("findSessionPath", [base, id, projectDir(base, ctx.cwd)], _signal);
 				if (!filePath) {
 					return historyFailure("read", "not_found", `No accessible session/branch found with id "${id}".`);
 				}
 				_signal?.throwIfAborted();
-				const r = readSession(filePath, {
-					query: params.query,
-					around: params.around,
-					matchPosition: params.matchPosition,
-					before: params.before,
-					after: params.after,
-					roleFilter: params.roleFilter,
-					view: params.view ?? "outline",
-					maxChars: params.maxChars ?? 2000,
-					maxMessages: params.maxMessages,
-					// When the caller didn't set an explicit budget, bound the read at the live
-					// context budget so a huge session clips at message boundaries, not mid-stream.
-					maxTotalChars: params.maxTotalChars ?? computeBudget(ctx, config.contextGuard).budgetChars,
-				});
+				const r = await worker.call(
+					"readSession",
+					[
+						filePath,
+						{
+							query: params.query,
+							around: params.around,
+							matchPosition: params.matchPosition,
+							before: params.before,
+							after: params.after,
+							roleFilter: params.roleFilter,
+							view: params.view ?? "outline",
+							maxChars: params.maxChars ?? 2000,
+							maxMessages: params.maxMessages,
+							// When the caller didn't set an explicit budget, bound the read at the live
+							// context budget so a huge session clips at message boundaries, not mid-stream.
+							maxTotalChars: params.maxTotalChars ?? computeBudget(ctx, config.contextGuard).budgetChars,
+						},
+					],
+					_signal
+				);
 				return historyResult(
 					"read",
 					{ ...r, roleFilter: params.roleFilter ?? (params.view === "transcript" ? "all" : "conversation") },
@@ -568,23 +543,30 @@ export default function historySearch(pi: ExtensionAPI): void {
 				return historyFailure("grep", "missing_id", "Provide either sessionId or branchId.");
 			}
 			const base = resolveSessionsBase(config);
-			const filePath = findSessionPath(base, id, projectDir(base, ctx.cwd));
+			const filePath = await worker.call("findSessionPath", [base, id, projectDir(base, ctx.cwd)], _signal);
 			if (!filePath) {
 				return historyFailure("grep", "not_found", `No accessible session/branch found with id "${id}".`);
 			}
 			try {
 				_signal?.throwIfAborted();
-				const r = grepSession(filePath, {
-					pattern: params.pattern,
-					regex: params.regex,
-					fallback: params.fallback,
-					ignoreCase: params.ignoreCase,
-					roleFilter: params.roleFilter,
-					before: params.before,
-					after: params.after,
-					maxMatches: params.maxMatches,
-					maxChars: params.maxChars,
-				});
+				const r = await worker.call(
+					"grepSession",
+					[
+						filePath,
+						{
+							pattern: params.pattern,
+							regex: params.regex,
+							fallback: params.fallback,
+							ignoreCase: params.ignoreCase,
+							roleFilter: params.roleFilter,
+							before: params.before,
+							after: params.after,
+							maxMatches: params.maxMatches,
+							maxChars: params.maxChars,
+						},
+					],
+					_signal
+				);
 				return historyResult(
 					"grep",
 					JSON.parse(formatGrep(r, params.maxTotalChars)) as object,
@@ -628,7 +610,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 			const arg = args?.trim() ?? "";
 
 			if (arg === "stats") {
-				const s = getStats(dir);
+				const s = await worker.call("getStats", [dir]);
 				ctx.ui.notify(
 					`History index: ${s.totalSessions} sessions, ${s.totalChunks} chunks · updated ${s.lastUpdated ?? "never"} · ${s.indexPath}`,
 					"info"
@@ -639,7 +621,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 			if (arg === "reindex") {
 				ctx.ui.notify("Rebuilding history index…", "info");
 				try {
-					const n = await rebuildProjectIndex(dir, config);
+					const n = await worker.call("rebuildProjectIndex", [dir, config], undefined, 60000);
 					ctx.ui.notify(`Rebuilt history index: ${n} sessions`, "info");
 				} catch (e) {
 					ctx.ui.notify(`Reindex failed: ${e instanceof Error ? e.message : String(e)}`, "error");
@@ -649,7 +631,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 
 			if (arg.startsWith("branches")) {
 				const currentSessionId = (ctx.sessionManager.getSessionId?.() as string | undefined) ?? null;
-				const listing = listBranchesInProject(dir, currentSessionId, config.branchAliases);
+				const listing = await worker.call("listBranchesInProject", [dir, currentSessionId, config.branchAliases]);
 				const branches = branchScopeSessionIds(listing.branches, listing.currentBranchId, "current-tree");
 				const filtered = listing.branches.filter((b) => !branches || branches.has(b.branchId));
 				if (ctx.hasUI) ctx.ui.notify(`Found ${filtered.length} branches in current tree`, "info");
@@ -673,7 +655,7 @@ export default function historySearch(pi: ExtensionAPI): void {
 
 			// Headless (rpc/print): fall back to printing ranked results.
 			try {
-				console.log(formatRecall(await runSearchReport(ctx, config, { query: arg, scope: "project" })));
+				console.log(formatRecall(await runSearchReport(ctx, config, { query: arg, scope: "project" }, undefined, worker)));
 			} catch (e) {
 				ctx.ui.notify(`Search failed: ${e instanceof Error ? e.message : String(e)}`, "error");
 			}

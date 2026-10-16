@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pi Conversation Edit",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "enabled": { "type": "boolean", "default": true, "description": "Enable human /rewrite and /rewrite inspect commands. This is a preference, not filesystem isolation." },
+    "allowAI": { "type": "boolean", "default": true, "description": "Offer optional model rewriting; requires explicit human data-sharing confirmation and diff review." },
+    "allowExternalEditor": { "type": "boolean", "default": true, "description": "Allow operator-configured VISUAL/EDITOR in local TUI mode. No generated executable code or shell expressions." }
+  }
+}

@@ -60,6 +60,7 @@ import { fileURLToPath } from "node:url";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { TabTitleSync } from "./tab-title.js";
 
 // ============================================================================
 // Types
@@ -99,6 +100,7 @@ interface AutoRenameConfig {
 	prefixOnly?: boolean;
 	readableIdSuffix?: boolean;
 	readableIdEnv?: string;
+	syncTabTitle?: boolean;
 	enabled?: boolean;
 	debug?: boolean;
 	wordlistPath?: string;
@@ -119,6 +121,7 @@ type ResolvedConfig = {
 	prefixOnly: boolean;
 	readableIdSuffix: boolean;
 	readableIdEnv: string | undefined;
+	syncTabTitle: boolean;
 	enabled: boolean;
 	debug: boolean;
 	wordlistPath: string | undefined;
@@ -174,6 +177,7 @@ const DEFAULT_CONFIG: ResolvedConfig = {
 	prefixOnly: false,
 	readableIdSuffix: false,
 	readableIdEnv: "PI_SESSION_READABLE_ID",
+	syncTabTitle: true,
 	enabled: true,
 	debug: false,
 	wordlistPath: undefined,
@@ -1171,6 +1175,26 @@ async function handleTest(ctx: ExtensionCommandContext, config: ResolvedConfig):
 export default function (pi: ExtensionAPI) {
 	let sessionRenamed = false;
 	let firstPromptHandled = false;
+	const tabSync = new TabTitleSync();
+	const syncTitle = (ctx: ExtensionContext, name = pi.getSessionName() ?? "New Session"): Promise<void> => {
+		const config = loadConfig(ctx.cwd);
+		if (!config.syncTabTitle) {
+			tabSync.reset();
+			return Promise.resolve();
+		}
+		if (process.env.HERDR_ENV !== "1" && !process.env.TMUX) return Promise.resolve();
+		const sessionId = getSessionId(ctx);
+		const words = loadWordlist(config, ctx.cwd);
+		const canonicalId = sessionId && words ? readableIdFromSessionId(sessionId, words) : undefined;
+		// Spawned children deliberately ignore inherited readable-ID overrides.
+		const readableId =
+			canonicalId && name.endsWith(` [${canonicalId}]`) ? canonicalId : (resolveReadableIdOverride(config) ?? undefined);
+		return tabSync.update({ name, readableId, sessionFile: ctx.sessionManager.getSessionFile?.(), env: process.env });
+	};
+	pi.on("session_info_changed", (event, ctx) => {
+		void syncTitle(ctx, event.name ?? "New Session");
+	});
+	pi.on("session_shutdown", () => tabSync.reset());
 
 	const setRenamed = () => {
 		sessionRenamed = true;
@@ -1249,6 +1273,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", async (event, ctx) => {
+		tabSync.reset();
 		sessionRenamed = false;
 		firstPromptHandled = false;
 		checkExistingName();
@@ -1256,6 +1281,7 @@ export default function (pi: ExtensionAPI) {
 		if (event && event.reason === "fork") {
 			regenerateReadableIdOnFork(ctx);
 		}
+		void syncTitle(ctx);
 	});
 
 	pi.on("session_tree", async () => {

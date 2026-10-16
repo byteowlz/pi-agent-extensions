@@ -22,9 +22,10 @@ function createDeps(options: { streaming?: boolean; owner?: "tui" | "remote" } =
 		setModel: async () => true,
 		setThinkingLevel: () => {},
 		getMessages: () => [{ role: "user" }],
-		leaseRequest: async () => ({ granted: (options.owner ?? "tui") === "remote" || true, reason: "test" }),
-		leaseRelease: () => undefined,
-		leaseOwner: () => options.owner ?? "tui",
+		leaseRequest: async () => ({ granted: true, reason: "test" }),
+		leaseRelease: () => true,
+		leaseOwner: () => options.owner ?? "remote",
+		leaseHeld: () => (options.owner ?? "remote") === "remote",
 		getEntries: () => ({ entries: [], leafId: null }),
 		getTree: () => ({ tree: [], leafId: null }),
 		getForkMessages: () => ({ messages: [] }),
@@ -60,7 +61,7 @@ describe("pi-tui-rpc dispatch", () => {
 			const command = { type, message: "hi" } as unknown as ClientCommand;
 			const result = await dispatchCommand(command, deps);
 			expect(result.success).toBe(false);
-			expect(result.error).toBe("lease_denied:tui_owns_input");
+			expect(result.error).toBe("lease_denied:connection_does_not_own_input");
 		}
 		expect(deps.sent).toEqual([]);
 	});
