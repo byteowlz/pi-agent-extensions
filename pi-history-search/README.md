@@ -9,6 +9,38 @@ or what was already tried, instead of re-deriving them.
 Designed to integrate cleanly with [oqto](https://github.com/byteowlz/oqto) and
 to work just as well with plain pi. No external LLM / OpenRouter dependency.
 
+## Responsiveness and process workers
+
+History filesystem traversal, SQLite, JSON parsing, matching, ranking and index
+updates run in disposable child processes, not Pi's UI event loop. This includes
+startup indexing, all four tools, overlay search/preview and `/history` commands.
+The overlay opens without waiting for indexing and debounces searches by 80 ms.
+
+- At most two active workers and eight queued requests per extension instance.
+- Default execution deadline: 30 seconds; indexing/rebuild: 60 seconds. Queue
+  wait is separate. Abort/session replacement/shutdown kills active workers and
+  rejects queued requests. Timeouts are errors, never “no matches”.
+- IPC requests are capped at 1 MiB and results at 2 MiB. Oversized results fail
+  explicitly; narrow the query. These are not filesystem sandbox or hard OS
+  memory/I/O quotas: workers retain the same file permissions as Pi.
+- Runtime needs only the current Node/Bun executable and the self-contained
+  `worker-runtime.mjs`. No runtime compiler, subprocess model or shell is used.
+  **Refresh the whole extension directory**, not only `index.ts`.
+- Maintainers: `node scripts/sync-history-worker.mjs` regenerates the worker
+  (requires Bun at build time); `--check` checks its source fingerprint.
+
+Startup diagnosis with synthetic data and an isolated HOME:
+
+```sh
+python3 scripts/probe-pi-startup.py --pi /absolute/path/to/pi --mode fullscreen
+python3 scripts/probe-pi-startup.py --pi /absolute/path/to/pi --mode fullscreen --messages 5000
+# Add --extension /absolute/path/to/pi-history-search/index.ts to qualify loading.
+```
+
+The probe disables implicit extensions, sends a local no-model command, bounds
+its lifetime/output and optionally saves synthetic ANSI evidence via `--output`.
+It does not establish that a real user's startup hang has been fixed.
+
 ## Tools
 
 ### `HistorySearch`

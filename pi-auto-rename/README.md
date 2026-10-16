@@ -33,6 +33,27 @@ cp -r auto-rename .pi/extensions/
 
 Then reload pi or restart it.
 
+## Herdr and tmux tab titles
+
+`syncTabTitle: true` (default) projects Pi's title to the calling Herdr tab or
+tmux window on session start/resume/fork and session-name changes, including
+manual renames. Pi retains `[sub] Review Selection [mini-okay-soda]` while the
+tab displays `Review Selection`. Only the known session-derived or configured
+readable-ID suffix is removed; other bracketed title text is preserved.
+
+- Herdr resolves the live tab from the calling pane and verifies its registered
+  session file. It never uses the UI-focused tab or a cached tab ID.
+- tmux resolves the owning window from `TMUX_PANE`, not the active window.
+- Multi-pane tabs/windows are skipped: no session has exclusive title ownership.
+- Herdr failure never falls back to an outer tmux window. Missing hosts and
+  timeouts do not interrupt Pi naming. Pending work is fenced on session
+  replacement/shutdown. No host focus changes or Herdr core changes are made.
+- Set `syncTabTitle: false` to disable independently of automatic naming. This is
+  one-way Pi → tab sync; tab edits do not change Pi's session name. tmux treats
+  the renamed window as manually named, disabling automatic window naming.
+
+Copied installations must refresh the **whole directory**, including `tab-title.ts`.
+
 ## Configuration
 
 Create `auto-rename.json` in one of these locations (searched in order):
@@ -74,6 +95,7 @@ Create `auto-rename.json` in one of these locations (searched in order):
 | `prefixCommand` | string/null | `null` | Shell command to generate dynamic prefix (5s timeout) |
 | `prefixOnly` | boolean | `false` | Skip LLM, use only prefix as full name |
 | `readableIdSuffix` | boolean | `false` | Append `[readable-id]` to generated names |
+| `syncTabTitle` | boolean | `true` | Sync only the title to the owning single-pane Herdr tab/tmux window |
 | `readableIdEnv` | string/null | `"PI_SESSION_READABLE_ID"` | Environment variable that can provide a readable-id suffix override |
 | `maxQueryLength` | integer | `2000` | Max characters of user query sent to LLM prompt. Longer queries have their middle cut out, preserving beginning and end. |
 | `maxNameLength` | integer | `80` | Max characters for the generated name (before prefix/suffix). LLM responses exceeding this are truncated. |

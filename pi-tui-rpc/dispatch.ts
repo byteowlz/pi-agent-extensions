@@ -3,8 +3,8 @@
  *
  * Pure logic against injected dependencies so it is testable without a pi
  * process. Lease enforcement happens here: prompt/steer/follow_up/abort are
- * input commands and require the remote lease; everything else is allowed
- * for any connected client.
+ * mutating commands require this connection's terminal-confirmed lease.
+ * Observation remains available without input control.
  *
  * Response `data` shapes mirror pi's RPC mode. Commands the extension API
  * cannot back return `success: false` with an `unsupported:` error.
@@ -52,11 +52,23 @@ export interface RpcDeps {
 	bash(command: string): Promise<{ stdout: string; stderr: string; exitCode: number | null; cancelled: boolean }>;
 	abortBash(): boolean;
 	leaseRequest(): Promise<{ granted: boolean; reason: string }>;
-	leaseRelease(): void;
+	leaseRelease(): boolean;
 	leaseOwner(): LeaseOwner;
+	leaseHeld(): boolean;
 }
 
-const INPUT_COMMANDS = new Set(["prompt", "steer", "follow_up", "abort"]);
+const OBSERVATION_COMMANDS = new Set([
+	"get_state",
+	"get_messages",
+	"get_entries",
+	"get_tree",
+	"get_fork_messages",
+	"get_last_assistant_text",
+	"get_session_stats",
+	"get_commands",
+	"get_available_models",
+	"get_available_thinking_levels",
+]);
 
 export type DispatchResult = { success: boolean; data?: unknown; error?: string };
 
@@ -65,8 +77,8 @@ function unsupported(what: string): DispatchResult {
 }
 
 export async function dispatchCommand(command: ClientCommand, deps: RpcDeps): Promise<DispatchResult> {
-	if (INPUT_COMMANDS.has(command.type) && deps.leaseOwner() !== "remote") {
-		return { success: false, error: "lease_denied:tui_owns_input" };
+	if (command.type !== "lease" && !OBSERVATION_COMMANDS.has(command.type) && !deps.leaseHeld()) {
+		return { success: false, error: "lease_denied:connection_does_not_own_input" };
 	}
 
 	switch (command.type) {
@@ -132,6 +144,7 @@ export async function dispatchCommand(command: ClientCommand, deps: RpcDeps): Pr
 		}
 		case "cycle_model": {
 			const { models } = await deps.getAvailableModels();
+			if (!deps.leaseHeld()) return { success: false, error: "lease_denied:connection_does_not_own_input" };
 			if (models.length <= 1) return { success: true, data: null };
 			const current = deps.currentModel();
 			let index = current ? models.findIndex((m) => m.provider === current.provider && m.id === current.id) : -1;
@@ -186,7 +199,7 @@ export async function dispatchCommand(command: ClientCommand, deps: RpcDeps): Pr
 
 		case "lease": {
 			if (command.action === "release") {
-				deps.leaseRelease();
+				if (!deps.leaseRelease()) return { success: false, error: "lease_denied:connection_does_not_own_input" };
 				return { success: true, data: { owner: deps.leaseOwner() } };
 			}
 			const request = await deps.leaseRequest();
