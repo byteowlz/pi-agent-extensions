@@ -18,6 +18,8 @@ Automatically generates descriptive session names based on the first user query,
 - **Agent rename tool**: The agent can rename the session via a `rename_session` tool (title sans readable id; the suffix is generated automatically)
 - **Fork-safe readable ids**: The readable-id suffix is regenerated from the forked session's id on fork, so each branch gets a distinct stable id
 - **Connectivity test**: Test model availability with `/auto-rename test`
+- **TUI sync toggles**: Flip outbound/inbound tab-title sync at runtime with
+  `/auto-rename outbound` and `/auto-rename sync` (persisted; inbound applies immediately)
 
 ## Installation
 
@@ -32,6 +34,62 @@ cp -r auto-rename .pi/extensions/
 ```
 
 Then reload pi or restart it.
+
+## Herdr and tmux tab titles
+
+`syncTabTitle: true` (default) projects Pi's title to the calling Herdr tab or
+tmux window on session start/resume/fork and session-name changes, including
+manual renames. Pi retains `[sub] Review Selection [mini-okay-soda]` while the
+tab displays `Review Selection`. Only the known session-derived or configured
+readable-ID suffix is removed; other bracketed title text is preserved.
+
+- Herdr resolves the live tab from the calling pane and verifies its registered
+  session file. It never uses the UI-focused tab or a cached tab ID.
+- tmux resolves the owning window from `TMUX_PANE`, not the active window.
+- Multi-pane tabs/windows are skipped: no session has exclusive title ownership.
+- Herdr failure never falls back to an outer tmux window. Missing hosts and
+  timeouts do not interrupt Pi naming. Pending work is fenced on session
+  replacement/shutdown. No host focus changes or Herdr core changes are made.
+- Set `syncTabTitle: false` to disable independently of automatic naming. This is
+  one-way Pi → tab sync. tmux treats the renamed window as manually named,
+  disabling automatic window naming.
+
+### Inbound sync (host → Pi), opt-in
+
+`syncTabTitleInbound: false` (default) keeps sync strictly one-way. Set it to
+`true` to also listen for host tab renames and apply them to the Pi session
+name:
+
+- **Herdr** subscribes to `tab.renamed` over the session socket
+  (`events.subscribe`), the same socket the official Herdr Pi integration uses.
+  No Herdr core changes are required.
+- **tmux** registers a per-window `window-renamed` hook that writes the new
+  label to a private inbox file this process tails. The hook is removed on
+  shutdown.
+
+Safety rules, all covered by tests:
+
+- The incoming label replaces the session **base name**; the canonical
+  `[readable-id]` for the current session is always re-appended, so a sidebar
+  rename can never drop or spoof the readable id.
+- Any readable-id-shaped suffix in the incoming label is stripped first, so a
+  host cannot inject a forged id.
+- Ownership is verified on every event: the event's tab must be the live,
+  single-pane tab whose registered session file matches this session. Foreign
+  tabs, hijacked panes and shared tabs are ignored.
+- Echoes of the title this extension just pushed are ignored for a short window,
+  so outbound projection never fights user input.
+- Labels are sanitized (control characters removed, bounded length) and never
+  executed. Host failures are best-effort and never break Pi naming.
+- After session replacement/shutdown the listener stops and stale applications
+  are dropped.
+
+Example: a user renames the tab to `Deploy Checks` while Pi shows
+`extensions: Fix Auth [brisk-sunflower-river]`; the Pi name becomes
+`Deploy Checks [brisk-sunflower-river]`. The label replaces the whole name
+(including any prefix); only the canonical readable id is re-appended.
+
+Copied installations must refresh the **whole directory**, including `tab-title.ts`.
 
 ## Configuration
 
@@ -74,6 +132,8 @@ Create `auto-rename.json` in one of these locations (searched in order):
 | `prefixCommand` | string/null | `null` | Shell command to generate dynamic prefix (5s timeout) |
 | `prefixOnly` | boolean | `false` | Skip LLM, use only prefix as full name |
 | `readableIdSuffix` | boolean | `false` | Append `[readable-id]` to generated names |
+| `syncTabTitle` | boolean | `true` | Sync only the title to the owning single-pane Herdr tab/tmux window |
+| `syncTabTitleInbound` | boolean | `false` | Also apply host tab renames to the Pi session name, preserving the canonical readable id |
 | `readableIdEnv` | string/null | `"PI_SESSION_READABLE_ID"` | Environment variable that can provide a readable-id suffix override |
 | `maxQueryLength` | integer | `2000` | Max characters of user query sent to LLM prompt. Longer queries have their middle cut out, preserving beginning and end. |
 | `maxNameLength` | integer | `80` | Max characters for the generated name (before prefix/suffix). LLM responses exceeding this are truncated. |
@@ -176,7 +236,9 @@ Result: `feature/auth: Add OAuth Support`
 | `/auto-rename` | Show current session name |
 | `/auto-rename <name>` | Manually set session name (preserves the readable-id suffix when `readableIdSuffix` is enabled) |
 | `/auto-rename regen` | Force regenerate name from first query |
-| `/auto-rename config` | Show current configuration |
+| `/auto-rename config` | Show current configuration (includes both sync flags) |
+| `/auto-rename sync` | Toggle inbound host→Pi tab sync (`syncTabTitleInbound`) and apply immediately |
+| `/auto-rename outbound` | Toggle Pi→host tab sync (`syncTabTitle`); restarts on next session start |
 | `/auto-rename init` | Create default config in current directory |
 | `/auto-rename test` | Test model connectivity |
 

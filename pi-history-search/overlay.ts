@@ -7,28 +7,21 @@
  * From the Ctrl+Shift+F shortcut (plain ExtensionContext) it is view-only.
  *
  * Composed as a single `Component` (per pi-tui's interface) and shown via
- * `ctx.ui.custom({overlay})`. Search is synchronous against the already-built
- * index (the caller refreshes it once before opening), so there is no
- * per-keystroke re-indexing.
+ * `ctx.ui.custom({overlay})`. Search, index access and previews run in a
+ * cancellable process worker. Obsolete queries never overwrite newer results.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type TUI, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import type { HistorySearchConfig } from "./config.js";
-import {
-	type BranchMeta,
-	type HistoryHit,
-	type ReadResult,
-	findSessionPath,
-	listRecent,
-	queryProject,
-	readSession,
-} from "./indexer.js";
+import type { BranchMeta, HistoryHit, ReadResult } from "./indexer.js";
+import type { HistoryWorker } from "./worker.js";
 
 export interface OverlayDeps {
 	base: string;
 	dir: string;
 	config: HistorySearchConfig;
+	worker: HistoryWorker;
 	/** Optional seed query (e.g. from `/history <query>`). */
 	initialQuery?: string;
 }
@@ -124,7 +117,11 @@ function isPrintable(data: string): boolean {
 
 export class HistoryOverlay implements Component {
 	private query = "";
-	private results: HistoryHit[];
+	private results: HistoryHit[] = [];
+	private operation = new AbortController();
+	private status = "";
+	private revision = 0;
+	private debounce: ReturnType<typeof setTimeout> | undefined;
 	private selected = 0;
 	private mode: "search" | "preview" = "search";
 	private preview: { read: ReadResult; lines: string[]; scroll: number } | null = null;
@@ -138,9 +135,7 @@ export class HistoryOverlay implements Component {
 		private readonly opener?: OverlayOpener
 	) {
 		this.query = deps.initialQuery?.trim() ?? "";
-		this.results = this.query
-			? queryProject(deps.dir, this.query, deps.config, deps.config.maxResults)
-			: listRecent(deps.dir, deps.config.maxResults);
+		this.runSearch();
 	}
 
 	invalidate(): void {
@@ -159,17 +154,58 @@ export class HistoryOverlay implements Component {
 	}
 
 	private runSearch(): void {
-		this.results = this.query.trim()
-			? queryProject(this.deps.dir, this.query, this.deps.config, this.deps.config.maxResults)
-			: listRecent(this.deps.dir, this.deps.config.maxResults);
-		this.selected = 0;
+		this.operation.abort();
+		this.operation = new AbortController();
+		const revision = ++this.revision;
+		this.status = "Searching…";
+		clearTimeout(this.debounce);
+		this.debounce = setTimeout(() => {
+			this.debounce = undefined;
+			this.executeSearch(revision);
+		}, 80);
+	}
+
+	private executeSearch(revision: number): void {
+		if (this.closed || revision !== this.revision) return;
+		const task = this.query.trim()
+			? this.deps.worker.call(
+					"queryProject",
+					[this.deps.dir, this.query, this.deps.config, this.deps.config.maxResults],
+					this.operation.signal
+				)
+			: this.deps.worker.call("listRecent", [this.deps.dir, this.deps.config.maxResults], this.operation.signal);
+		void task
+			.then((hits) => {
+				if (this.closed || revision !== this.revision) return;
+				this.results = hits;
+				this.selected = 0;
+				this.status = "";
+				this.tui.requestRender();
+			})
+			.catch((error: unknown) => {
+				if (this.closed || revision !== this.revision) return;
+				this.status = error instanceof Error ? error.message : "History search failed";
+				this.tui.requestRender();
+			});
+	}
+
+	dispose(): void {
+		clearTimeout(this.debounce);
+		this.closed = true;
+		this.operation.abort();
+	}
+
+	private finish(): void {
+		this.dispose();
+		this.done();
 	}
 
 	private handleSearchInput(data: string): void {
 		if (matchesKey(data, "escape")) {
-			this.done();
+			this.finish();
 			return;
 		}
+		if (this.status && (matchesKey(data, "return") || matchesKey(data, "o"))) return;
 		if (matchesKey(data, "return")) {
 			if (this.results.length > 0) this.enterPreview();
 		} else if (matchesKey(data, "up")) {
@@ -214,13 +250,29 @@ export class HistoryOverlay implements Component {
 	}
 
 	private enterPreview(): void {
+		void this.loadPreview().catch(() => {
+			/* Worker errors leave the picker usable. */
+		});
+	}
+
+	private async loadPreview(): Promise<void> {
 		const hit = this.results[this.selected];
-		const path = findSessionPath(this.deps.base, hit.sessionId, this.deps.dir);
+		if (!hit) return;
+		const revision = this.revision;
+		const path = await this.deps.worker.call(
+			"findSessionPath",
+			[this.deps.base, hit.sessionId, this.deps.dir],
+			this.operation.signal
+		);
 		const firstMatch = hit.matches[0]?.msgIndex;
 		const read: ReadResult = path
-			? readSession(
-					path,
-					typeof firstMatch === "number" ? { around: firstMatch, before: 4, after: 12, maxChars: 600 } : { maxChars: 8000 }
+			? await this.deps.worker.call(
+					"readSession",
+					[
+						path,
+						typeof firstMatch === "number" ? { around: firstMatch, before: 4, after: 12, maxChars: 600 } : { maxChars: 8000 },
+					],
+					this.operation.signal
 				)
 			: {
 					sessionId: hit.sessionId,
@@ -231,14 +283,28 @@ export class HistoryOverlay implements Component {
 					messages: [],
 					truncated: false,
 				};
+		if (this.closed || revision !== this.revision || this.results[this.selected]?.sessionId !== hit.sessionId) return;
 		this.preview = { read, lines: [], scroll: 0 };
 		this.mode = "preview";
+		this.tui.requestRender();
 	}
 
 	private openSelected(): void {
+		void this.openHit().catch(() => {
+			/* Cancellation does not switch sessions. */
+		});
+	}
+
+	private async openHit(): Promise<void> {
 		const hit = this.results[this.selected];
 		if (!hit) return;
-		const path = findSessionPath(this.deps.base, hit.sessionId, this.deps.dir);
+		const revision = this.revision;
+		const path = await this.deps.worker.call(
+			"findSessionPath",
+			[this.deps.base, hit.sessionId, this.deps.dir],
+			this.operation.signal
+		);
+		if (this.closed || revision !== this.revision || this.results[this.selected]?.sessionId !== hit.sessionId) return;
 		if (!path) {
 			this.tui.requestRender();
 			return;
@@ -248,10 +314,8 @@ export class HistoryOverlay implements Component {
 			this.tui.requestRender();
 			return;
 		}
-		this.closed = true;
-		// Close the overlay first, then switch. switchSession tears down the
-		// extension runtime; running it while the overlay is live can corrupt state.
-		this.done();
+		// Close before switching; never retain a live overlay across replacement.
+		this.finish();
 		void this.opener(path, hit);
 	}
 
@@ -287,6 +351,10 @@ export class HistoryOverlay implements Component {
 		lines.push(t.fg("muted", `  └${"─".repeat(inputInner)}┘`));
 		lines.push("");
 
+		if (this.status) {
+			lines.push(t.fg("muted", truncateToWidth(this.status, w)));
+			return lines;
+		}
 		if (this.results.length === 0) {
 			lines.push(t.fg("muted", this.query ? `No sessions match "${this.query}"` : "No sessions yet"));
 			return lines;

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- 2.10.2: support Python 3 stdlib `fcntl.flock` kernel locking on macOS and
+  Linux without util-linux flock. Keep Linux flock compatibility, private
+  persistent lock inodes, bounded acquisition/startup and fail-closed errors.
+  Regression tests cover missing helper, cross-process exclusion, parent crash,
+  backend interoperability and operation failure. Native Mac smoke test pending.
+
 - 2.7.1: publish the complete Questions/Review spec schema to model tool discovery
   rather than opaque input. Add prompt-field/kind hints, complete example and
   question-index validation paths; preserve strict unknown-field rejection.

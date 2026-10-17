@@ -91,6 +91,8 @@ export type HelloFrame = {
 	lease: LeaseOwner;
 	/** Every command type this hub answers (including `unsupported:` ones). */
 	commands: string[];
+	/** Additive feature negotiation; absence must not imply safe control. */
+	capabilities?: string[];
 };
 
 export type ParseResult = { ok: true; value: unknown } | { ok: false; error: string; empty: boolean };

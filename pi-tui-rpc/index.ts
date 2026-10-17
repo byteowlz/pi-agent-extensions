@@ -108,17 +108,9 @@ export default function (pi: ExtensionAPI) {
 	const lease = createLease({
 		confirmTakeover: async () => {
 			const ctx = currentCtx;
-			if (!ctx || isRpcMode || !ctx.hasUI) {
-				// No TUI to ask; the socket shares the process trust domain.
-				return true;
-			}
-			// Same-user socket: the terminal already revokes the lease on any
-			// interactive keystroke, so a takeover prompt only adds a round trip
-			// through a window the user is not looking at. Auto-grant by default;
-			// PI_TUI_RPC_LEASE_CONFIRM=1 restores the prompt for shared terminals.
-			if (process.env.PI_TUI_RPC_LEASE_CONFIRM?.trim() !== "1") {
-				return true;
-			}
+			// Socket reachability is observation, never permission to type.
+			// Headless/RPC invocations have no terminal authority to confirm.
+			if (!ctx || isRpcMode || !ctx.hasUI) return false;
 			return ctx.ui.confirm("Remote input request", "An RPC client requests input control. Allow?");
 		},
 		onChange: (owner, reason) => {
@@ -160,7 +152,7 @@ export default function (pi: ExtensionAPI) {
 		};
 	};
 
-	const deps = (): RpcDeps => {
+	const deps = (clientId: string): RpcDeps => {
 		const ctx = currentCtx;
 		return {
 			isStreaming: () => (ctx ? !ctx.isIdle() : false),
@@ -388,16 +380,15 @@ export default function (pi: ExtensionAPI) {
 				controller.abort();
 				return true;
 			},
-			leaseRequest: () => lease.requestRemote(),
-			leaseRelease: () => {
-				lease.release("client_release");
-			},
+			leaseRequest: () => lease.requestRemote(clientId),
+			leaseRelease: () => lease.release(clientId),
 			leaseOwner: () => lease.owner(),
+			leaseHeld: () => lease.heldBy(clientId),
 		};
 	};
 
-	const handleCommand = (command: ClientCommand, reply: (frame: unknown) => void): void => {
-		void dispatchCommand(command, deps())
+	const handleCommand = (clientId: string, command: ClientCommand, reply: (frame: unknown) => void): void => {
+		void dispatchCommand(command, deps(clientId))
 			.then((result) => {
 				reply(responseFrame(command.type, command.id, result));
 			})
@@ -413,15 +404,23 @@ export default function (pi: ExtensionAPI) {
 		hub = createHub({
 			socketPath,
 			onConnect: (_clientId, reply) => {
-				reply({ type: "hello", v: 1, pid: process.pid, lease: lease.owner(), commands: COMMAND_TYPES });
+				reply({
+					type: "hello",
+					v: 1,
+					pid: process.pid,
+					lease: lease.owner(),
+					commands: COMMAND_TYPES,
+					capabilities: ["connection_leases_v1"],
+				});
 			},
-			onLine: (_clientId, value, reply) => {
+			onDisconnect: (clientId) => lease.disconnect(clientId),
+			onLine: (clientId, value, reply) => {
 				const checked = validateCommand(value);
 				if (!checked.ok) {
 					reply(responseFrame("unknown", undefined, { success: false, error: checked.error }));
 					return;
 				}
-				handleCommand(checked.command, reply);
+				handleCommand(clientId, checked.command, reply);
 			},
 		});
 		await hub.start();
@@ -447,6 +446,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_shutdown", async (event) => {
 		hub?.broadcast(eventFrame("session_shutdown", event));
 		currentCtx = null;
+		lease.reset("session_shutdown");
 		await stopHub();
 	});
 
