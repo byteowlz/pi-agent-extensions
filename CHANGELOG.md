@@ -4,6 +4,18 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Tool catalog audit script
+
+- Added `scripts/list-tools.mjs` (`npm run tools:list`): lists every tool and
+  action-style sub-tool the extensions register, using the installed Pi runtime
+  as the authority. It probes `pi.getAllTools()`/`pi.getCommands()` in an
+  isolated offline sandbox (synthetic provider, stubbed service CLIs, no session
+  files, no credentials), attributes tools to extensions by `sourceInfo.path`,
+  extracts enum discriminators as sub-tools, recovers `label`/`promptSnippet`
+  via a static scan, and flags naming/nesting findings (non-snake_case names,
+  optional discriminators, missing promptSnippets, builtin shadowing, duplicate
+  names). Supports `--json`, `--grep`, `--only`, `--all`, and `--check`.
+
 ### Inbound tab-title sync (2.14.0)
 
 - **pi-auto-rename 1.4.0**: opt-in `syncTabTitleInbound` applies host tab

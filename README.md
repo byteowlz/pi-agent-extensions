@@ -66,6 +66,15 @@ npm install
 | `npm run typecheck` | tsgo type checking |
 | `npm test` | Maintained extension tests (excludes archive) |
 | `npm run test:pi-1 -- /path/to/pi` | Exact Pi 1.0.0 individual + combined catalog smoke |
+| `npm run tools:list` | List every tool/sub-tool each extension registers (naming/nesting audit) |
+
+`npm run tools:list` spawns the installed Pi in an isolated, offline sandbox
+(synthetic provider, stubbed service CLIs, no session files) and reports the
+authoritative tool catalog from `pi.getAllTools()`, grouped by extension. It
+extracts action-style "sub-tools" from each tool's parameter schema and flags
+naming/nesting issues. Useful flags: `--json`, `--grep <name>`, `--only a,b`,
+`--all` (probe extensions with no detected registrations), and `--check`
+(non-zero exit on findings, for CI).
 
 ### Linting Rules
 

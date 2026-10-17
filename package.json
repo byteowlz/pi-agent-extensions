@@ -18,7 +18,8 @@
 		"test:structured-output-host": "node scripts/test-structured-output-host.mjs",
 		"test:pi-1": "node scripts/test-pi-1-catalog.mjs",
 		"test:selection-rpc": "node scripts/test-selection-rpc.mjs",
-		"test:selection-tool": "node scripts/test-selection-tool.mjs"
+		"test:selection-tool": "node scripts/test-selection-tool.mjs",
+		"tools:list": "node scripts/list-tools.mjs"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.4",
