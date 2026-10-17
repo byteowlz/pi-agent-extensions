@@ -4,32 +4,95 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
-### Concise xlatch file sharing (2.14.1)
+### Concise xlatch file sharing (2.15.4)
 
 - **pi-xlatch-session 2.0.3**: remove repeated file-sharing boilerplate; keep the sender note and local paths visible.
 
-### Faster pi-nym redaction (2.14.0)
+### Faster pi-nym redaction (2.15.3)
 
 - **pi-nym 0.4.0**: the reviewed values are applied without a second scan, and
   repeated scans reuse nym's NER cache.
 
-### pi-nym category selection (2.13.0)
+### pi-nym category selection (2.15.2)
 
 - **pi-nym 0.3.0**: whole categories can be selected or unselected in the
   redaction menu, with folding and a category overview for long lists.
 
-### pi-nym progress bar (2.12.0)
+### pi-nym progress bar (2.15.1)
 
 - **pi-nym 0.2.0**: progress bar while nym scans and redacts, from nym's new
   `--progress-json` events.
 
-### Local session redaction (2.11.0)
+### Local session redaction (2.15.0)
 
 - New **pi-nym 0.1.0**: `/nym` redacts the current session with nym's local trace
   anonymization, after a grouped checklist of every value it would replace, into a
   new session it switches to. The original is kept, deleted, or stored as a
   verified GnuPG backup keyed by a kyz secret; `/nym-restore` brings it back.
   Cloud-model guard and a startup warning when `nym` is missing from PATH.
+
+### Tool catalog audit script
+
+- Added `scripts/list-tools.mjs` (`npm run tools:list`): lists every tool and
+  action-style sub-tool the extensions register, using the installed Pi runtime
+  as the authority. It probes `pi.getAllTools()`/`pi.getCommands()` in an
+  isolated offline sandbox (synthetic provider, stubbed service CLIs, no session
+  files, no credentials), attributes tools to extensions by `sourceInfo.path`,
+  extracts enum discriminators as sub-tools, recovers `label`/`promptSnippet`
+  via a static scan, and flags naming/nesting findings (non-snake_case names,
+  optional discriminators, missing promptSnippets, builtin shadowing, duplicate
+  names). Supports `--json`, `--grep`, `--only`, `--all`, and `--check`.
+
+### Inbound tab-title sync (2.14.0)
+
+- **pi-auto-rename 1.4.0**: opt-in `syncTabTitleInbound` applies host tab
+  renames to the Pi session name while preserving the canonical readable id.
+  Herdr listens to `tab.renamed` over the session socket (no core changes);
+  tmux uses a per-window `window-renamed` hook. Ownership is re-verified per
+  event (foreign/hijacked/shared tabs ignored), id-shaped suffixes are stripped
+  to prevent spoofing, pushed titles are echo-suppressed, and listeners stop on
+  session replacement/shutdown. Toggle at runtime with `/auto-rename sync`
+  (inbound, applies immediately) and `/auto-rename outbound`; both persist to
+  the effective config file and never clobber invalid operator JSON.
+
+### Off-thread history and startup diagnosis (2.13.0)
+
+- Run history searches/indexing/reads/grep/branch enumeration and overlay previews
+  in bounded cancellable child processes. Debounce overlay queries, cancel stale
+  work and stop workers on session replacement/shutdown. Ship a self-contained
+  worker artifact with freshness/copied-install/UTF-8/responsiveness tests.
+- Add bounded isolated synthetic PTY startup probe. Bare regular/fullscreen and
+  history/TUI-RPC combinations respond; affected-host startup hang remains under
+  diagnosis, separate from eliminating main-thread history work.
+
+### Reviewed conversation rewrite branches (2.12.0)
+
+- New **pi-conversation-edit 1.0.0**: `/rewrite` selects whole projected text
+  messages for native/external-editor or optional tool-less AI rewriting. Require
+  per-message diff review and final confirmation before publishing/switching to
+  an independent native fork. Keep later context by default; optional restart.
+- Preserve source history and tool records, stage completed forks privately,
+  fence stale sessions and protect unsent drafts/non-text content. `/rewrite inspect`
+  previews future editable context; historical bubbles remain original.
+
+### Caller-owned terminal tab titles (2.11.0)
+
+- **pi-auto-rename 1.3.0**: independently toggleable Pi → Herdr/tmux title
+  projection. Preserve canonical readable IDs in Pi, strip known suffixes and
+  sub/side roles only for tab display. Never target UI focus; skip shared panes
+  and fence obsolete work on session replacement. Includes isolated tmux proof.
+
+### Selection portable kernel locking (2.10.2)
+
+- Use Python 3 stdlib fcntl locks on macOS and when Linux flock is absent;
+  preserve crash release, private persistent inodes and fail-closed updates.
+- Bound helper startup and report actionable missing-backend errors. Linux
+  exclusion/crash/interoperability regressions pass; native Mac smoke test pending.
+
+### SSH key picker shortcut safety (2.10.1)
+
+- **pi-ssh-key 1.2.2**: select-all now requires Ctrl+A; ordinary a/A remain
+  filter text. Updated help and picker interaction regressions.
 
 ### Scoped prompt stash and editor-fill commands (2.10.0)
 

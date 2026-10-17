@@ -857,7 +857,7 @@ interface KeyItem {
 	comment?: string;
 }
 
-async function pickKeys(ctx: ExtensionCommandContext, keyDir: string): Promise<KeyItem[] | undefined> {
+export async function pickKeys(ctx: ExtensionCommandContext, keyDir: string): Promise<KeyItem[] | undefined> {
 	const paths = discoverKeys(keyDir);
 	const items: KeyItem[] = [];
 	for (const path of paths) {
@@ -939,7 +939,7 @@ async function pickKeys(ctx: ExtensionCommandContext, keyDir: string): Promise<K
 				refresh();
 				return;
 			}
-			if (data === "a" || data === "A" || matchesKey(data, "ctrl+a")) {
+			if (matchesKey(data, Key.ctrl("a"))) {
 				toggleAll();
 				refresh();
 				return;
@@ -998,7 +998,10 @@ async function pickKeys(ctx: ExtensionCommandContext, keyDir: string): Promise<K
 			lines.push("");
 			lines.push(
 				...wrapTextWithAnsi(
-					theme.fg("dim", "Type to filter • space select • a select all • Enter load selected (or highlighted) • Esc cancel"),
+					theme.fg(
+						"dim",
+						"Type to filter • space select • Ctrl+A select all • Enter load selected (or highlighted) • Esc cancel"
+					),
 					rw
 				)
 			);

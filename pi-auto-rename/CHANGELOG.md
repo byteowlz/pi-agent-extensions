@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.4.0
+
+- Add opt-in **inbound** tab-title sync (`syncTabTitleInbound`, default false):
+  host tab renames are applied to the Pi session name, preserving the canonical
+  readable id.
+- Herdr listens to `tab.renamed` over the session socket via `events.subscribe`
+  (no Herdr core changes). tmux uses a per-window `window-renamed` hook writing
+  to a private inbox file, removed on shutdown.
+- Verify ownership on every event (live single-pane tab matching this session's
+  registered file); ignore foreign/hijacked/shared tabs. Strip id-shaped
+  suffixes so a host cannot spoof the readable id. Suppress echoes of titles
+  this extension just pushed. Sanitize and bound labels; host failures never
+  break Pi naming. Stop listening on session replacement/shutdown.
+- Tests: fake Herdr protocol server, real extension end-to-end over a socket,
+  and isolated real tmux window-hook propagation.
+- Add `/auto-rename sync` and `/auto-rename outbound` TUI toggles. Both persist
+  to the effective config file (never clobbering invalid operator JSON). Inbound
+  toggling starts/stops the listener immediately without a reload; `/auto-rename
+  config` now reports both sync flags.
+
+## 1.3.0
+
+- Sync Pi session titles to caller-owned Herdr tabs and tmux windows, preserving
+  readable IDs in Pi. Add independent `syncTabTitle` toggle (default true).
+- Resolve live explicit host IDs, verify Herdr session ownership, skip shared
+  panes, revalidate before rename, and fence queued work on session replacement.
+- One-way, bounded best-effort integration: no focus changes, Herdr core changes
+  or fallback from failed Herdr to an outer tmux window.
+- Regression coverage includes an isolated real tmux server; no live tabs are
+  renamed during qualification. Refresh complete copied extension directories.
+
 ## 1.2.0
 
 - Export canonical spawn-time naming for session tools: `[sub] Title [readable-id]`

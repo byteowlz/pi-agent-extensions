@@ -19,6 +19,8 @@ export interface HubOptions {
 	onLine(clientId: string, value: unknown, reply: ReplyFn): void;
 	/** Called after a client is registered; use it to send a hello frame. */
 	onConnect?(clientId: string, reply: ReplyFn): void;
+	/** Exactly once on EOF, failure, backpressure or stop. */
+	onDisconnect?(clientId: string): void;
 }
 
 export interface Hub {
@@ -36,12 +38,18 @@ export function createHub(options: HubOptions): Hub {
 	let server: net.Server | null = null;
 	let listening = false;
 
-	const writeFrame = (socket: net.Socket, frame: unknown): void => {
+	const writeFrame = (clientId: string, socket: net.Socket, frame: unknown): void => {
 		if (!socket.writable) {
 			return;
 		}
 		try {
-			socket.write(`${JSON.stringify(frame)}\n`);
+			const line = `${JSON.stringify(frame)}\n`;
+			if (socket.writableLength + Buffer.byteLength(line) > 1024 * 1024) {
+				removeClient(clientId);
+				socket.destroy();
+				return;
+			}
+			socket.write(line);
 		} catch {
 			// Socket died between the writable check and the write; the close
 			// handler prunes it.
@@ -52,18 +60,28 @@ export function createHub(options: HubOptions): Hub {
 		return (frame: unknown) => {
 			const socket = clients.get(clientId);
 			if (socket) {
-				writeFrame(socket, frame);
+				writeFrame(clientId, socket, frame);
 			}
 		};
 	};
 
 	const handleChunk = (clientId: string, chunk: string): void => {
 		const previous = buffers.get(clientId) ?? "";
-		const combined = previous + chunk;
-		const lines = combined.split("\n");
+		const lines = (previous + chunk).split("\n");
 		const rest = lines.pop() ?? "";
+		if (
+			Buffer.byteLength(rest) > 1024 * 1024 ||
+			lines.length > 128 ||
+			lines.some((line) => Buffer.byteLength(line) > 1024 * 1024)
+		) {
+			const socket = clients.get(clientId);
+			removeClient(clientId);
+			socket?.destroy();
+			return;
+		}
 		buffers.set(clientId, rest);
 		for (const line of lines) {
+			if (!clients.has(clientId)) return;
 			const parsed = safeParseLine(line);
 			if (parsed.ok) {
 				options.onLine(clientId, parsed.value, reply(clientId));
@@ -82,11 +100,16 @@ export function createHub(options: HubOptions): Hub {
 	};
 
 	const removeClient = (clientId: string): void => {
-		clients.delete(clientId);
+		if (!clients.delete(clientId)) return;
 		buffers.delete(clientId);
+		options.onDisconnect?.(clientId);
 	};
 
 	const handleConnection = (socket: net.Socket): void => {
+		if (clients.size >= 64) {
+			socket.destroy();
+			return;
+		}
 		clientSeq += 1;
 		const clientId = `c${clientSeq}`;
 		clients.set(clientId, socket);
@@ -98,6 +121,7 @@ export function createHub(options: HubOptions): Hub {
 		});
 		socket.on("error", () => {
 			removeClient(clientId);
+			socket.destroy();
 		});
 		socket.on("close", () => {
 			removeClient(clientId);
@@ -117,6 +141,7 @@ export function createHub(options: HubOptions): Hub {
 				});
 				server.once("error", reject);
 				server.listen(options.socketPath, () => {
+					fs.chmodSync(options.socketPath, 0o600);
 					listening = true;
 					resolve();
 				});
@@ -126,10 +151,10 @@ export function createHub(options: HubOptions): Hub {
 			const current = server;
 			server = null;
 			listening = false;
-			for (const socket of clients.values()) {
+			for (const [clientId, socket] of [...clients]) {
+				removeClient(clientId);
 				socket.destroy();
 			}
-			clients.clear();
 			buffers.clear();
 			if (!current) {
 				return;
@@ -140,14 +165,14 @@ export function createHub(options: HubOptions): Hub {
 			fs.rmSync(options.socketPath, { force: true });
 		},
 		broadcast(frame: unknown): void {
-			for (const socket of clients.values()) {
-				writeFrame(socket, frame);
+			for (const [clientId, socket] of [...clients]) {
+				writeFrame(clientId, socket, frame);
 			}
 		},
 		send(clientId: string, frame: unknown): void {
 			const socket = clients.get(clientId);
 			if (socket) {
-				writeFrame(socket, frame);
+				writeFrame(clientId, socket, frame);
 			}
 		},
 		clientCount(): number {

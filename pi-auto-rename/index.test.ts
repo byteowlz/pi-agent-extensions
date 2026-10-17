@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -107,6 +107,7 @@ function buildMockCtx(cwd: string, sessionId: string, config?: Record<string, un
 			],
 			getSessionId: () => sessionId,
 			getSessionName: () => "",
+			getSessionFile: () => `/synthetic/${sessionId}.jsonl`,
 		},
 		modelRegistry: {
 			getAll: () => [],
@@ -136,6 +137,52 @@ function tmpCwd(): string {
 }
 
 const READABLE_ID_RE = /\s\[[a-z][a-z0-9-]*-[a-z][a-z0-9-]*-[a-z][a-z0-9-]*\]$/i;
+
+describe("pi-auto-rename TUI sync toggles", () => {
+	test("sync toggles inbound config and preserves unrelated keys", async () => {
+		const { pi, fireSessionStart, runCommand } = buildMockExtensionAPI();
+		autoRename(pi);
+		const cwd = tmpCwd();
+		writeConfig(cwd, { enabled: true, readableIdSuffix: true, prompt: "keep me" });
+		const ctx = buildMockCtx(cwd, "test-session-id");
+		await fireSessionStart({}, ctx);
+
+		await runCommand("sync", ctx);
+		let saved = JSON.parse(readFileSync(join(cwd, CONFIG_FILENAME), "utf-8"));
+		expect(saved.syncTabTitleInbound).toBe(true);
+		expect(saved.prompt).toBe("keep me");
+		expect(saved.readableIdSuffix).toBe(true);
+
+		await runCommand("sync", ctx);
+		saved = JSON.parse(readFileSync(join(cwd, CONFIG_FILENAME), "utf-8"));
+		expect(saved.syncTabTitleInbound).toBe(false);
+	});
+
+	test("outbound toggle writes syncTabTitle only", async () => {
+		const { pi, fireSessionStart, runCommand } = buildMockExtensionAPI();
+		autoRename(pi);
+		const cwd = tmpCwd();
+		writeConfig(cwd, { syncTabTitleInbound: true });
+		const ctx = buildMockCtx(cwd, "test-session-id");
+		await fireSessionStart({}, ctx);
+		await runCommand("outbound", ctx);
+		const saved = JSON.parse(readFileSync(join(cwd, CONFIG_FILENAME), "utf-8"));
+		expect(saved.syncTabTitle).toBe(false);
+		expect(saved.syncTabTitleInbound).toBe(true);
+	});
+
+	test("invalid config JSON is not clobbered by a toggle", async () => {
+		const { pi, fireSessionStart, runCommand } = buildMockExtensionAPI();
+		autoRename(pi);
+		const cwd = tmpCwd();
+		const original = "{ this is not json";
+		writeFileSync(join(cwd, CONFIG_FILENAME), original);
+		const ctx = buildMockCtx(cwd, "test-session-id");
+		await fireSessionStart({}, ctx);
+		await runCommand("sync", ctx);
+		expect(readFileSync(join(cwd, CONFIG_FILENAME), "utf-8")).toBe(original);
+	});
+});
 
 describe("pi-auto-rename stale-context guard", () => {
 	test("before_agent_start with prefixOnly does not crash when ctx goes stale", async () => {
@@ -323,6 +370,27 @@ describe("pi-auto-rename /auto-rename readable id", () => {
 		expect(name.startsWith("new title [")).toBe(true);
 		expect(READABLE_ID_RE.test(name)).toBe(true);
 		expect(name).not.toBe("new title");
+	});
+});
+
+describe("pi-auto-rename inbound tab-title sync", () => {
+	test("is inert unless explicitly enabled", async () => {
+		const { pi, fireSessionStart } = buildMockExtensionAPI();
+		autoRename(pi);
+		const cwd = tmpCwd();
+		const previous = { ...process.env };
+		process.env.HERDR_ENV = "1";
+		process.env.HERDR_SOCKET_PATH = join(cwd, "does-not-exist.sock");
+		process.env.HERDR_PANE_ID = "w1:p1";
+		try {
+			// syncTabTitleInbound defaults to false: no socket is opened, no crash.
+			await fireSessionStart({}, buildMockCtx(cwd, "test-session-id"));
+			expect(process.env.HERDR_ENV).toBe("1");
+		} finally {
+			process.env.HERDR_ENV = previous.HERDR_ENV;
+			process.env.HERDR_SOCKET_PATH = previous.HERDR_SOCKET_PATH;
+			process.env.HERDR_PANE_ID = previous.HERDR_PANE_ID;
+		}
 	});
 });
 

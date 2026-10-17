@@ -52,14 +52,17 @@
  * The prefixCommand runs in the session's cwd. If it fails, falls back to static prefix.
  */
 
-import { execSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { execFile, execSync } from "node:child_process";
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
+import net from "node:net";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { type InboundTarget, createInboundTarget } from "./tab-title-inbound.js";
+import { TabTitleSync, tabTitle } from "./tab-title.js";
 
 // ============================================================================
 // Types
@@ -99,6 +102,8 @@ interface AutoRenameConfig {
 	prefixOnly?: boolean;
 	readableIdSuffix?: boolean;
 	readableIdEnv?: string;
+	syncTabTitle?: boolean;
+	syncTabTitleInbound?: boolean;
 	enabled?: boolean;
 	debug?: boolean;
 	wordlistPath?: string;
@@ -119,6 +124,8 @@ type ResolvedConfig = {
 	prefixOnly: boolean;
 	readableIdSuffix: boolean;
 	readableIdEnv: string | undefined;
+	syncTabTitle: boolean;
+	syncTabTitleInbound: boolean;
 	enabled: boolean;
 	debug: boolean;
 	wordlistPath: string | undefined;
@@ -174,6 +181,8 @@ const DEFAULT_CONFIG: ResolvedConfig = {
 	prefixOnly: false,
 	readableIdSuffix: false,
 	readableIdEnv: "PI_SESSION_READABLE_ID",
+	syncTabTitle: true,
+	syncTabTitleInbound: false,
 	enabled: true,
 	debug: false,
 	wordlistPath: undefined,
@@ -183,6 +192,50 @@ const DEFAULT_CONFIG: ResolvedConfig = {
 };
 
 const CONFIG_FILENAME = "auto-rename.json";
+
+/** First existing config path (loadConfig precedence), else the global default. */
+function effectiveConfigPath(cwd: string): string {
+	const candidates = [
+		join(cwd, CONFIG_FILENAME),
+		join(cwd, ".pi", CONFIG_FILENAME),
+		join(homedir(), ".pi", "agent", CONFIG_FILENAME),
+	];
+	for (const path of candidates) {
+		if (existsSync(path)) return path;
+	}
+	return candidates[2] as string;
+}
+
+/**
+ * Persist a boolean config key to the effective config file, preserving any
+ * existing keys. Fails closed (returns false) on unreadable/invalid JSON so a
+ * toggle never clobbers an operator's file.
+ */
+function persistBooleanSetting(
+	cwd: string,
+	key: string,
+	value: boolean
+): { ok: true; path: string } | { ok: false; error: string } {
+	const path = effectiveConfigPath(cwd);
+	let current: Record<string, unknown> = {};
+	if (existsSync(path)) {
+		try {
+			const parsed = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+				return { ok: false, error: "config is not a JSON object" };
+			current = parsed as Record<string, unknown>;
+		} catch {
+			return { ok: false, error: "config is not valid JSON" };
+		}
+	}
+	const next = { ...current, [key]: value };
+	try {
+		writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
+	} catch (error) {
+		return { ok: false, error: error instanceof Error ? error.message : String(error) };
+	}
+	return { ok: true, path };
+}
 const SUBAGENT_PREFIX_ENV = "PI_SUBAGENT_PREFIX";
 const DEFAULT_WORDLIST_PATH = resolveDefaultWordlistPath();
 
@@ -234,7 +287,6 @@ const TITLE_CHANGED_STATUS_KEY = "oqto_title_changed";
 
 function loadConfig(cwd: string): ResolvedConfig {
 	const paths = [join(cwd, CONFIG_FILENAME), join(cwd, ".pi", CONFIG_FILENAME), join(homedir(), ".pi", "agent", CONFIG_FILENAME)];
-
 	for (const path of paths) {
 		if (existsSync(path)) {
 			try {
@@ -1123,6 +1175,8 @@ function handleConfig(ctx: ExtensionCommandContext, config: ResolvedConfig): voi
 			: null,
 		config.prefixOnly ? "prefixOnly=true" : null,
 		config.readableIdSuffix ? "readableIdSuffix=true" : null,
+		`syncTabTitle=${config.syncTabTitle}`,
+		`syncTabTitleInbound=${config.syncTabTitleInbound}`,
 		`maxQuery=${config.maxQueryLength}`,
 		`maxName=${config.maxNameLength}`,
 		`enabled=${config.enabled}`,
@@ -1171,6 +1225,152 @@ async function handleTest(ctx: ExtensionCommandContext, config: ResolvedConfig):
 export default function (pi: ExtensionAPI) {
 	let sessionRenamed = false;
 	let firstPromptHandled = false;
+	let inbound: InboundTarget | undefined;
+	let inboundDir: string | undefined;
+	let inboundSessionFile: string | undefined;
+	const tabSync = new TabTitleSync();
+
+	const stopInbound = () => {
+		inbound?.stop();
+		inbound = undefined;
+		if (inboundDir) {
+			const dir = inboundDir;
+			inboundDir = undefined;
+			try {
+				rmSync(dir, { recursive: true, force: true });
+			} catch {
+				/* Best effort temp cleanup. */
+			}
+		}
+	};
+
+	/** One-shot Herdr socket request; bounded and never fatal. */
+	const herdrRequest = (method: string, params: unknown): Promise<unknown> =>
+		new Promise((resolve, reject) => {
+			const socketPath = process.env.HERDR_SOCKET_PATH;
+			if (!socketPath) {
+				reject(new Error("no herdr socket"));
+				return;
+			}
+			const endpoint = process.platform === "win32" ? `\\\\.\\pipe\\${socketPath}` : socketPath;
+			const socket = net.createConnection(endpoint);
+			let buffer = "";
+			const finish = (error?: Error, value?: unknown) => {
+				socket.destroy();
+				if (error) reject(error);
+				else resolve(value);
+			};
+			const timeout = setTimeout(() => finish(new Error("herdr socket timeout")), 1000);
+			timeout.unref?.();
+			socket.setEncoding("utf8");
+			socket.on("error", (error) => {
+				clearTimeout(timeout);
+				finish(error);
+			});
+			socket.on("connect", () => socket.write(`${JSON.stringify({ id: `pi-auto-rename:${method}`, method, params })}\n`));
+			socket.on("data", (chunk: string) => {
+				buffer += chunk;
+				const index = buffer.indexOf("\n");
+				if (index < 0) return;
+				clearTimeout(timeout);
+				try {
+					finish(undefined, JSON.parse(buffer.slice(0, index)));
+				} catch (error) {
+					finish(error as Error);
+				}
+			});
+		});
+
+	const tmuxRun = (args: string[]): Promise<string> =>
+		new Promise((resolve, reject) => {
+			execFile("tmux", args, { timeout: 1000, maxBuffer: 64 * 1024 }, (error, stdout) => {
+				if (error) reject(error);
+				else resolve(stdout);
+			});
+		});
+
+	/** Read a bounded chunk of the tmux inbox starting at a byte offset. */
+	const readInbox = (path: string, from: number): { text: string; offset: number } => {
+		const size = statSync(path).size;
+		if (size <= from) return { text: "", offset: size };
+		const length = Math.min(size - from, 32 * 1024);
+		const fd = openSync(path, "r");
+		try {
+			const buffer = Buffer.alloc(length);
+			const read = readSync(fd, buffer, 0, length, from);
+			return { text: buffer.subarray(0, read).toString("utf8"), offset: from + read };
+		} finally {
+			closeSync(fd);
+		}
+	};
+
+	const startInbound = (ctx: ExtensionContext) => {
+		const config = loadConfig(ctx.cwd);
+		stopInbound();
+		if (!config.enabled || !config.syncTabTitleInbound) return;
+		if (process.env.HERDR_ENV !== "1" && !process.env.TMUX) return;
+		const sessionFile = ctx.sessionManager.getSessionFile?.();
+		const sessionId = getSessionId(ctx);
+		const words = loadWordlist(config, ctx.cwd);
+		const canonicalId = sessionId && words ? readableIdFromSessionId(sessionId, words) : undefined;
+		inboundSessionFile = sessionFile;
+		let inboxPath = "";
+		if (process.env.HERDR_ENV !== "1") {
+			try {
+				inboundDir = mkdtempSync(join(tmpdir(), "pi-inbound-title-"));
+				inboxPath = join(inboundDir, "inbox");
+				writeFileSync(inboxPath, "", { mode: 0o600 });
+			} catch {
+				inboundDir = undefined;
+			}
+		}
+		inbound = createInboundTarget(
+			{
+				readableId: resolveReadableIdOverride(config) ?? canonicalId,
+				sessionFile,
+				env: process.env,
+				apply: async (base) => {
+					// Reject stale applications after session replacement.
+					if (inboundSessionFile !== sessionFile) return;
+					// The host label replaces the whole name; only the canonical readable
+					// id is re-appended. The configured prefix is intentionally not re-added.
+					const suffix = resolveReadableIdSuffix(config, sessionId, words, base, ctx);
+					const full = formatFullName("", base, suffix);
+					if (full === pi.getSessionName()) return;
+					setNameAndNotify(full, ctx);
+					sessionRenamed = true;
+					// Suppress the outbound echo this rename will trigger.
+					inbound?.notePushed(tabTitle(full, resolveReadableIdOverride(config) ?? canonicalId));
+				},
+			},
+			{ run: tmuxRun, inboxPath, readInbox, request: herdrRequest }
+		);
+		inbound?.start();
+	};
+	const syncTitle = (ctx: ExtensionContext, name = pi.getSessionName() ?? "New Session"): Promise<void> => {
+		const config = loadConfig(ctx.cwd);
+		if (!config.syncTabTitle) {
+			tabSync.reset();
+			return Promise.resolve();
+		}
+		if (process.env.HERDR_ENV !== "1" && !process.env.TMUX) return Promise.resolve();
+		const sessionId = getSessionId(ctx);
+		const words = loadWordlist(config, ctx.cwd);
+		const canonicalId = sessionId && words ? readableIdFromSessionId(sessionId, words) : undefined;
+		// Spawned children deliberately ignore inherited readable-ID overrides.
+		const readableId =
+			canonicalId && name.endsWith(` [${canonicalId}]`) ? canonicalId : (resolveReadableIdOverride(config) ?? undefined);
+		// Record the pushed title so a host echo is not mistaken for user intent.
+		inbound?.notePushed(tabTitle(name, readableId));
+		return tabSync.update({ name, readableId, sessionFile: ctx.sessionManager.getSessionFile?.(), env: process.env });
+	};
+	pi.on("session_info_changed", (event, ctx) => {
+		void syncTitle(ctx, event.name ?? "New Session");
+	});
+	pi.on("session_shutdown", () => {
+		tabSync.reset();
+		stopInbound();
+	});
 
 	const setRenamed = () => {
 		sessionRenamed = true;
@@ -1249,6 +1449,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", async (event, ctx) => {
+		tabSync.reset();
 		sessionRenamed = false;
 		firstPromptHandled = false;
 		checkExistingName();
@@ -1256,6 +1457,8 @@ export default function (pi: ExtensionAPI) {
 		if (event && event.reason === "fork") {
 			regenerateReadableIdOnFork(ctx);
 		}
+		void syncTitle(ctx);
+		startInbound(ctx);
 	});
 
 	pi.on("session_tree", async () => {
@@ -1336,7 +1539,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("auto-rename", {
-		description: "Auto-rename: show name, force regenerate, or set manually",
+		description:
+			"Auto-rename: show name, force regenerate, or set manually. Subcommands: config, regen, init, test, sync (toggle inbound host→Pi tab sync), outbound (toggle Pi→host tab sync)",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim();
 			const config = loadConfig(ctx.cwd);
@@ -1346,6 +1550,21 @@ export default function (pi: ExtensionAPI) {
 				await handleRegen(ctx, config, prefix, pi, setRenamed);
 			} else if (trimmed === "config") {
 				handleConfig(ctx, config);
+			} else if (trimmed === "sync" || trimmed === "inbound" || trimmed === "outbound") {
+				const key = trimmed === "outbound" ? "syncTabTitle" : "syncTabTitleInbound";
+				const current = trimmed === "outbound" ? config.syncTabTitle : config.syncTabTitleInbound;
+				const next = !current;
+				const saved = persistBooleanSetting(ctx.cwd, key, next);
+				if (!saved.ok) {
+					ctx.ui.notify(`Could not update ${key}: ${saved.error}. Edit the config file directly.`, "error");
+					return;
+				}
+				if (key === "syncTabTitleInbound") {
+					// Start/stop the listener immediately; no reload needed.
+					if (next) startInbound(ctx);
+					else stopInbound();
+				}
+				ctx.ui.notify(`${key} = ${next} (saved to ${saved.path})`, "info");
 			} else if (trimmed === "init") {
 				handleInit(ctx, ctx.cwd);
 			} else if (trimmed === "test") {

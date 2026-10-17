@@ -15,6 +15,7 @@ extensions and [migration evidence](./docs/pi-1-baseline.md) for proof limits.
 | [pi-session-tools](./pi-session-tools/) | Session routing and subagent orchestration |
 | [pi-history-search](./pi-history-search/) | Search/read previous sessions |
 | [pi-introspection](./pi-introspection/) | Session/model/context information |
+| [pi-conversation-edit](./pi-conversation-edit/) | Human-reviewed manual/external-editor/AI whole-message rewrites on independent session branches |
 | [pi-prompt-stash](./pi-prompt-stash/) | Scoped draft park/stash/pop, user-history multiselect and reusable editor-fill commands |
 | [pi-durable-workflow](./pi-durable-workflow/) | Experimental versioned intent/Y-N-Edit review; isolated native qualification, production recurrence unbound |
 | [pi-env-ctx](./pi-env-ctx/) | Pi-native child-process metadata |
@@ -66,6 +67,15 @@ npm install
 | `npm run typecheck` | tsgo type checking |
 | `npm test` | Maintained extension tests (excludes archive) |
 | `npm run test:pi-1 -- /path/to/pi` | Exact Pi 1.0.0 individual + combined catalog smoke |
+| `npm run tools:list` | List every tool/sub-tool each extension registers (naming/nesting audit) |
+
+`npm run tools:list` spawns the installed Pi in an isolated, offline sandbox
+(synthetic provider, stubbed service CLIs, no session files) and reports the
+authoritative tool catalog from `pi.getAllTools()`, grouped by extension. It
+extracts action-style "sub-tools" from each tool's parameter schema and flags
+naming/nesting issues. Useful flags: `--json`, `--grep <name>`, `--only a,b`,
+`--all` (probe extensions with no detected registrations), and `--check`
+(non-zero exit on findings, for CI).
 
 ### Linting Rules
 

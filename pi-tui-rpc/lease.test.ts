@@ -28,8 +28,8 @@ function createHarness(): Harness {
 	});
 	return {
 		owner: lease.owner,
-		requestRemote: lease.requestRemote,
-		release: lease.release,
+		requestRemote: () => lease.requestRemote("a"),
+		release: (reason) => lease.release("a", reason),
 		onTuiInput: lease.onTuiInput,
 		reset: lease.reset,
 		confirmCalls: () => confirmCalls,

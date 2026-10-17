@@ -6,6 +6,7 @@
     "pi-bash-picker": {},
     "pi-capabilities": {},
     "pi-custom-context-files": {},
+    "pi-conversation-edit": {},
     "pi-edit-agent": {},
     "pi-durable-workflow": { "workflow": "implemented" },
     "pi-env-ctx": {},
