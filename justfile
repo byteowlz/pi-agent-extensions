@@ -354,6 +354,14 @@ typecheck:
 check:
     bun run check
 
+# List every tool/sub-tool registered by the extensions (naming/nesting audit)
+tools:
+    bun run tools:list
+
+# CI gate: list tools and exit non-zero on naming/nesting findings
+tools-check:
+    node scripts/list-tools.mjs --check
+
 # Format code
 fmt:
     bun run lint:fix
