@@ -4,6 +4,18 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Inbound tab-title sync (2.14.0)
+
+- **pi-auto-rename 1.4.0**: opt-in `syncTabTitleInbound` applies host tab
+  renames to the Pi session name while preserving the canonical readable id.
+  Herdr listens to `tab.renamed` over the session socket (no core changes);
+  tmux uses a per-window `window-renamed` hook. Ownership is re-verified per
+  event (foreign/hijacked/shared tabs ignored), id-shaped suffixes are stripped
+  to prevent spoofing, pushed titles are echo-suppressed, and listeners stop on
+  session replacement/shutdown. Toggle at runtime with `/auto-rename sync`
+  (inbound, applies immediately) and `/auto-rename outbound`; both persist to
+  the effective config file and never clobber invalid operator JSON.
+
 ### Off-thread history and startup diagnosis (2.13.0)
 
 - Run history searches/indexing/reads/grep/branch enumeration and overlay previews
