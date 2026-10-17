@@ -142,6 +142,11 @@
 			"description": "Project the session title to the calling Herdr tab or tmux window, without the known readable ID or sub/side marker. Shared multi-pane tabs/windows are left unchanged. Independent of automatic title generation.",
 			"default": true
 		},
+		"syncTabTitleInbound": {
+			"type": "boolean",
+			"description": "Opt-in: listen for host tab renames (Herdr tab.renamed events via the session socket, tmux window-renamed hook) and apply them to the Pi session name. The canonical readable ID is always preserved. Ownership is re-verified per event; foreign/shared tabs and echo of our own pushes are ignored.",
+			"default": false
+		},
 		"readableIdEnv": {
 			"type": ["string", "null"],
 			"description": "Environment variable that can provide a readable-id suffix override. When set and non-empty, its value is used instead of the wordlist-derived suffix.",

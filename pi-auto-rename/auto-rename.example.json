@@ -12,6 +12,7 @@
   "readableIdSuffix": false,
   "readableIdEnv": "PI_SESSION_READABLE_ID",
   "syncTabTitle": true,
+  "syncTabTitleInbound": false,
   "maxQueryLength": 2000,
   "maxNameLength": 80,
   "enabled": true,
