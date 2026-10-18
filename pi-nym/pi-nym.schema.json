@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "pi-nym configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "nymBinary": { "type": "string", "description": "nym executable. Default: nym on PATH, else the newest local build under $XDG_DATA_HOME/nym/builds." },
+    "profiles": { "type": "array", "items": { "type": "string" }, "default": [], "description": "nym redaction profiles added to `default` (see `nym profiles`)." },
+    "ner": { "type": "boolean", "default": true, "description": "Run nym's local NER model for names and addresses." },
+    "nerScope": { "enum": ["auto", "prose", "lines", "all"], "default": "auto", "description": "Which strings NER runs on (see `nym traces anon --help`)." },
+    "defaultBackup": { "enum": ["encrypted", "keep", "delete"], "default": "encrypted", "description": "Preselected choice for the original session." },
+    "backupDir": { "type": "string", "description": "Encrypted backups. Default $XDG_DATA_HOME/pi-nym/backups." },
+    "kyzService": { "type": "string", "default": "pi-nym", "description": "kyz service holding the backup passphrase." },
+    "kyzKey": { "type": "string", "default": "backup", "description": "kyz key holding the backup passphrase (created on first use)." },
+    "guard": { "enum": ["confirm", "warn", "off"], "default": "confirm", "description": "When switching to a non-local model with unredacted content: confirm before the next prompt, only warn, or nothing." },
+    "localProviders": { "type": "array", "items": { "type": "string" }, "default": ["ollama", "lmstudio", "llamacpp", "llama.cpp", "vllm-local"], "description": "Providers (case-insensitive) that never trigger the guard." },
+    "timeoutMs": { "type": "number", "exclusiveMinimum": 0, "default": 600000, "description": "Maximum time for one nym run." }
+  }
+}

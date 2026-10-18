@@ -4,6 +4,33 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Concise xlatch file sharing (2.15.4)
+
+- **pi-xlatch-session 2.0.3**: remove repeated file-sharing boilerplate; keep the sender note and local paths visible.
+
+### Faster pi-nym redaction (2.15.3)
+
+- **pi-nym 0.4.0**: the reviewed values are applied without a second scan, and
+  repeated scans reuse nym's NER cache.
+
+### pi-nym category selection (2.15.2)
+
+- **pi-nym 0.3.0**: whole categories can be selected or unselected in the
+  redaction menu, with folding and a category overview for long lists.
+
+### pi-nym progress bar (2.15.1)
+
+- **pi-nym 0.2.0**: progress bar while nym scans and redacts, from nym's new
+  `--progress-json` events.
+
+### Local session redaction (2.15.0)
+
+- New **pi-nym 0.1.0**: `/nym` redacts the current session with nym's local trace
+  anonymization, after a grouped checklist of every value it would replace, into a
+  new session it switches to. The original is kept, deleted, or stored as a
+  verified GnuPG backup keyed by a kyz secret; `/nym-restore` brings it back.
+  Cloud-model guard and a startup warning when `nym` is missing from PATH.
+
 ### Tool catalog audit script
 
 - Added `scripts/list-tools.mjs` (`npm run tools:list`): lists every tool and
