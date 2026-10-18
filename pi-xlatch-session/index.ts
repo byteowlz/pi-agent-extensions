@@ -337,14 +337,7 @@ export default function xlatchSession(pi: ExtensionAPI) {
 			const kb = Math.max(1, Math.round((payload.bytes ?? 0) / 1024));
 			const note = typeof payload.note === "string" ? payload.note.trim() : "";
 			label = note ? "file + note" : "file";
-			body = [
-				"Shared from phone via xlatch (file), saved to disk:",
-				"",
-				payload.path,
-				"",
-				`(${payload.file_mime_type ?? "unknown type"}, ~${kb} KB)`,
-				...(note ? ["", "Note from the sender:", "", note] : []),
-			].join("\n");
+			body = [...(note ? [note, ""] : []), payload.path, `(${payload.file_mime_type ?? "unknown type"}, ~${kb} KB)`].join("\n");
 		} else if (payload?.kind === "text" && typeof payload.text === "string" && payload.text.trim()) {
 			label = payload.mime_type === "text/uri-list" ? "link" : "text";
 			body = `Shared from phone via xlatch (${label}):\n\n${payload.text.trim()}`;
