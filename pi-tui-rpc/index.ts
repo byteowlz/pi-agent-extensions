@@ -60,6 +60,50 @@ import { COMMAND_TYPES, type ClientCommand, type LeaseOwner, eventFrame, respons
 
 const STATUS_KEY = "pi_tui_rpc";
 
+type UsageTotals = { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
+type NativeUsage = { input: number; output: number; cacheRead: number; cacheWrite: number; cost?: { total?: number } };
+function addUsage(totals: UsageTotals, usage: NativeUsage | undefined): void {
+	if (!usage) return;
+	totals.input += usage.input ?? 0;
+	totals.output += usage.output ?? 0;
+	totals.cacheRead += usage.cacheRead ?? 0;
+	totals.cacheWrite += usage.cacheWrite ?? 0;
+	totals.cost += usage.cost?.total ?? 0;
+}
+type MessageCounts = {
+	userMessages: number;
+	assistantMessages: number;
+	toolCalls: number;
+	toolResults: number;
+	totalMessages: number;
+};
+function addMessageSummary(
+	counts: MessageCounts,
+	totals: UsageTotals,
+	message: { role?: string; usage?: NativeUsage; content?: unknown } | undefined
+): void {
+	if (message?.role === "user") counts.userMessages += 1;
+	else if (message?.role === "toolResult") {
+		counts.toolResults += 1;
+		addUsage(totals, message.usage);
+	} else if (message?.role === "assistant") {
+		counts.assistantMessages += 1;
+		counts.toolCalls += toolCallCount(message.content);
+		addUsage(totals, message.usage);
+	}
+}
+function textContent(content: unknown): string {
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter((c) => (c as { type?: string }).type === "text")
+		.map((c) => (c as { text?: string }).text ?? "")
+		.join("");
+}
+function toolCallCount(content: unknown): number {
+	if (!Array.isArray(content)) return 0;
+	return content.filter((c) => (c as { type?: string }).type === "toolCall").length;
+}
+
 function detectRpcMode(): boolean {
 	const argv = process.argv.join(" ");
 	return argv.includes("--mode rpc") || argv.includes("--mode=rpc");
@@ -74,6 +118,7 @@ interface SessionSnapshot {
 	cwd: string;
 	sessionFile: string | null;
 	sessionId: string | null;
+	leafId: string | null;
 	sessionName: string | null;
 	model: ModelSummary | null;
 	thinkingLevel: string | null;
@@ -127,6 +172,7 @@ export default function (pi: ExtensionAPI) {
 				cwd: process.cwd(),
 				sessionFile: null,
 				sessionId: null,
+				leafId: null,
 				sessionName: pi.getSessionName() ?? null,
 				model: null,
 				thinkingLevel: null,
@@ -141,6 +187,7 @@ export default function (pi: ExtensionAPI) {
 			cwd: ctx.cwd,
 			sessionFile: ctx.sessionManager.getSessionFile() ?? null,
 			sessionId: ctx.sessionManager.getSessionId(),
+			leafId: ctx.sessionManager.getLeafId() ?? null,
 			sessionName: pi.getSessionName() ?? null,
 			// pi RPC shape: the full model object.
 			model: ctx.model ? toModelSummary(ctx.model) : null,
@@ -252,10 +299,7 @@ export default function (pi: ExtensionAPI) {
 					if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
 					if (entry.message.stopReason === "aborted" && !Array.isArray(entry.message.content)) continue;
 					if (entry.message.stopReason === "aborted" && (entry.message.content as unknown[]).length === 0) continue;
-					const text = (Array.isArray(entry.message.content) ? entry.message.content : [])
-						.filter((c) => (c as { type?: string }).type === "text")
-						.map((c) => (c as { text?: string }).text ?? "")
-						.join("");
+					const text = textContent(entry.message.content);
 					const trimmed = text.trim();
 					return trimmed || undefined;
 				}
@@ -264,16 +308,7 @@ export default function (pi: ExtensionAPI) {
 			getSessionStats: () => {
 				const sm = ctx?.sessionManager;
 				const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-				const add = (
-					usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost?: { total?: number } } | undefined
-				) => {
-					if (!usage) return;
-					totals.input += usage.input ?? 0;
-					totals.output += usage.output ?? 0;
-					totals.cacheRead += usage.cacheRead ?? 0;
-					totals.cacheWrite += usage.cacheWrite ?? 0;
-					totals.cost += usage.cost?.total ?? 0;
-				};
+				const add = (usage: NativeUsage | undefined) => addUsage(totals, usage);
 				const counts = { userMessages: 0, assistantMessages: 0, toolCalls: 0, toolResults: 0, totalMessages: 0 };
 				for (const entry of sm?.getEntries() ?? []) {
 					const e = entry as {
@@ -286,16 +321,7 @@ export default function (pi: ExtensionAPI) {
 					}
 					if (e.type !== "message") continue;
 					counts.totalMessages += 1;
-					const message = e.message;
-					if (message?.role === "user") counts.userMessages += 1;
-					else if (message?.role === "toolResult") {
-						counts.toolResults += 1;
-						add(message.usage);
-					} else if (message?.role === "assistant") {
-						counts.assistantMessages += 1;
-						counts.toolCalls += Array.isArray(message.content) ? message.content.filter((c) => c.type === "toolCall").length : 0;
-						add(message.usage);
-					}
+					addMessageSummary(counts, totals, e.message);
 				}
 				const usage = ctx?.getContextUsage();
 				return {

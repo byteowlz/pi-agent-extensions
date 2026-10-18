@@ -51,13 +51,17 @@ test("real extension sockets fence controllers, disconnect, terminal reclaim and
 	const handlers = new Map<string, Handler>();
 	const sent: string[] = [];
 	let confirmations = 0;
+	let nativeLeaf: string | null = "native-entry-a";
 	let confirm: () => Promise<boolean> = async () => true;
 	const ctx = {
 		cwd: root,
 		hasUI: true,
 		isIdle: () => true,
+		getContextUsage: () => ({ tokens: 42, contextWindow: 100 }),
 		ui: {
-			setStatus() {},
+			setStatus() {
+				/* Status rendering is not part of this socket fixture. */
+			},
 			confirm: async () => {
 				confirmations++;
 				return confirm();
@@ -66,13 +70,29 @@ test("real extension sockets fence controllers, disconnect, terminal reclaim and
 		sessionManager: {
 			getSessionFile: () => path.join(root, "native.jsonl"),
 			getSessionId: () => "synthetic-native",
-			getBranch: () => [],
+			getLeafId: () => nativeLeaf,
+			getBranch: () => [{ type: "message", message: { role: "assistant", content: [{ type: "text", text: " synthetic " }] } }],
+			getEntries: () => [
+				{ type: "message", message: { role: "user" } },
+				{
+					type: "message",
+					message: {
+						role: "assistant",
+						content: [{ type: "toolCall" }],
+						usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: { total: 0.5 } },
+					},
+				},
+				{ type: "message", message: { role: "toolResult" } },
+				{ type: "branch_summary", usage: { input: 5, output: 0, cacheRead: 0, cacheWrite: 0 } },
+			],
 		},
 	};
 	const pi = {
 		on: (name: string, handler: Handler) => {
 			handlers.set(name, handler);
-			return () => {};
+			return () => {
+				/* The fixture map is discarded at shutdown. */
+			};
 		},
 		getSessionName: () => "synthetic",
 		getThinkingLevel: () => "off",
@@ -99,7 +119,25 @@ test("real extension sockets fence controllers, disconnect, terminal reclaim and
 		expect((await b.command("prompt", { message: "intruder" })).success).toBe(false);
 		expect((await b.command("lease", { action: "release" })).success).toBe(false);
 		expect((await b.command("lease", { action: "request" })).success).toBe(false);
-		expect((await b.command("get_state")).success).toBe(true);
+		const state = await b.command("get_state");
+		expect(state.success).toBe(true);
+		expect((state.data as Frame).leafId).toBe("native-entry-a");
+		nativeLeaf = "native-entry-b";
+		expect(((await b.command("get_state")).data as Frame).leafId).toBe("native-entry-b");
+		nativeLeaf = null;
+		expect(((await b.command("get_state")).data as Frame).leafId).toBeNull();
+		expect(((await b.command("get_last_assistant_text")).data as Frame).text).toBe("synthetic");
+		const stats = (await b.command("get_session_stats")).data as Frame;
+		expect(stats).toMatchObject({
+			userMessages: 1,
+			assistantMessages: 1,
+			toolCalls: 1,
+			toolResults: 1,
+			totalMessages: 3,
+			tokens: { input: 6, output: 2, cacheRead: 3, cacheWrite: 4 },
+			cost: 0.5,
+			contextUsage: { tokens: 42, contextWindow: 100 },
+		});
 		expect(confirmations).toBe(1);
 		await emit("input", { source: "interactive", text: "terminal" });
 		expect((await a.command("abort")).success).toBe(false);
@@ -129,7 +167,7 @@ test("real extension sockets fence controllers, disconnect, terminal reclaim and
 		a?.socket.destroy();
 		b?.socket.destroy();
 		if (handlers.has("session_shutdown")) await emit("session_shutdown");
-		if (previous === undefined) delete process.env.PI_TUI_RPC_SOCKET;
+		if (previous === undefined) Reflect.deleteProperty(process.env, "PI_TUI_RPC_SOCKET");
 		else process.env.PI_TUI_RPC_SOCKET = previous;
 		fs.rmSync(root, { recursive: true, force: true });
 	}
