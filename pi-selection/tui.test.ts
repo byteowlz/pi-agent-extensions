@@ -8,6 +8,7 @@ import {
 	reduceSelectionTui,
 	renderSelectionTui,
 	safeSelectionText,
+	selectionPaint,
 	showSelectionTui,
 } from "./tui.js";
 
@@ -89,12 +90,12 @@ describe("pure selection state", () => {
 		state = reduce(state, { type: "edit", field: "text" });
 		state = reduce(state, { type: "value", value: "" });
 		const outcome = reduce(reduce(state, { type: "review" }), { type: "submit" }).outcome;
-		expect(outcome?.answers.multi).toEqual({ answered: true, selectedIds: [] });
+		expect(outcome?.answers.multi).toEqual({ answered: true, selectedIds: [], none: true });
 		expect(outcome?.answers.text).toEqual({ answered: true, selectedIds: [], text: "" });
 		expect(outcome?.answers.single).toEqual({ answered: false, selectedIds: [] });
 		const reopened = createSelectionTuiState({ ...record(document), answers: outcome?.answers ?? {} });
 		const screen = renderSelectionTui(reduce(reopened, { type: "review" }), 120).join("\n");
-		expect(screen).toContain("None selected");
+		expect(screen).toContain("None of the above");
 		expect(screen).toContain("(blank)");
 		expect(screen).toContain("unanswered");
 	});
@@ -109,7 +110,8 @@ describe("pure selection state", () => {
 		state = reduce(state, { type: "none" });
 		expect(state.answers.multi.note).toBe("reason");
 		expect(state.answers.multi.text).toBeUndefined();
-		expect(reduce(reduce(state, { type: "review" }), { type: "submit" }).error).toBe("Empty answer");
+		expect(state.answers.multi.none).toBe(true);
+		expect(reduce(reduce(state, { type: "review" }), { type: "submit" }).outcome?.action).toBe("submit");
 		state = reduce(state, { type: "status", status: "skip" });
 		expect(reduce(reduce(state, { type: "review" }), { type: "submit" }).error).toBe("Required answer missing");
 		const review = createSelectionTuiState(record({ ...document, mode: "review" }));
@@ -279,7 +281,14 @@ function host(signal?: AbortSignal, mode = "tui", factoryThrows = false) {
 								/* Mock: rendering is pulled by tests. */
 							},
 						},
-						{ fg: (_color: string, value: string) => value },
+						{
+							colors: {
+								toolPendingBg: { kind: "rgb", r: 24, g: 24, b: 30 },
+								warning: { kind: "rgb", r: 230, g: 220, b: 90 },
+							},
+							fg: (_color: string, value: string) => value,
+							style: (value: string) => value,
+						},
 						{},
 						(outcome: TuiOutcome) => {
 							completions++;
@@ -304,12 +313,12 @@ describe("mock native host", () => {
 		const mock = host();
 		const pending = showSelectionTui(mock.ctx, record());
 		const component = mock.component();
-		expect(component.render(240).join("\n")).toContain("0 confirm none");
+		expect(component.render(240).join("\n")).toContain("0 none");
 		component.handleInput("\r");
 		component.handleInput(" ");
 		component.handleInput("0");
 		expect(mock.completions()).toBe(0);
-		expect(component.render(240).join("\n")).toContain("None selected");
+		expect(component.render(240).join("\n")).toContain("None of the above");
 		component.handleInput("e");
 		component.handleInput("0");
 		component.handleInput("\u000f");
@@ -430,5 +439,67 @@ describe("mock native host", () => {
 		submitted.component().handleInput("r");
 		submitted.component().handleInput("\r");
 		expect((await result).action).toBe("submit");
+	});
+});
+
+describe("ask UX: own answer, none of the above, panel styling", () => {
+	test("choice questions always show visible own-answer and none rows", () => {
+		const state = createSelectionTuiState(record());
+		const screen = renderSelectionTui(state, 100).join("\n");
+		expect(screen).toContain("✎ Enter your own answer…");
+		expect(screen).toContain("— None of the above");
+		// A per-question allowOther:false spec still exposes both rows.
+		const strict = createSelectionTuiState(record({ ...spec, questions: [{ ...spec.questions[0], allowOther: false }] }));
+		const strictScreen = renderSelectionTui(strict, 100).join("\n");
+		expect(strictScreen).toContain("✎ Enter your own answer…");
+		expect(strictScreen).toContain("— None of the above");
+	});
+
+	test("choosing the own-answer row edits text; choosing none answers without text", () => {
+		let state = createSelectionTuiState(record());
+		// single has two options: rows are 0,1 then own=2, none=3
+		state = reduce(state, { type: "move", delta: 2 });
+		expect(state.option).toBe(2);
+		state = reduce(state, { type: "choose" });
+		expect(state.editing).toBe("text");
+		state = reduce(state, { type: "value", value: "my own idea" });
+		state = reduce(state, { type: "finishEdit" });
+		expect(state.answers.single).toEqual({ answered: true, selectedIds: [], text: "my own idea" });
+		// Selecting none clears the own answer and marks explicit none.
+		state = reduce(state, { type: "move", delta: 1 });
+		expect(state.option).toBe(3);
+		state = reduce(state, { type: "choose" });
+		expect(state.answers.single).toEqual({ answered: true, selectedIds: [], none: true });
+	});
+
+	test("keyboard 0 marks explicit none on single choice and satisfies required", () => {
+		let state = createSelectionTuiState(record());
+		state = reduce(state, { type: "none" });
+		expect(state.answers.single.none).toBe(true);
+		expect(state.answers.single.answered).toBe(true);
+		expect(reduce(reduce(state, { type: "review" }), { type: "submit" }).outcome?.action).toBe("submit");
+	});
+
+	test("panel paint tints the question block and keeps every line within width", () => {
+		const theme = {
+			colors: {
+				toolPendingBg: { kind: "rgb", r: 24, g: 24, b: 30 },
+				warning: { kind: "rgb", r: 230, g: 220, b: 90 },
+			},
+			fg: (_color: string, value: string) => `\u001b[38;2;200;200;200m${value}\u001b[39m`,
+			style: (value: string) => `\u001b[48;2;50;48;20m${value}\u001b[49m`,
+		} as unknown as Parameters<typeof selectionPaint>[0];
+		const paint = selectionPaint(theme, 40);
+		const panel = paint("Question", "panel");
+		expect(panel).toContain("\u001b[48;2;50;48;20m");
+		expect(visibleWidth(panel)).toBe(40);
+		expect(paint("plain", "plain")).toBe("plain");
+		// A theme that cannot style degrades to plain text instead of throwing.
+		const plain = selectionPaint(undefined, 40);
+		expect(plain("Question", "panel")).toBe("Question");
+		const state = createSelectionTuiState(record());
+		for (const line of renderSelectionTui(state, 60, 24, selectionPaint(theme, 60))) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(60);
+		}
 	});
 });

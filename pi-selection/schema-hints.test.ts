@@ -65,3 +65,28 @@ test("a missing question kind names the supported choices", () => {
 		normalizeSpec({ version: 1, mode: "questions", title: "Topology", questions: [{ id: "topology", title: "Which host?" }] })
 	).toThrow(/kind.*single.*multiple.*text/);
 });
+
+test("tool call line summarizes the spec instead of echoing raw JSON", () => {
+	let tool: { renderCall?: (args: unknown, theme: unknown) => { render(width: number): string[] } } | undefined;
+	const ignore = () => {
+		/* Capture only the tool definition. */
+	};
+	extension({
+		registerFlag: ignore,
+		registerCommand: ignore,
+		on: ignore,
+		registerTool: (registered: typeof tool) => {
+			tool = registered;
+		},
+	} as unknown as ExtensionAPI);
+	const theme = { fg: (_color: string, value: string) => value };
+	const spec = {
+		version: 1,
+		mode: "questions",
+		title: "Topology",
+		questions: [{ id: "q", title: "Which host?", kind: "single", options: [{ id: "a", label: "A" }] }],
+	};
+	const rendered = tool?.renderCall?.({ action: "ask", spec }, theme)?.render(80).join("\n") ?? "";
+	expect(rendered).toContain("Selection · ask questions — Topology");
+	expect(rendered).not.toContain('"questions"');
+});

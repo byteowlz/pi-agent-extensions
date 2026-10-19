@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { Answers } from "./model.js";
 import { type SelectionRequest, type SelectionResult, SelectionRuntime } from "./runtime.js";
@@ -121,7 +122,7 @@ export default function selection(pi: ExtensionAPI): void {
 		label: "Selection",
 		exposure: "model-only",
 		description:
-			"Ask structured questions or review inventories with single/multiple choices, Other text, standalone text and notes. Supply version:1 spec with mode questions/review and a root title. Questions use {id,title,kind}, NOT text/question as the prompt field; kind is single/multiple/text. single/multiple require options:[{id,label}]; text omits options. See the spec schema for a complete example. Native TUI, negotiated host or protected browser fallback. ask waits for submission; create returns a draft/presentation; get retrieves it; open resumes; close cancels. Never interprets answers as permission grants. No pairwise labeling or secret entry.",
+			'Ask structured questions or review inventories with single/multiple choices, an own-answer text row, an explicit "None of the above" answer (satisfies required), standalone text and notes. Supply version:1 spec with mode questions/review and a root title. Questions use {id,title,kind}, NOT text/question as the prompt field; kind is single/multiple/text. single/multiple require options:[{id,label}]; text omits options. See the spec schema for a complete example. Native TUI, negotiated host or protected browser fallback. ask waits for submission; create returns a draft/presentation; get retrieves it; open resumes; close cancels. Never interprets answers as permission grants. No pairwise labeling or secret entry.',
 		annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
 		parameters: Type.Object(
 			{
@@ -135,6 +136,16 @@ export default function selection(pi: ExtensionAPI): void {
 			{ additionalProperties: false }
 		),
 		outputSchema: Type.Unknown(),
+		// Show a concise call line instead of echoing the entire JSON spec.
+		renderCall(args, theme) {
+			const action = typeof args.action === "string" ? args.action : "ask";
+			const spec = args.spec as { mode?: unknown; title?: unknown } | undefined;
+			const mode = typeof spec?.mode === "string" ? spec.mode : undefined;
+			const title = typeof spec?.title === "string" ? spec.title.trim() : "";
+			const head = `Selection · ${action}${mode ? ` ${mode}` : ""}`;
+			const line = title ? `${head} — ${title.length > 60 ? `${title.slice(0, 60)}…` : title}` : head;
+			return new Text(theme.fg("accent", line), 0, 0);
+		},
 		async execute(_id, params, signal, onUpdate, ctx) {
 			const result = await getRuntime().execute(
 				ctx,

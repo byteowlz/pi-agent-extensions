@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.16.0
+
+- Improve the `ask` TUI. Every single/multiple question now always shows two
+  extra visible rows: **✎ Enter your own answer…** and **— None of the above**.
+  Free-text answers no longer require the legacy `allowOther` flag.
+- "None of the above" is an explicit answer (`Answer.none`): it satisfies
+  `required` and clears `minSelections`, and is distinct from unanswered,
+  skipped and unsure. It cannot carry selections or text.
+- Question block is rendered on a subtle yellow-tinted panel derived from the
+  active theme (blend of `toolPendingBg` and `warning`), with spacing between
+  the header, question, decision, options and notes. Plain-text rendering is
+  unchanged when a host cannot style.
+- The tool call line is summarized (`Selection · ask questions — Title`) instead
+  of echoing the full JSON spec.
+- Browser fallback gains the same "None of the above" button and "Your own
+  answer" field, and its review summary reports explicit none.
+- Tests cover explicit none (single/multiple/required/minSelections), own-answer
+  rows, keyboard `0`, panel painting and browser source.
+
 ## Unreleased
 
 - 2.10.2: support Python 3 stdlib `fcntl.flock` kernel locking on macOS and

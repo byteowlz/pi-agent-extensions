@@ -81,10 +81,12 @@ export interface Answer {
 	/** Explicit deferral survives host switches; absent means ordinary unanswered. */
 	disposition?: "skipped" | "unsure";
 	selectedIds: string[];
-	/** Standalone text answer or an explicitly enabled Other answer. */
+	/** Standalone text answer, an explicitly entered own answer, or a review note. */
 	text?: string;
 	/** Supplemental text never silently changes the decision. */
 	note?: string;
+	/** Human explicitly chose "none of the above"; counts as an answered decision. */
+	none?: true;
 }
 
 export type Answers = Record<string, Answer>;

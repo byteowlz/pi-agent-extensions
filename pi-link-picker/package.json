@@ -1,0 +1,40 @@
+{
+  "name": "@byteowlz/pi-link-picker",
+  "version": "1.0.0",
+  "description": "grab URLs, paths, tokens, IDs and endpoints from the current session",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent"
+  ],
+  "files": [
+    "*.ts",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "*.schema.json",
+    "*.example.json"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "homepage": "https://github.com/byteowlz/pi-agent-extensions/tree/main/pi-bash-picker",
+  "bugs": {
+    "url": "https://github.com/byteowlz/pi-agent-extensions/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/byteowlz/pi-agent-extensions.git",
+    "directory": "pi-link-picker"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "1.0.0",
+    "@earendil-works/pi-ai": "1.0.0",
+    "@earendil-works/pi-coding-agent": "1.0.0",
+    "@earendil-works/pi-tui": "1.0.0"
+  },
+  "license": "MIT"
+}
