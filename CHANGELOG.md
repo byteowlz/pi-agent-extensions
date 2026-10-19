@@ -4,6 +4,29 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Grab links, tokens and IDs from the session (2.17.0)
+
+- New **pi-link-picker 1.0.0**: `/grab` extracts URLs, file paths, `KEY=value`
+  env assignments, tokens/secrets, IDs (issue IDs, UUIDs, SHAs) and network
+  endpoints (`ip:port`, `host:port`) from the current session branch, with a
+  category-tabbed, filterable picker.
+- Copying uses **OSC 52** (no clipboard binary; works over SSH/Herdr, with tmux
+  DCS passthrough). Oversized values fail closed and paste into the editor.
+  Secret-looking values are redacted in previews and can be revealed with `v`.
+  Current session only; nothing is uploaded, written to disk or sent to a model.
+
+### Selection ask UX and explicit none (2.16.0)
+
+- The `ask` TUI now always shows **✎ Enter your own answer…** and
+  **— None of the above** rows for single/multiple questions. Own text no longer
+  requires the legacy `allowOther` flag.
+- `Answer.none` records an explicit "none of the above": it satisfies required
+  questions and clears `minSelections`, and stays distinct from unanswered/
+  skipped/unsure. It cannot carry selections or text.
+- The question block renders on a theme-derived yellow-tinted panel with clearer
+  spacing; the tool call line summarizes the spec instead of echoing raw JSON.
+- Browser fallback gains the same own-answer field and none button.
+
 ### Concise xlatch file sharing (2.15.4)
 
 - **pi-xlatch-session 2.0.3**: remove repeated file-sharing boilerplate; keep the sender note and local paths visible.

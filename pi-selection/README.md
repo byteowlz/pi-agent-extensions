@@ -46,7 +46,20 @@ Provide `spec` for ask/create; provide `id` for get/open/close. Examples: [Quest
 }
 ```
 
-Question kinds: `single`, `multiple`, `text`. Stable option IDs, optional descriptions/recommendations, Other, text `multiline`/`maxLength`, multi `minSelections`/`maxSelections`, and supplemental notes are supported. Review specs provide common `choices`, `items` and optional `groups`; large inventories use search/group navigation, not an item-per-tab UI. Unknown versions/modes/fields fail closed. Recommendations are hints, not default user decisions.
+Question kinds: `single`, `multiple`, `text`. Stable option IDs, optional descriptions/recommendations, text `multiline`/`maxLength`, multi `minSelections`/`maxSelections`, and supplemental notes are supported.
+
+Every `single`/`multiple` question always offers two extra visible rows:
+
+- **✎ Enter your own answer…** (`e`, or select the row) — free text that replaces
+  a single choice or supplements a multi choice. The legacy `allowOther` flag is
+  still accepted but no longer gates this.
+- **— None of the above** (`0`, or select the row) — an explicit answer recorded
+  as `{"answered": true, "selectedIds": [], "none": true}`. It satisfies
+  `required` and clears `minSelections`, and stays distinct from unanswered,
+  skipped and unsure. It cannot carry selections or text.
+
+The question block is drawn on a subtle yellow-tinted panel derived from the
+active theme. Plain-text hosts and tests get unstyled output. Review specs provide common `choices`, `items` and optional `groups`; large inventories use search/group navigation, not an item-per-tab UI. Unknown versions/modes/fields fail closed. Recommendations are hints, not default user decisions.
 
 ## Decisions and storage
 

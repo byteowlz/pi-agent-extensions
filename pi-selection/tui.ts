@@ -1,5 +1,15 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CURSOR_MARKER, Editor, Input, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import {
+	CURSOR_MARKER,
+	type Color,
+	Editor,
+	Input,
+	Key,
+	matchesKey,
+	mixColors,
+	truncateToWidth,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import type { Answer, Answers, NormalizedSpec, SelectionRecord, TuiOutcome } from "./model.js";
 import { validateAnswers } from "./validation.js";
 
@@ -59,6 +69,20 @@ export function filteredQuestionIndices(state: SelectionTuiState): number[] {
 			: []
 	);
 }
+const OWN_ROW_OFFSET = 0;
+const NONE_ROW_OFFSET = 1;
+/** Option rows plus the always-visible own-answer and none-of-the-above rows. */
+function choiceRowCount(q: NormalizedSpec["questions"][number] | undefined): number {
+	if (!q || q.kind === "text") return 0;
+	return (q.options?.length ?? 0) + 2;
+}
+function ownRowIndex(q: NormalizedSpec["questions"][number]): number {
+	return (q.options?.length ?? 0) + OWN_ROW_OFFSET;
+}
+function noneRowIndex(q: NormalizedSpec["questions"][number]): number {
+	return (q.options?.length ?? 0) + NONE_ROW_OFFSET;
+}
+
 function advance(state: SelectionTuiState): SelectionTuiState {
 	if (state.spec.mode === "review") return { ...state, listFocus: true };
 	return state.index + 1 < state.spec.questions.length
@@ -105,7 +129,7 @@ export function reduceSelectionTui(state: SelectionTuiState, action: SelectionTu
 					option: 0,
 				};
 			}
-			const count = (q?.options?.length ?? 0) + (q?.allowOther ? 1 : 0);
+			const count = choiceRowCount(q);
 			return { ...next, option: Math.max(0, Math.min(count - 1, state.option + action.delta)) };
 		}
 		default:
@@ -124,12 +148,20 @@ function canEdit(state: SelectionTuiState, field: EditField): boolean {
 	const q = state.spec.questions[state.index];
 	if (field === "search") return state.spec.mode === "review";
 	if (field === "note") return !!q?.note;
-	return q?.kind === "text" || !!q?.allowOther;
+	return !!q;
+}
+
+function withoutNone(a: Answer): Answer {
+	const clone: Answer = { answered: a.answered, selectedIds: [...a.selectedIds] };
+	if (a.text !== undefined) clone.text = a.text;
+	if (a.note !== undefined) clone.note = a.note;
+	if (a.disposition !== undefined) clone.disposition = a.disposition;
+	return clone;
 }
 
 function textAnswer(a: Answer, q: NormalizedSpec["questions"][number], value: string): Answer {
 	return {
-		...a,
+		...withoutNone(a),
 		selectedIds: q.kind === "single" ? [] : a.selectedIds,
 		text: value,
 		answered: q.kind === "text" || !!value.trim() || (q.kind === "multiple" && a.selectedIds.length > 0),
@@ -152,8 +184,13 @@ function reduceDecision(state: SelectionTuiState, action: SelectionTuiAction): S
 	const save = (answer: Answer) => saveDecision(next, q?.id, answer);
 	switch (action.type) {
 		case "none":
-			if (!state.review && !state.listFocus && q?.kind === "multiple")
-				save({ ...a, answered: true, selectedIds: [], text: undefined });
+			if (!state.review && !state.listFocus && q && q.kind !== "text")
+				save({
+					answered: true,
+					selectedIds: [],
+					none: true,
+					...(a.note === undefined ? {} : { note: a.note }),
+				});
 			return next;
 		case "edit":
 			if (!canEdit(state, action.field)) return next;
@@ -203,17 +240,27 @@ function chooseDecision(
 	if (state.spec.mode === "review" && state.listFocus)
 		return filteredQuestionIndices(state).length ? { ...next, listFocus: false } : next;
 	if (!q) return next;
-	if (q.kind === "text" || (state.option === q.options?.length && q.allowOther)) return { ...next, editing: "text" };
+	if (q.kind === "text" || state.option === ownRowIndex(q)) return { ...next, editing: "text" };
+	if (state.option === noneRowIndex(q)) {
+		save({
+			answered: true,
+			selectedIds: [],
+			none: true,
+			...(a.note === undefined ? {} : { note: a.note }),
+		});
+		return next;
+	}
 	const choice = q.options?.[state.option];
 	if (!choice) return next;
+	const rest = withoutNone(a);
 	const ids =
 		q.kind === "single"
 			? [choice.id]
-			: a.selectedIds.includes(choice.id)
-				? a.selectedIds.filter((id) => id !== choice.id)
-				: [...a.selectedIds, choice.id];
+			: rest.selectedIds.includes(choice.id)
+				? rest.selectedIds.filter((id) => id !== choice.id)
+				: [...rest.selectedIds, choice.id];
 	save({
-		...a,
+		...rest,
 		selectedIds: ids,
 		...(q.kind === "single" ? { text: undefined } : {}),
 		answered: q.kind === "multiple" || ids.length > 0,
@@ -229,39 +276,80 @@ function summary(state: SelectionTuiState, id: string): string {
 	const a = state.answers[id] ?? blank();
 	const q = state.spec.questions.find((question) => question.id === id);
 	if (!a.answered) return state.statuses[id] ?? "unanswered";
+	if (a.none) return "None of the above";
 	if (!a.selectedIds.length && !a.text?.trim()) return q?.kind === "text" ? "(blank)" : "None selected";
 	return [...a.selectedIds.map((option) => q?.options?.find((c) => c.id === option)?.label ?? option), a.text]
 		.filter(Boolean)
 		.join(", ");
 }
+export type SelectionPaintRole = "plain" | "plainMuted" | "panel" | "panelMuted" | "panelAccent";
+export type SelectionPaint = (text: string, role: SelectionPaintRole) => string;
+const plainPaint: SelectionPaint = (text) => text;
+
+/**
+ * Build a painter that draws the question block on a subtle yellow-tinted panel.
+ * Falls back to plain text when the host theme cannot style, so a partial theme
+ * never crashes the interaction.
+ */
+export function selectionPaint(theme: Theme | undefined, width: number): SelectionPaint {
+	const colors = theme?.colors as Record<string, Color> | undefined;
+	if (!theme || !colors?.toolPendingBg || !colors.warning || typeof theme.style !== "function") return plainPaint;
+	const panelBg = mixColors(colors.toolPendingBg, colors.warning, 0.22);
+	return (text, role) => {
+		if (role === "plain") return text;
+		if (role === "plainMuted") return theme.fg("muted", text);
+		const padded = `${text}${" ".repeat(Math.max(0, width - visibleWidth(text)))}`;
+		if (role === "panelMuted") return theme.style(padded, { bg: panelBg, fg: "muted" });
+		if (role === "panelAccent") return theme.style(padded, { bg: panelBg, fg: "accent", bold: true });
+		return theme.style(padded, { bg: panelBg, fg: "text" });
+	};
+}
+
+interface RenderLine {
+	text: string;
+	role: SelectionPaintRole;
+}
+
 /** Bounded by both terminal dimensions, with a scrolling inventory and option viewport. */
-export function renderSelectionTui(state: SelectionTuiState, width: number, height = 24): string[] {
+export function renderSelectionTui(
+	state: SelectionTuiState,
+	width: number,
+	height = 24,
+	paint: SelectionPaint = plainPaint
+): string[] {
 	const w = Math.max(0, Math.floor(width));
 	const h = Math.max(1, Math.floor(height));
 	const fit = (text: string, size = w) => truncateToWidth(safeSelectionText(text), size, "").replaceAll("\u001b[0m", "");
-	const lines = [fit(state.spec.title)];
+	const lines: RenderLine[] = [
+		{ text: state.spec.title, role: "panelAccent" },
+		{ text: "", role: "panel" },
+	];
 	const q = state.spec.questions[state.index];
 	const footer = fit(
 		state.editing
-			? "Editing: Enter done (multiline: Enter newline, Ctrl+Enter done) | Esc cancel | Ctrl+o browser"
-			: "Tab/Shift+Tab navigate | Enter choose/submit | Space multi | 0 confirm none | e text | n note | s skip | u unsure | Esc cancel | Ctrl+o browser"
+			? "Enter done · multiline: Enter newline, Ctrl+Enter done · Esc cancel · Ctrl+o browser"
+			: w >= 118
+				? "Tab/Shift+Tab navigate · Enter choose/submit · Space multi · e own answer · 0 none · n note · s skip · u unsure · Esc cancel · Ctrl+o browser"
+				: w >= 80
+					? "Enter choose · Space multi · e own · 0 none · n note · s skip · u unsure · Esc cancel"
+					: "Enter choose · e own · 0 none · Esc cancel"
 	);
 	if (state.review) {
-		lines.push(fit("Review / Submit — Enter explicitly submits; Shift+Tab back"));
-		const slots = Math.max(1, h - 5);
+		lines.push({ text: "Review / Submit — Enter explicitly submits; Shift+Tab back", role: "panelMuted" });
+		const slots = Math.max(1, h - 7);
 		const start = Math.max(0, state.index - Math.floor(slots / 2));
 		for (const question of state.spec.questions.slice(start, start + slots))
-			lines.push(
-				fit(
-					`${question.id === state.spec.questions[state.index]?.id ? "> " : ""}${question.title}: ${summary(state, question.id)}${state.answers[question.id]?.note ? ` | Note: ${state.answers[question.id].note}` : ""}`
-				)
-			);
+			lines.push({
+				text: `${question.id === state.spec.questions[state.index]?.id ? "> " : " "} ${question.title}: ${summary(state, question.id)}${state.answers[question.id]?.note ? ` | Note: ${state.answers[question.id].note}` : ""}`,
+				role: "panel",
+			});
 	} else if (q) {
 		lines.push(...renderQuestion(state, w, h, fit));
 	}
 	const body = lines.slice(0, Math.max(0, h - 2));
-	body.push(fit(selectionFocusLabel(state)), footer);
-	return body.slice(-h);
+	body.push({ text: selectionFocusLabel(state), role: "plainMuted" });
+	body.push({ text: footer, role: "plainMuted" });
+	return body.slice(-h).map((line) => paint(fit(line.text), line.role));
 }
 
 function selectionFocusLabel(state: SelectionTuiState): string {
@@ -270,8 +358,13 @@ function selectionFocusLabel(state: SelectionTuiState): string {
 	return state.listFocus && !state.review ? "List focus: Enter opens detail" : "Detail focus";
 }
 
-function renderQuestion(state: SelectionTuiState, w: number, h: number, fit: (text: string, size?: number) => string): string[] {
-	const lines: string[] = [];
+function renderQuestion(
+	state: SelectionTuiState,
+	w: number,
+	h: number,
+	fit: (text: string, size?: number) => string
+): RenderLine[] {
+	const lines: RenderLine[] = [];
 	const q = state.spec.questions[state.index];
 	if (state.spec.mode === "questions") {
 		// Windowed tabs, never one tab per review inventory item.
@@ -280,50 +373,72 @@ function renderQuestion(state: SelectionTuiState, w: number, h: number, fit: (te
 			.map(
 				(question) => `${question.id === q.id ? "[" : " "}${question.header ?? question.title}${question.id === q.id ? "]" : " "}`
 			);
-		lines.push(fit(`${state.index + 1}/${state.spec.questions.length} ${tabs.join(" | ")} | Review`));
+		lines.push({ text: `${state.index + 1}/${state.spec.questions.length} ${tabs.join(" | ")} | Review`, role: "panelMuted" });
 	} else {
-		lines.push(
-			fit(
-				`Inventory / Detail | Group: ${state.spec.groups.find((g) => g.id === state.group)?.title ?? "All"} | Search: ${state.search} | / search, ←→ group, b list, r review`
-			)
-		);
+		lines.push({
+			text: `Inventory / Detail | Group: ${state.spec.groups.find((g) => g.id === state.group)?.title ?? "All"} | Search: ${state.search} | / search, ←→ group, b list, r review`,
+			role: "panelMuted",
+		});
 	}
-	const detail = [q.title + (q.required ? " * required" : ""), q.description ?? "", `Decision: ${summary(state, q.id)}`];
-	const options = q.options ?? [];
+	const answer = state.answers[q.id] ?? blank();
+	lines.push({ text: q.title + (q.required ? "  * required" : ""), role: "panelAccent" });
+	if (q.description) lines.push({ text: q.description, role: "panelMuted" });
+	lines.push({ text: `Decision: ${summary(state, q.id)}`, role: "panelMuted" });
+	lines.push({ text: "", role: "panel" });
+	const rows = choiceRows(state, q, answer);
 	const slots = Math.max(1, h - 10);
 	const start = Math.max(0, state.option - Math.floor(slots / 2));
-	for (let i = start; i < Math.min(options.length + (q.allowOther ? 1 : 0), start + slots); i++) {
-		const c = options[i];
-		const chosen = c ? state.answers[q.id]?.selectedIds.includes(c.id) : !!state.answers[q.id]?.text;
-		detail.push(
-			`${i === state.option ? ">" : " "} [${chosen ? "x" : " "}] ${c?.label ?? "Other (edit text)"}${c?.recommended ? " ★ recommended" : ""}`
-		);
-	}
-	detail.push(...renderSupplement(state));
-	if (state.spec.mode === "review") {
-		lines.push(...renderInventory(state, detail, slots, w, fit));
-	} else lines.push(...detail.map((text) => fit(text)));
+	lines.push(...rows.slice(start, start + slots));
+	lines.push(...renderSupplement(state));
+	if (state.spec.mode === "review") return renderInventory(state, lines, slots, w, fit);
 	return lines;
 }
 
-function renderSupplement(state: SelectionTuiState): string[] {
+function choiceRows(state: SelectionTuiState, q: NormalizedSpec["questions"][number], answer: Answer): RenderLine[] {
+	const rows: RenderLine[] = [];
+	for (const [index, choice] of (q.options ?? []).entries()) {
+		const chosen = answer.selectedIds.includes(choice.id);
+		rows.push({
+			text: `${index === state.option ? ">" : " "} [${chosen ? "x" : " "}] ${choice.label}${choice.recommended ? "  ★ recommended" : ""}`,
+			role: chosen || index === state.option ? "panelAccent" : "panel",
+		});
+	}
+	if (q.kind === "text") return rows;
+	const own = !!answer.text?.trim();
+	rows.push({
+		text: `${ownRowIndex(q) === state.option ? ">" : " "} [${own ? "x" : " "}] ✎ Enter your own answer…`,
+		role: own || ownRowIndex(q) === state.option ? "panelAccent" : "panel",
+	});
+	rows.push({
+		text: `${noneRowIndex(q) === state.option ? ">" : " "} [${answer.none ? "x" : " "}] — None of the above`,
+		role: answer.none || noneRowIndex(q) === state.option ? "panelAccent" : "panel",
+	});
+	return rows;
+}
+
+function renderSupplement(state: SelectionTuiState): RenderLine[] {
 	const q = state.spec.questions[state.index];
-	const lines: string[] = [];
+	const answer = state.answers[q.id] ?? blank();
+	const lines: RenderLine[] = [];
 	const description = q.options?.[state.option]?.description;
-	if (description) lines.push(description);
-	if (q.kind === "text") lines.push(`Text: ${state.answers[q.id]?.text ?? ""} (e to edit)`);
-	if (q.note) lines.push(`${q.note.label ?? "Note"}: ${state.answers[q.id]?.note ?? ""} (n to edit)`);
+	if (description) {
+		lines.push({ text: "", role: "panel" });
+		lines.push({ text: description, role: "panelMuted" });
+	}
+	if (q.kind === "text") lines.push({ text: `Text: ${answer.text ?? ""} (e to edit)`, role: "panelMuted" });
+	else if (answer.text?.trim()) lines.push({ text: `Own answer: ${answer.text} (e to edit, Enter clears)`, role: "panelMuted" });
+	if (q.note) lines.push({ text: `${q.note.label ?? "Note"}: ${answer.note ?? ""} (n to edit)`, role: "panelMuted" });
 	return lines;
 }
 
 function renderInventory(
 	state: SelectionTuiState,
-	detail: string[],
+	detail: RenderLine[],
 	slots: number,
 	w: number,
 	fit: (text: string, size?: number) => string
-): string[] {
-	const lines: string[] = [];
+): RenderLine[] {
+	const lines: RenderLine[] = [];
 	const indices = filteredQuestionIndices(state);
 	const position = Math.max(0, indices.indexOf(state.index));
 	const listStart = Math.max(0, position - Math.floor(slots / 2));
@@ -337,11 +452,14 @@ function renderInventory(
 		const left = Math.floor(w * 0.4);
 		for (let i = 0; i < Math.max(detail.length, inventory.length); i++) {
 			const cell = fit(inventory[i] ?? "", left);
-			lines.push(`${cell}${" ".repeat(Math.max(0, left - visibleWidth(cell)))} | ${fit(detail[i] ?? "", w - left - 3)}`);
+			lines.push({
+				text: `${cell}${" ".repeat(Math.max(0, left - visibleWidth(cell)))} | ${fit(detail[i]?.text ?? "", w - left - 3)}`,
+				role: detail[i]?.role ?? "panelMuted",
+			});
 		}
 	} else {
-		lines.push(...inventory.slice(0, Math.max(1, Math.floor(slots / 2))).map((text) => fit(text)));
-		lines.push(fit("Detail:"), ...detail.map((text) => fit(text)));
+		lines.push(...inventory.slice(0, Math.max(1, Math.floor(slots / 2))).map((text) => ({ text, role: "panelMuted" as const })));
+		lines.push({ text: "Detail:", role: "panelMuted" }, ...detail);
 	}
 	return lines;
 }
@@ -452,9 +570,10 @@ export async function showSelectionTui(ctx: ExtensionContext, record: SelectionR
 				},
 				render(width: number) {
 					const height = Math.max(1, tui.terminal.rows - 2);
-					if (!state.editing || !input) return renderSelectionTui(state, width, height);
+					const paint = selectionPaint(theme, width);
+					if (!state.editing || !input) return renderSelectionTui(state, width, height, paint);
 					const available = Math.max(1, Math.min(6, height - 3));
-					const header = renderSelectionTui(state, width, Math.max(1, height - available - 1));
+					const header = renderSelectionTui(state, width, Math.max(1, height - available - 1), paint);
 					// Built-in editors own their cursor and horizontal/vertical scrolling.
 					const rendered = input.render(Math.max(1, width));
 					const cursorLine = Math.max(
@@ -523,7 +642,7 @@ function detailKeyAction(state: SelectionTuiState, data: string): SelectionTuiAc
 		"?": { type: "status", status: "unanswered" },
 	};
 	if (Object.hasOwn(actions, data)) return actions[data];
-	if (state.listFocus || state.spec.questions[state.index]?.kind !== "multiple") return undefined;
+	if (state.listFocus || state.spec.questions[state.index]?.kind === "text") return undefined;
 	if (data === "0") return { type: "none" };
 	if (data === " ") return { type: "choose" };
 	return undefined;

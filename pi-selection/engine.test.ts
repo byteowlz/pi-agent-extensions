@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { startBrowserReview, startBrowserReviewForTest } from "./browser.js";
 import { SelectionStore } from "./store.js";
 import { emptyAnswers, normalizeSpec, validateAnswers } from "./validation.js";
+import { reviewHtml, reviewScript } from "./web.js";
 const spec = {
 	version: 1,
 	mode: "questions",
@@ -156,4 +157,52 @@ test("HTTP auth host origin CSRF limits scope and expiry; production LAN guards"
 		await server?.close();
 		await rm(root, { recursive: true, force: true });
 	}
+});
+
+test("explicit none answers choice questions and own text needs no allowOther", () => {
+	const n = normalizeSpec({
+		version: 1,
+		mode: "questions",
+		title: "N",
+		questions: [
+			{ id: "s", title: "S", kind: "single", required: true, options: [{ id: "a", label: "A" }] },
+			{
+				id: "m",
+				title: "M",
+				kind: "multiple",
+				required: true,
+				minSelections: 2,
+				options: [
+					{ id: "a", label: "A" },
+					{ id: "b", label: "B" },
+				],
+			},
+		],
+	});
+	const none = validateAnswers(n, { s: { answered: true, selectedIds: [], none: true } }, false);
+	expect(none.s).toEqual({ answered: true, selectedIds: [], none: true });
+	// Explicit none satisfies required and clears the minSelections floor.
+	const satisfied = validateAnswers(n, { s: none.s, m: { answered: true, selectedIds: [], none: true } }, true);
+	expect(satisfied.m.none).toBe(true);
+	// Own text is accepted without the legacy allowOther flag.
+	const own = validateAnswers(n, { s: { answered: true, selectedIds: [], text: "mine" }, m: satisfied.m }, true);
+	expect(own.s.text).toBe("mine");
+	// none cannot carry selections or text, and is invalid for text questions.
+	expect(() => validateAnswers(n, { s: { answered: true, selectedIds: ["a"], none: true } }, false)).toThrow();
+	expect(() => validateAnswers(n, { s: { answered: true, selectedIds: [], text: "x", none: true } }, false)).toThrow();
+	expect(() => validateAnswers(n, { s: { answered: false, selectedIds: [], none: true } }, false)).toThrow();
+	const text = normalizeSpec({ version: 1, mode: "questions", title: "T", questions: [{ id: "t", title: "T", kind: "text" }] });
+	expect(() => validateAnswers(text, { t: { answered: true, selectedIds: [], none: true } }, false)).toThrow();
+});
+
+test("browser fallback offers an own answer and none of the above for every choice question", () => {
+	const page = reviewHtml("nonce");
+	const script = reviewScript();
+	const source = page + script;
+	expect(source).toContain("None of the above");
+	expect(source).toContain("Your own answer");
+	// The option list is no longer gated on the legacy allowOther flag.
+	expect(source).not.toContain("q.kind==='text'||q.allowOther");
+	// Keep the executable source syntactically valid.
+	expect(() => new Function(script)).not.toThrow();
 });

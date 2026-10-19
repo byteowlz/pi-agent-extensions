@@ -16,6 +16,7 @@
     "pi-introspection": { "self_reflection": "implemented" },
     "pi-kyz": { "bash": "host-schema-preserving-wrapper" },
     "pi-markdown-export": {},
+    "pi-link-picker": {},
     "pi-mmry": { "memory": "implemented" },
     "pi-nym": {},
     "pi-oqto-bridge": {},

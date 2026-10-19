@@ -131,7 +131,7 @@ function question(value: unknown): Question {
 	}
 	result.options = choices(row.options);
 	if (!result.options.length) fail("Empty choices");
-	const maximum = result.kind === "single" ? 1 : result.options.length + (result.allowOther ? 1 : 0);
+	const maximum = result.kind === "single" ? 1 : result.options.length + 1;
 	if ((result.minSelections ?? 0) > (result.maxSelections ?? maximum) || (result.maxSelections ?? maximum) > maximum)
 		fail("Invalid selection bounds");
 	return result;
@@ -199,11 +199,18 @@ function answerText(question: Question, value: unknown, supplemental: boolean): 
 	const result = optionalText(value, constraint?.maxLength ?? 10000);
 	if (result === undefined) return undefined;
 	if (supplemental && !question.note) fail("Invalid note");
-	if (!supplemental && question.kind !== "text" && !question.allowOther) fail("Invalid answer text");
 	if (!constraint?.multiline && /[\r\n]/.test(result)) fail(supplemental ? "Invalid note" : "Invalid answer text");
 	return result;
 }
-function validateCompletion(question: Question, answered: boolean, count: number, value: string | undefined): void {
+function validateCompletion(
+	question: Question,
+	answered: boolean,
+	count: number,
+	value: string | undefined,
+	none: boolean
+): void {
+	// An explicit "none of the above" is a deliberate answer and satisfies required.
+	if (none) return;
 	if (answered && question.kind === "single" && count !== 1) fail("Empty answer");
 	if (answered && question.kind === "multiple" && count < (question.minSelections ?? 0)) fail("Empty answer");
 	if (answered && question.kind === "text" && question.required && !value?.trim()) fail("Empty answer");
@@ -211,7 +218,7 @@ function validateCompletion(question: Question, answered: boolean, count: number
 }
 function validateAnswer(question: Question, input: unknown, submit: boolean): Answer {
 	const row = object(input);
-	fields(row, ["answered", "selectedIds", "text", "note", "disposition"]);
+	fields(row, ["answered", "selectedIds", "text", "note", "disposition", "none"]);
 	const answered = bool(row.answered);
 	if (answered === undefined) fail("Missing answered");
 	const selectedIds = list(row.selectedIds).map(id);
@@ -222,6 +229,11 @@ function validateAnswer(question: Question, input: unknown, submit: boolean): An
 		fail("Invalid choices");
 	const value = answerText(question, row.text, false);
 	const memo = answerText(question, row.note, true);
+	const none = bool(row.none);
+	if (none !== undefined) {
+		if (question.kind === "text" || !none) fail("Invalid none");
+		if (!answered || selectedIds.length || value?.trim()) fail("None cannot have selections or text");
+	}
 	const count = selectedIds.length + (question.kind !== "text" && value?.trim() ? 1 : 0);
 	if (
 		(question.kind === "text" && selectedIds.length) ||
@@ -230,7 +242,7 @@ function validateAnswer(question: Question, input: unknown, submit: boolean): An
 	)
 		fail("Too many selections");
 	if (!answered && (selectedIds.length || value?.length)) fail("Unanswered decision contains value");
-	if (submit) validateCompletion(question, answered, count, value);
+	if (submit) validateCompletion(question, answered, count, value, none === true);
 	if (row.disposition !== undefined && (answered || !["skipped", "unsure"].includes(row.disposition as string)))
 		fail("Invalid answer disposition");
 	return {
@@ -238,6 +250,7 @@ function validateAnswer(question: Question, input: unknown, submit: boolean): An
 		selectedIds,
 		...(value === undefined ? {} : { text: value }),
 		...(memo === undefined ? {} : { note: memo }),
+		...(none === true ? { none: true as const } : {}),
 		...(row.disposition === undefined ? {} : { disposition: row.disposition as Answer["disposition"] }),
 	};
 }
