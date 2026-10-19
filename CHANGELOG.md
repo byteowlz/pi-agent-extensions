@@ -15,6 +15,13 @@ All notable changes to pi-agent-extensions will be documented in this file.
   Secret-looking values are redacted in previews and can be revealed with `v`.
   Current session only; nothing is uploaded, written to disk or sent to a model.
 
+### Steer finished-subagent notifications (2.16.1)
+
+- A finished subagent is now injected with `deliverAs: "steer"` instead of
+  `"followUp"`, so the parent agent acts on it in the running turn rather than
+  discovering it after the turn completes. Regression test asserts the delivery
+  mode and message content.
+
 ### Selection ask UX and explicit none (2.16.0)
 
 - The `ask` TUI now always shows **✎ Enter your own answer…** and
