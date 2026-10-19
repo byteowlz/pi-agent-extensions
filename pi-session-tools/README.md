@@ -230,8 +230,10 @@ The **effective allowlist** a session uses for spawning is resolved as:
 ### Completion notification
 
 When a subagent this session spawned finishes (`done`), a user message is
-injected into **this** session automatically, so the sending agent is told and
-can collect the result. This keeps working across a session resume/reload.
+**steered** into **this** session automatically (`deliverAs: "steer"`), so the
+sending agent is told immediately and can act on the result within the running
+turn instead of finding it queued behind its current work. This keeps working
+across a session resume/reload.
 
 ### Durable history + push close events
 

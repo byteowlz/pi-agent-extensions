@@ -9,6 +9,7 @@ import {
 	loadCatalog,
 	loadoutHasContent,
 	normalizeLoadout,
+	notifyFinished,
 	resolveLoadoutKinds,
 	resolveLoadoutModelIds,
 } from "./index";
@@ -285,5 +286,32 @@ describe("pi-herdr-tools catalog layering", () => {
 	test("missing catalog yields an empty catalog", () => {
 		const cat = loadCatalog(undefined, "/nonexistent/catalog.json");
 		expect(cat.models ?? []).toEqual([]);
+	});
+});
+
+describe("finished subagent delivery", () => {
+	test("a finished subagent is steered into the running turn, not queued as a follow-up", () => {
+		const calls: Array<{ content: unknown; options: unknown }> = [];
+		const pi = {
+			sendUserMessage: (content: unknown, options: unknown) => {
+				calls.push({ content, options });
+			},
+		};
+		const notices: string[] = [];
+		const ctx = { ui: { notify: (text: string) => notices.push(text) } };
+		notifyFinished(
+			pi as unknown as Parameters<typeof notifyFinished>[0],
+			ctx as unknown as Parameters<typeof notifyFinished>[1],
+			{
+				name: "sub-abc",
+				label: "Review",
+				model: "synthetic/model",
+				cwd: "/synthetic",
+			} as unknown as Parameters<typeof notifyFinished>[2]
+		);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].options).toEqual({ deliverAs: "steer" });
+		expect(String(calls[0].content)).toContain("has FINISHED its task");
+		expect(notices).toEqual(["Subagent sub-abc finished its task."]);
 	});
 });

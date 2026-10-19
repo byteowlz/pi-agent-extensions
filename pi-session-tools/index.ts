@@ -773,7 +773,7 @@ function startNotifyTimer(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	}, POLL_INTERVAL_MS);
 }
 
-function notifyFinished(pi: ExtensionAPI, ctx: ExtensionContext, t: TrackedSubagent): void {
+export function notifyFinished(pi: ExtensionAPI, ctx: ExtensionContext, t: TrackedSubagent): void {
 	const detail = [
 		`Subagent ${t.name} (${t.label}) has FINISHED its task.`,
 		"",
@@ -784,9 +784,9 @@ function notifyFinished(pi: ExtensionAPI, ctx: ExtensionContext, t: TrackedSubag
 		`Or just ask for it: herdr agent read ${t.name} --source recent-unwrapped --format text`,
 	].join("\n");
 	try {
-		// deliverAs followUp so a completion landing while the parent is
-		// mid-stream queues instead of throwing "Agent is already processing".
-		pi.sendUserMessage(detail, { deliverAs: "followUp" });
+		// Steer: a finished subagent is actionable right now, so inject it into the
+		// running turn instead of queueing it behind the current work.
+		pi.sendUserMessage(detail, { deliverAs: "steer" });
 	} catch {
 		// no session to inject into (print/RPC mode)
 	}
