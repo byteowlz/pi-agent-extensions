@@ -46,6 +46,8 @@ interface StatuslineItem {
 	statusKey: string;
 	label: string;
 	color?: StatusColor;
+	/** Color the published value too, not just the label (opt-in). */
+	colorValue?: boolean;
 	position?: "left" | "right";
 	order?: number;
 }
@@ -87,6 +89,7 @@ function parseItem(raw: unknown): StatuslineItem | undefined {
 		statusKey: o.statusKey,
 		label: typeof o.label === "string" ? o.label : o.statusKey,
 		color: typeof o.color === "string" && STATUS_COLORS.has(o.color as StatusColor) ? (o.color as StatusColor) : "dim",
+		colorValue: o.colorValue === true,
 		position: o.position === "left" ? "left" : "right",
 		order: typeof o.order === "number" ? o.order : 1_000,
 	};
@@ -435,7 +438,7 @@ function buildHeaderLines(
 }
 
 /** Build the colored extension-status segments for the footer line. */
-function buildStatusSegments(
+export function buildStatusSegments(
 	ordered: StatuslineItem[],
 	statuses: ReadonlyMap<string, string>,
 	showInactive: boolean,
@@ -448,7 +451,8 @@ function buildStatusSegments(
 			if (showInactive) segments.push(theme.fg("dim", item.label));
 			continue;
 		}
-		segments.push(`${theme.fg(item.color ?? "dim", item.label)} ${status}`);
+		const value = item.colorValue ? theme.fg(item.color ?? "dim", status) : status;
+		segments.push(`${theme.fg(item.color ?? "dim", item.label)} ${value}`);
 	}
 	return segments;
 }

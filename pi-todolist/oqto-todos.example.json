@@ -4,5 +4,6 @@
   "sessionScoped": true,
   "tuiWidget": true,
   "tuiWidgetCollapsed": true,
-  "preserveInCompaction": true
+  "preserveInCompaction": true,
+  "maxContentLength": 160
 }

@@ -139,3 +139,23 @@ session    include                     system-auth
 After editing, reset any pending lockouts with `faillock --user $USER --reset`
 and verify in a separate terminal with `sudo -k && sudo -v` before closing
 your existing root shell.
+
+## Status bar
+
+While a password is cached, pi-sudo publishes a footer status you can surface
+with `pi-statusline`:
+
+| Key | When | Suggested color |
+|-----|------|-----------------|
+| `sudo` | cached, more than 2 minutes left | `success` |
+| `sudo-warn` | cached, 30s–2m left | `warning` |
+| `sudo-crit` | cached, 30s or less left | `error` |
+
+Exactly one key is published at a time and cleared when the cache empties,
+expires, or the session shuts down. The value is the remaining time
+(`4m32s`, `∞` for no TTL), plus `· Nt` when a turn limit is the binding one.
+Suggested manifest item (repeat for `sudo-warn`/`sudo-crit`):
+
+```json
+{ "id": "sudo", "statusKey": "sudo", "label": "\uF132", "color": "success", "colorValue": true, "order": 130 }
+```

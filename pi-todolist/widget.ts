@@ -7,7 +7,13 @@ export interface WidgetTodo {
 	priority: "high" | "medium" | "low";
 }
 
-export function renderWidget(todos: WidgetTodo[], theme: Theme, width: number, collapsed: boolean): string[] {
+export function renderWidget(
+	todos: WidgetTodo[],
+	theme: Theme,
+	width: number,
+	collapsed: boolean,
+	maxContentLength = 160
+): string[] {
 	if (!todos.length) return [];
 	const bound = Math.max(0, width);
 	const clip = (text: string) => truncateToWidth(text, bound);
@@ -20,7 +26,7 @@ export function renderWidget(todos: WidgetTodo[], theme: Theme, width: number, c
 	if (active.length) {
 		lines.push(clip(theme.fg("muted", `${todos.length} todos (${progress} in progress, ${pending} pending)`)));
 		for (const todo of active.slice(0, 8)) {
-			lines.push(clip(activeLine(todo, theme, bound)));
+			lines.push(clip(activeLine(todo, theme, bound, maxContentLength)));
 		}
 		if (active.length > 8) lines.push(clip(theme.fg("dim", `  ... ${active.length - 8} more`)));
 	}
@@ -29,12 +35,24 @@ export function renderWidget(todos: WidgetTodo[], theme: Theme, width: number, c
 	return lines;
 }
 
-function activeLine(todo: WidgetTodo, theme: Theme, width: number): string {
+function activeLine(todo: WidgetTodo, theme: Theme, width: number, maxContentLength: number): string {
 	const icon = todo.status === "in_progress" ? "[○]" : "[ ]";
 	const priority = todo.priority === "high" ? " !" : todo.priority === "low" ? " v" : "";
-	const content = truncateToWidth(todo.content.replace(/\s+/g, " ").trim(), Math.max(0, width - 6 - visibleWidth(priority)));
+	const clamped = clamp(maxContentLength, todo.content.replace(/\s+/g, " ").trim());
+	const content = truncateToWidth(clamped, Math.max(0, width - 6 - visibleWidth(priority)));
 	const line = theme.fg(todo.status === "in_progress" ? "success" : "text", `  ${icon} ${content}`);
 	return line + (priority ? theme.fg(todo.priority === "high" ? "error" : "dim", priority) : "");
+}
+
+/** Truncate on code-point boundaries with a visible ellipsis. */
+function clamp(maxLength: number, text: string): string {
+	if (!maxLength || maxLength <= 0) return text;
+	const chars = Array.from(text);
+	if (chars.length <= maxLength) return text;
+	return `${chars
+		.slice(0, Math.max(0, maxLength - 1))
+		.join("")
+		.trimEnd()}…`;
 }
 
 function collapsedSummary(

@@ -68,3 +68,29 @@ describe("insideMultiplexer", () => {
 		expect(insideMultiplexer({ TERM: "xterm-ghostty", TERM_PROGRAM: "ghostty" })).toBe(false);
 	});
 });
+
+describe("buildStatusSegments", () => {
+	test("colors only the label by default", async () => {
+		const { buildStatusSegments } = await import("./index.ts");
+		const theme = { fg: (color: string, text: string) => `<${color}>${text}</>` };
+		const segments = buildStatusSegments(
+			[{ id: "s", statusKey: "sudo", label: "SUDO", color: "warning" }],
+			new Map([["sudo", "4m32s"]]),
+			false,
+			theme
+		);
+		expect(segments).toEqual(["<warning>SUDO</> 4m32s"]);
+	});
+
+	test("colorValue opts the published value into the same color", async () => {
+		const { buildStatusSegments } = await import("./index.ts");
+		const theme = { fg: (color: string, text: string) => `<${color}>${text}</>` };
+		const segments = buildStatusSegments(
+			[{ id: "s", statusKey: "sudo", label: "SUDO", color: "error", colorValue: true }],
+			new Map([["sudo", "20s"]]),
+			false,
+			theme
+		);
+		expect(segments).toEqual(["<error>SUDO</> <error>20s</>"]);
+	});
+});

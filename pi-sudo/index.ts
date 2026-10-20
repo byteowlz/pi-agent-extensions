@@ -142,6 +142,95 @@ interface PasswordCacheEntry {
 
 const passwordCache = new Map<string, PasswordCacheEntry>();
 
+// ---------------------------------------------------------------------------
+// Status bar publishing (at-a-glance cache state)
+// ---------------------------------------------------------------------------
+
+/** Severity keys so the renderer can color the symbol without knowing policy. */
+const SUDO_STATUS_KEYS = ["sudo", "sudo-warn", "sudo-crit"] as const;
+const STATUS_REFRESH_MS = 5_000;
+const WARN_REMAINING_MS = 120_000;
+const CRIT_REMAINING_MS = 30_000;
+let statusContext: ExtensionContext | undefined;
+let statusTimer: ReturnType<typeof setInterval> | undefined;
+let statusPublished: string | undefined;
+
+function formatRemaining(ms: number): string {
+	if (!Number.isFinite(ms)) return "∞";
+	const total = Math.max(0, Math.ceil(ms / 1000));
+	const minutes = Math.floor(total / 60);
+	const seconds = total % 60;
+	return minutes > 0 ? `${minutes}m${String(seconds).padStart(2, "0")}s` : `${seconds}s`;
+}
+
+function stopStatusTimer(): void {
+	if (!statusTimer) return;
+	clearInterval(statusTimer);
+	statusTimer = undefined;
+}
+
+function clearSudoStatus(): void {
+	if (statusPublished === undefined || !statusContext) return;
+	statusPublished = undefined;
+	for (const key of SUDO_STATUS_KEYS) {
+		try {
+			statusContext.ui.setStatus(key, undefined);
+		} catch {
+			/* stale context after session replacement */
+		}
+	}
+}
+
+export interface SudoStatus {
+	key: "sudo" | "sudo-warn" | "sudo-crit";
+	text: string;
+}
+
+/** Pure status decision: undefined when nothing is cached. */
+export function describeSudoStatus(active: boolean, remainingMs: number, remainingTurns: number): SudoStatus | undefined {
+	if (!active) return undefined;
+	const parts = [formatRemaining(remainingMs)];
+	if (remainingTurns > 0) parts.push(`${remainingTurns}t`);
+	return {
+		key: remainingMs <= CRIT_REMAINING_MS ? "sudo-crit" : remainingMs <= WARN_REMAINING_MS ? "sudo-warn" : "sudo",
+		text: parts.join(" · "),
+	};
+}
+
+/** Publish cached state; the countdown refreshes itself while a TTL is active. */
+function publishSudoStatus(): void {
+	const ctx = statusContext;
+	if (!ctx) return;
+	const status = describeSudoStatus(cacheHasPassword(), cacheRemainingMs(), cacheRemainingTurns());
+	if (!status) {
+		clearSudoStatus();
+		stopStatusTimer();
+		return;
+	}
+	const remainingMs = cacheRemainingMs();
+	const { key, text } = status;
+	try {
+		if (statusPublished !== `${key}:${text}`) {
+			if (statusPublished !== undefined && !statusPublished.startsWith(`${key}:`)) clearSudoStatus();
+			ctx.ui.setStatus(key, text);
+			statusPublished = `${key}:${text}`;
+		}
+	} catch {
+		/* stale context; nothing to clear */
+	}
+	if (Number.isFinite(remainingMs)) {
+		if (!statusTimer) {
+			statusTimer = setInterval(publishSudoStatus, STATUS_REFRESH_MS);
+			statusTimer.unref?.();
+		}
+	} else stopStatusTimer();
+}
+
+function bindStatusContext(ctx: ExtensionContext): void {
+	statusContext = ctx;
+	publishSudoStatus();
+}
+
 /** Completed agent turns this session; drives the turn-based cache policy. */
 let turnCounter = 0;
 
@@ -165,11 +254,13 @@ function cacheSet(pw: string, scope = "local"): void {
 		turnStamp: turnCounter,
 		turns: config.cacheTurns,
 	});
+	publishSudoStatus();
 }
 
 function cacheClear(scope?: string): void {
 	if (scope) passwordCache.delete(scope);
 	else passwordCache.clear();
+	publishSudoStatus();
 }
 
 function cacheRemainingMs(scope = "local"): number {
@@ -639,17 +730,27 @@ export default function pisudo(pi: ExtensionAPI): void {
 	config = loadSudoConfig();
 
 	// Completed agent turns drive the turn-based cache policy.
-	pi.on("agent_end", async () => {
+	pi.on("agent_end", async (_event, ctx) => {
 		turnCounter = turnCounter + 1;
+		bindStatusContext(ctx);
+	});
+
+	pi.on("session_start", async (_event, ctx) => {
+		// A new session starts with an empty cache; clear any stale segment.
+		bindStatusContext(ctx);
 	});
 
 	// ---- session_shutdown: drop the cached password ---------------------
 	pi.on("session_shutdown", async () => {
+		stopStatusTimer();
+		clearSudoStatus();
 		cacheClear();
+		statusContext = undefined;
 	});
 
 	// ---- Intercept naked `sudo` in the built-in bash tool --------------
 	pi.on("tool_call", async (event, ctx) => {
+		statusContext = ctx;
 		if (!isToolCallEventType("bash", event)) return;
 		const cmd = event.input.command ?? "";
 		const decision = sudoGuardDecision(cmd);
@@ -740,6 +841,7 @@ export default function pisudo(pi: ExtensionAPI): void {
 	}
 
 	async function executeSudo(params: SudoExecInput, signal: AbortSignal | undefined, ctx: ExtensionContext) {
+		statusContext = ctx;
 		const command = params.command;
 		const reason = params.reason;
 		const host = params.host;
@@ -916,6 +1018,7 @@ export default function pisudo(pi: ExtensionAPI): void {
 	pi.registerCommand("sudo-status", {
 		description: "Show pi-sudo password cache status",
 		handler: async (_args, ctx) => {
+			bindStatusContext(ctx);
 			const scopes = cacheScopes();
 			if (scopes.length > 0) {
 				const summary = scopes.map((scope) => `${scope}: ${describeCache(scope)}`).join("\n  ");
@@ -933,6 +1036,7 @@ export default function pisudo(pi: ExtensionAPI): void {
 	pi.registerCommand("sudo-ttl", {
 		description: "Set the session's sudo cache policy: /sudo-ttl <seconds> [turns]. 0 = no expiry / unlimited turns",
 		handler: async (args, ctx) => {
+			bindStatusContext(ctx);
 			const tokens = args.trim().split(/\s+/).filter(Boolean);
 			if (tokens.length === 0) {
 				ctx.ui.notify(
@@ -971,6 +1075,7 @@ export default function pisudo(pi: ExtensionAPI): void {
 	pi.registerCommand("sudo-forget", {
 		description: "Drop the cached sudo password",
 		handler: async (_args, ctx) => {
+			bindStatusContext(ctx);
 			cacheClear();
 			ctx.ui.notify("sudo: cache cleared", "info");
 		},
@@ -979,6 +1084,7 @@ export default function pisudo(pi: ExtensionAPI): void {
 	pi.registerCommand("sudo-test", {
 		description: "Verify the cached sudo password still works (runs `sudo true`)",
 		handler: async (_args, ctx) => {
+			bindStatusContext(ctx);
 			const outcome = await ensurePasswordAndRun("true", "sudo-test", 15_000, undefined, ctx, "local", (pw) =>
 				runPrivileged("sudo", ["-S", "-p", "", "--", "bash", "-lc", "true"], pw, undefined, 15_000)
 			);

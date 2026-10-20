@@ -29,7 +29,9 @@ way to populate it:
 
 - **Load** — `ssh-keygen`-verified key discovery in `~/.ssh`, a fuzzy-search
   multi-select picker (type to filter, `space` selects, `Ctrl+A` toggles all filtered keys; plain `a`/`A` filter normally,
-  `Enter` loads the selection — protected keys are marked `[locked]`), and a
+  `Enter` loads the selection — keys already in the agent are marked `[loaded]`
+  and passphrase-protected keys `[locked]`; the header shows the loaded count,
+  and typing `loaded` filters to what the agent already holds), and a
   masked passphrase prompt that reaches `ssh-add` through `SSH_ASKPASS`
   (never a GUI askpass, never a TTY). Multiple selected keys are loaded one
   at a time, so passphrase prompts appear sequentially, one per key.
@@ -57,7 +59,7 @@ way to populate it:
 |--------------------------------|-------------|
 | `/ssh-key-load [path] [seconds]` | Pick (fuzzy search, multi-select) or name one or more private keys and add them to the agent. Optional `seconds` bounds their lifetime in the agent (default: no expiry). |
 | `/ssh-key-unload [path]`       | Remove one key, or with no argument remove all loaded keys and tear down the pi-owned agent + restore the env. |
-| `/ssh-key-timeout [seconds]`   | Set the lifetime of the currently loaded key(s) (`0` = no expiry) and remember it as the default for future loads. With no argument, shows the current default. |
+| `/ssh-key-timeout [seconds]`   | Set the lifetime of the currently loaded key(s) (`0` = no expiry) and remember it as the session default for future loads. With no argument, shows the effective default and whether it comes from the session or config. |
 | `/ssh-key-status`              | Show the agent socket, whether pi owns it, and the loaded keys (with fingerprints). |
 
 ## Examples
@@ -87,7 +89,9 @@ Optional `ssh-key.json` (project `.pi/ssh-key.json` overrides global
 
 - `keyDir` — directory scanned by the picker (default `~/.ssh`).
 - `defaultTimeout` — seconds applied to `/ssh-key-load` when no timeout is given
-  (`0` meaning no expiry, the default).
+  (`0` meaning no expiry, the default). Precedence: an explicit
+  `/ssh-key-load <path> <seconds>`, then the session value set by
+  `/ssh-key-timeout <seconds>`, then this config value.
 
 ## oqto SSH proxy sessions
 
@@ -164,3 +168,24 @@ extension is deliberately a passive consumer of the contract.
 
 OpenSSH `ssh-agent`, `ssh-add`, and `ssh-keygen` on `PATH` (present by default
 on macOS and most Linux distributions).
+
+## Status bar
+
+While one or more keys this extension loaded are in the agent, it publishes
+`ssh-key` so a statusline can show it at a glance:
+
+```
+\uF084 2 keys · 29m
+```
+
+The value is the key count plus the soonest remaining timeout when a lifetime
+was requested (`/ssh-key-load <path> <seconds>` or `/ssh-key-timeout`). Keys
+without a timeout show just the count. The segment is cleared when everything is
+unloaded, the keys expire, or the session shuts down.
+
+```json
+{ "id": "ssh-key", "statusKey": "ssh-key", "label": "\uF084", "color": "accent", "order": 120 }
+```
+
+Keys loaded into a *reused* user agent are counted too, but only keys this
+extension added have a tracked expiry.

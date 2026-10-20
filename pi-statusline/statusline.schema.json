@@ -56,6 +56,11 @@
 						"enum": ["accent", "success", "warning", "error", "muted", "dim", "text"],
 						"description": "Theme color token for the label."
 					},
+					"colorValue": {
+						"type": "boolean",
+						"default": false,
+						"description": "Color the published value with the same token as the label (default: only the label is colored)."
+					},
 					"position": {
 						"enum": ["left", "right"],
 						"description": "Placement hint for footers that order by position."
