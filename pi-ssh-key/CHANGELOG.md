@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.4.0
+
+- Publish an `ssh-key` footer status while keys are loaded: key count plus the
+  soonest remaining timeout (e.g. `2 keys · 29m`). Track per-key expiry, drop
+  expired keys from the status, refresh every 5s, and clear on unload/shutdown.
+- Rendered as a Nerd Font key glyph (`\uF084`) by the pi-statusline example; works with any renderer via
+  `ctx.ui.setStatus`.
+- Tests: real-agent load publishes and unload clears the status; pure status
+  formatting covers counts, soonest expiry and expired keys.
+
+## 1.3.0
+
+- Key picker marks keys already present in the agent with `[loaded]`, shows a
+  loaded count in the header, and includes "loaded"/"locked" in the fuzzy match
+  so `loaded` filters to what the agent already holds.
+- Apply the configured `defaultTimeout` to `/ssh-key-load`. It was read but never
+  used before. Precedence is now: explicit load timeout → session value set by
+  `/ssh-key-timeout` → config `defaultTimeout` → no expiry.
+- `/ssh-key-timeout` with no argument reports the effective default and whether
+  it came from the session or the config file.
+- Tests: real temporary `ssh-agent` asserts the `[loaded]` badge and filtering;
+  config/session timeout precedence and rejection of negative values.
+
 ## 1.2.2
 
 - Require Ctrl+A to toggle selection of all filtered keys. Plain a/A now remain

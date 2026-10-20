@@ -41,9 +41,21 @@ Looked up in this order (first match wins):
 
 Item fields: `statusKey` (required, the key an extension publishes under),
 `id` (defaults to statusKey), `label` (short prefix, default statusKey),
-`color` (accent|success|warning|error|muted|dim|text), `position`, `order`
+`color` (accent|success|warning|error|muted|dim|text), `colorValue` (also color
+the published value, not just the label), `position`, `order`
 (sort, ascending; default 1000). Top-level `showInactive` renders configured
 items even when idle (dimmed).
+
+Publishers decide severity by choosing the key; the renderer decides the color.
+Sudo uses three mutually-exclusive keys so the shield changes color as time runs
+out, while a plain `sudo` publisher keeps working if you only map one:
+
+```json
+{ "id": "ssh-key",    "statusKey": "ssh-key",    "label": "\uF084", "color": "accent",  "order": 120 },
+{ "id": "sudo",       "statusKey": "sudo",       "label": "\uF132", "color": "success", "colorValue": true, "order": 130 },
+{ "id": "sudo-warn",  "statusKey": "sudo-warn",  "label": "\uF132", "color": "warning", "colorValue": true, "order": 130 },
+{ "id": "sudo-crit",  "statusKey": "sudo-crit",  "label": "\uF132", "color": "error",   "colorValue": true, "order": 130 }
+```
 
 The leading icon uses the **real pi press-kit badge** as an inline image on
 terminals that implement the **Kitty graphics protocol**, drawn from

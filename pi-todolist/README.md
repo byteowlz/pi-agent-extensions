@@ -5,6 +5,8 @@ A Pi extension that provides todo management tools compatible with Oqto's fronte
 ## Overview
 
 This extension provides a single unified `Todo` tool for managing the task list, plus an interactive `/todo` command. Todos created through these are automatically displayed in Oqto's right sidebar panel.
+Only open items (`pending`, `in_progress`) are ever listed; `completed` and
+`cancelled` items collapse into a single count line.
 
 ## Tools
 
@@ -62,7 +64,7 @@ The Oqto frontend automatically parses `Todo` tool calls and displays todos in t
 ## Commands
 
 - `/todo` - Interactive menu to add, start, complete, cancel, edit, delete, or clear todos
-- `/todo list` - Display current todos in the notification area
+- `/todo list` - Display current todos in the notification area (done and cancelled items are summarized, never listed)
 - `/todo expand|collapse|toggle` - Override sticky widget mode for this session; resets on session start/switch and tree navigation (no settings are written)
 
 `/todo` is the single command; the former `/todos` command has been removed.
@@ -70,6 +72,20 @@ The Oqto frontend automatically parses `Todo` tool calls and displays todos in t
 ## Configuration
 
 Create `oqto-todos.json` in your project root, `.pi/` directory, or `~/.pi/agent/`:
+
+### Content length
+
+Models sometimes write essays into a todo. `maxContentLength` (default **160**
+characters, `0` disables it) clamps each todo:
+
+- **On write** — `write`, `add` and `update` truncate on a code-point boundary
+  and append `…`, so stored state and the panel stay bounded.
+- **On render** — the TUI widget, `/todo list`, the tool result and the
+  post-compaction reminder all apply the same cap, so older overlong todos are
+  also shown short.
+
+The tool description asks the model to keep todos to one short line (~140
+characters) so truncation is rare.
 
 The extension is named `pi-todolist`; the configuration filename and persisted
 `oqto-todos` history/widget keys intentionally remain unchanged to preserve

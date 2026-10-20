@@ -94,6 +94,8 @@ interface LoadedKey {
 	fingerprint?: string;
 	protected: boolean;
 	passphrase?: string; // in-memory only, cleared on unload/shutdown
+	/** Wall-clock expiry in the agent, when a timeout was requested. */
+	expiresAt?: number;
 }
 
 interface PiAgent {
@@ -116,8 +118,8 @@ const DEFAULT_TIMEOUT_SECS = 0; // no expiry by default
 let agent: PiAgent | undefined;
 let agentEpoch = 0;
 let agentResolution: Promise<PiAgent> | undefined;
-/** Default timeout (seconds) applied to future `/ssh-key-load` calls. */
-let defaultTimeoutSecs = DEFAULT_TIMEOUT_SECS;
+/** Explicit per-session override set by `/ssh-key-timeout` or an explicit load timeout. */
+let sessionTimeoutOverride: number | undefined;
 const MAX_PROMPT_ATTEMPTS = 3;
 
 // ---------------------------------------------------------------------------
@@ -705,6 +707,90 @@ async function promptPassphrase(ctx: ExtensionCommandContext, title: string, sub
 // Load / unload logic
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Status bar publishing (at-a-glance loaded-key state)
+// ---------------------------------------------------------------------------
+
+const SSH_STATUS_KEY = "ssh-key";
+const STATUS_REFRESH_MS = 5_000;
+let statusContext: ExtensionCommandContext | undefined;
+let statusTimer: ReturnType<typeof setInterval> | undefined;
+let statusPublished: string | undefined;
+
+function formatRemaining(ms: number): string {
+	const total = Math.max(0, Math.ceil(ms / 1000));
+	const minutes = Math.floor(total / 60);
+	const seconds = total % 60;
+	return minutes > 0 ? `${minutes}m${String(seconds).padStart(2, "0")}s` : `${seconds}s`;
+}
+
+function stopStatusTimer(): void {
+	if (!statusTimer) return;
+	clearInterval(statusTimer);
+	statusTimer = undefined;
+}
+
+export interface SshStatus {
+	text: string;
+	/** True while a timeout is counting down (keeps the refresh timer alive). */
+	expiring: boolean;
+}
+
+/** Pure status decision: undefined when no keys are loaded. */
+export function describeSshStatus(keys: ReadonlyArray<{ expiresAt?: number }>, now = Date.now()): SshStatus | undefined {
+	if (keys.length === 0) return undefined;
+	const expiries = keys.map((key) => key.expiresAt).filter((value): value is number => typeof value === "number");
+	const soonest = expiries.length > 0 ? Math.min(...expiries) - now : undefined;
+	const noun = keys.length === 1 ? "key" : "keys";
+	if (soonest !== undefined && soonest > 0) {
+		return { text: `${keys.length} ${noun} · ${formatRemaining(soonest)}`, expiring: true };
+	}
+	return { text: `${keys.length} ${noun}`, expiring: false };
+}
+
+function publishSshStatus(): void {
+	const ctx = statusContext;
+	if (!ctx) return;
+	const now = Date.now();
+	for (const [path, key] of [...(agent?.loadedKeys.entries() ?? [])]) {
+		if (typeof key.expiresAt === "number" && key.expiresAt <= now) agent?.loadedKeys.delete(path);
+	}
+	const keys = [...(agent?.loadedKeys.values() ?? [])];
+	const status = describeSshStatus(keys, now);
+	if (!status) {
+		if (statusPublished !== undefined) {
+			statusPublished = undefined;
+			try {
+				ctx.ui.setStatus(SSH_STATUS_KEY, undefined);
+			} catch {
+				/* stale context */
+			}
+		}
+		stopStatusTimer();
+		return;
+	}
+	const text = status.text;
+	if (text !== statusPublished) {
+		try {
+			ctx.ui.setStatus(SSH_STATUS_KEY, text);
+			statusPublished = text;
+		} catch {
+			/* stale context */
+		}
+	}
+	if (status.expiring) {
+		if (!statusTimer) {
+			statusTimer = setInterval(publishSshStatus, STATUS_REFRESH_MS);
+			statusTimer.unref?.();
+		}
+	} else stopStatusTimer();
+}
+
+function bindStatusContext(ctx: ExtensionCommandContext): void {
+	statusContext = ctx;
+	publishSshStatus();
+}
+
 async function getPassphraseForKey(keyPath: string, keyName: string, ctx: ExtensionCommandContext): Promise<string | undefined> {
 	const cached = agent?.loadedKeys.get(keyPath)?.passphrase;
 	if (cached) return cached;
@@ -726,6 +812,25 @@ async function getPassphraseForKey(keyPath: string, keyName: string, ctx: Extens
 		if (pass.length > 0) return pass;
 	}
 	throw new Error("empty passphrase supplied");
+}
+
+/** Fingerprints currently held by this session's agent (bounded, best-effort). */
+async function listLoadedFingerprints(): Promise<Set<string>> {
+	const socket = agent?.authSock ?? process.env.SSH_AUTH_SOCK;
+	if (!socket) return new Set();
+	if (!(await probeAgent(socket, 800))) return new Set();
+	const env: NodeJS.ProcessEnv = { ...process.env, SSH_AUTH_SOCK: socket };
+	if (agent?.pid) env.SSH_AGENT_PID = String(agent.pid);
+	const listing = await Promise.race([
+		runProcess("ssh-add", ["-l"], env),
+		new Promise<RunResult>((resolve) => {
+			const timer = setTimeout(() => resolve({ code: -1, stdout: "", stderr: "" }), 1500);
+			timer.unref?.();
+		}),
+	]);
+	const fingerprints = new Set<string>();
+	for (const match of `${listing.stdout}\n${listing.stderr}`.matchAll(/SHA256:[A-Za-z0-9+/=]+/g)) fingerprints.add(match[0]);
+	return fingerprints;
 }
 
 async function agentIdentities(a: PiAgent): Promise<string> {
@@ -765,8 +870,16 @@ async function loadKey(keyPath: string, timeoutSecs: number, ctx: ExtensionComma
 	}
 
 	checkAgentEpoch(epoch);
-	const loaded: LoadedKey = { keyPath, name, fingerprint: fp, protected: Boolean(passphrase), passphrase };
+	const loaded: LoadedKey = {
+		keyPath,
+		name,
+		fingerprint: fp,
+		protected: Boolean(passphrase),
+		passphrase,
+		expiresAt: timeoutSecs > 0 ? Date.now() + timeoutSecs * 1000 : undefined,
+	};
 	a.loadedKeys.set(keyPath, loaded);
+	publishSshStatus();
 	return loaded;
 }
 
@@ -794,6 +907,7 @@ async function unloadKey(keyPath: string): Promise<string> {
 	if (!a.loadedKeys.has(keyPath)) return `key ${basename(keyPath)} is not loaded`;
 	const res = await removeKeyFromAgent(a, keyPath);
 	a.loadedKeys.delete(keyPath);
+	publishSshStatus();
 	if (res.code !== 0) {
 		const msg = res.stderr.trim() || "ssh-add -d failed";
 		throw new Error(`failed to unload ${basename(keyPath)}: ${msg}`);
@@ -817,6 +931,7 @@ async function unloadAll(): Promise<string> {
 		if (res.code === 0) removed.push(basename(path));
 	}
 	clearPassphrases();
+	publishSshStatus();
 	if (a.owned) {
 		await stopOwnedAgent();
 		restoreEnv();
@@ -826,10 +941,18 @@ async function unloadAll(): Promise<string> {
 	return `unloaded ${removed.length} key(s) from the existing agent`;
 }
 
+/**
+ * Effective default lifetime: explicit session override, then the configured
+ * `defaultTimeout`, then no expiry.
+ */
+function effectiveDefaultTimeout(config: SshKeyConfig): number {
+	return sessionTimeoutOverride ?? config.defaultTimeout;
+}
+
 async function setTimeouts(timeoutSecs: number): Promise<string> {
 	const a = agent;
 	if (!a || a.loadedKeys.size === 0) {
-		defaultTimeoutSecs = timeoutSecs;
+		sessionTimeoutOverride = timeoutSecs;
 		return `no keys loaded; default timeout set to ${timeoutSecs > 0 ? `${timeoutSecs}s` : "no expiry"}`;
 	}
 	await trackedAgent();
@@ -837,12 +960,13 @@ async function setTimeouts(timeoutSecs: number): Promise<string> {
 	for (const [path, key] of a.loadedKeys) {
 		const res = await addKeyToAgent(a, path, key.passphrase, timeoutSecs);
 		if (addSucceeded(res)) {
+			key.expiresAt = timeoutSecs > 0 ? Date.now() + timeoutSecs * 1000 : undefined;
 			results.push(`${key.name} → ${timeoutSecs > 0 ? `${timeoutSecs}s` : "no expiry"}`);
 		} else {
 			results.push(`${key.name} → failed (${res.stderr.trim() || "error"})`);
 		}
 	}
-	defaultTimeoutSecs = timeoutSecs;
+	sessionTimeoutOverride = timeoutSecs;
 	return results.join("\n");
 }
 
@@ -853,16 +977,26 @@ async function setTimeouts(timeoutSecs: number): Promise<string> {
 interface KeyItem {
 	path: string;
 	name: string;
+	/** Passphrase-protected (needs a prompt to load). */
 	protected: boolean;
+	/** Already present in this session's agent. */
+	loaded: boolean;
 	comment?: string;
 }
 
 export async function pickKeys(ctx: ExtensionCommandContext, keyDir: string): Promise<KeyItem[] | undefined> {
 	const paths = discoverKeys(keyDir);
+	const loadedFingerprints = await listLoadedFingerprints();
 	const items: KeyItem[] = [];
 	for (const path of paths) {
 		const protectedKey = await isPassphraseProtected(path);
-		items.push({ path, name: basename(path), protected: protectedKey, comment: readComment(path) });
+		// Only pay for ssh-keygen when the agent actually holds something.
+		let loaded = false;
+		if (loadedFingerprints.size > 0) {
+			const fp = await fingerprint(path);
+			loaded = fp !== undefined && loadedFingerprints.has(fp);
+		}
+		items.push({ path, name: basename(path), protected: protectedKey, loaded, comment: readComment(path) });
 	}
 	if (items.length === 0) {
 		ctx.ui.notify(`no private keys found in ${keyDir}`, "warning");
@@ -875,7 +1009,7 @@ export async function pickKeys(ctx: ExtensionCommandContext, keyDir: string): Pr
 	}
 	const all: Row[] = items.map((item) => ({
 		item,
-		match: `${item.name} ${item.comment ?? ""} ${item.path}`,
+		match: `${item.name} ${item.comment ?? ""} ${item.path} ${item.loaded ? "loaded" : ""} ${item.protected ? "locked" : ""}`,
 	}));
 
 	return await ctx.ui.custom<KeyItem[] | undefined>((tui, theme, _kb, done) => {
@@ -884,6 +1018,7 @@ export async function pickKeys(ctx: ExtensionCommandContext, keyDir: string): Pr
 		let selected = 0;
 		const chosen = new Set<string>(); // key paths
 		const maxVisible = 14;
+		const loadedCount = all.filter((row) => row.item.loaded).length;
 		let cachedLines: string[] | undefined;
 
 		const finish = (result: KeyItem[] | undefined): void => {
@@ -973,7 +1108,15 @@ export async function pickKeys(ctx: ExtensionCommandContext, keyDir: string): Pr
 			const rw = Math.max(1, width);
 			const lines: string[] = [];
 			lines.push(theme.fg("accent", "─".repeat(rw)));
-			lines.push(...wrapTextWithAnsi(theme.fg("accent", `Load ssh key(s): ${chosen.size} selected • ${all.length} found`), rw));
+			lines.push(
+				...wrapTextWithAnsi(
+					theme.fg(
+						"accent",
+						`Load ssh key(s): ${chosen.size} selected • ${all.length} found${loadedCount > 0 ? ` • ${loadedCount} loaded` : ""}`
+					),
+					rw
+				)
+			);
 			lines.push("");
 			lines.push(` ${theme.fg("muted", "filter:")} ${theme.fg("text", query)}${theme.fg("dim", "▏")}`);
 			lines.push("");
@@ -988,9 +1131,10 @@ export async function pickKeys(ctx: ExtensionCommandContext, keyDir: string): Pr
 					const checked = chosen.has(row.item.path);
 					const prefix = isSelectedRow ? theme.fg("accent", "→ ") : "  ";
 					const box = theme.fg(checked ? "success" : "muted", checked ? "☑ " : "☐ ");
+					const loadedBadge = row.item.loaded ? theme.fg("success", "[loaded] ") : "";
 					const lock = row.item.protected ? theme.fg("dim", "[locked] ") : "";
 					const comment = row.item.comment ? theme.fg("dim", `  ${row.item.comment}`) : "";
-					const label = `${prefix}${box}${lock}${row.item.name}${comment}`;
+					const label = `${prefix}${box}${loadedBadge}${lock}${row.item.name}${comment}`;
 					lines.push(truncateToWidth(label, rw));
 				}
 				if (start > 0 || end < visible.length) lines.push(theme.fg("dim", `  (${selected + 1}/${visible.length})`));
@@ -1049,6 +1193,16 @@ function formatTimeout(secs: number): string {
 export default function piSshKey(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", async () => {
 		agentEpoch++;
+		stopStatusTimer();
+		if (statusContext) {
+			try {
+				statusContext.ui.setStatus(SSH_STATUS_KEY, undefined);
+			} catch {
+				/* ignore */
+			}
+		}
+		statusPublished = undefined;
+		statusContext = undefined;
 		const a = agent;
 		if (a?.owned) {
 			await stopOwnedAgent();
@@ -1064,9 +1218,10 @@ export default function piSshKey(pi: ExtensionAPI): void {
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const epoch = agentEpoch;
 			const cwd = process.cwd();
+			bindStatusContext(ctx);
 			const config = loadConfig(cwd);
 			const { path: argPath, timeout } = parseArgs(args);
-			const timeoutSecs = timeout ?? defaultTimeoutSecs;
+			const timeoutSecs = timeout ?? effectiveDefaultTimeout(config);
 
 			let keyPaths: string[] | undefined;
 			const oqto = isOqtoProxySession();
@@ -1112,7 +1267,7 @@ export default function piSshKey(pi: ExtensionAPI): void {
 				}
 			}
 			if (epoch !== agentEpoch) return;
-			if (loadedAny) defaultTimeoutSecs = timeoutSecs;
+			if (loadedAny) sessionTimeoutOverride = timeoutSecs;
 			if (results.length > 0)
 				ctx.ui.notify(
 					results.join("\n"),
@@ -1124,6 +1279,7 @@ export default function piSshKey(pi: ExtensionAPI): void {
 	pi.registerCommand("ssh-key-unload", {
 		description: "Remove a loaded SSH key (or all keys and the agent) from this process",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			bindStatusContext(ctx);
 			try {
 				if (!agent) {
 					ctx.ui.notify("no ssh key is loaded", "info");
@@ -1148,7 +1304,9 @@ export default function piSshKey(pi: ExtensionAPI): void {
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const tokens = args.trim().split(/\s+/).filter(Boolean);
 			if (tokens.length === 0) {
-				ctx.ui.notify(`current default timeout: ${formatTimeout(defaultTimeoutSecs)}`, "info");
+				const config = loadConfig(process.cwd());
+				const source = sessionTimeoutOverride !== undefined ? "session" : "config";
+				ctx.ui.notify(`current default timeout: ${formatTimeout(effectiveDefaultTimeout(config))} (${source})`, "info");
 				return;
 			}
 			const secs = Number.parseInt(tokens[0], 10);
@@ -1168,6 +1326,7 @@ export default function piSshKey(pi: ExtensionAPI): void {
 	pi.registerCommand("ssh-key-status", {
 		description: "Show the loaded SSH key(s) and agent state",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
+			bindStatusContext(ctx);
 			const a = agent;
 			if (!a) {
 				ctx.ui.notify("ssh-key: no agent / no keys loaded", "info");

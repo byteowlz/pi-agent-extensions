@@ -4,6 +4,31 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Open-only todos, Nerd Font status glyphs (2.18.0)
+
+- **pi-todolist 1.6.0/1.7.0**: list only open todos. Completed and cancelled
+  items are summarized (`✓ N todos done`) instead of rendered line by line, in
+  the widget, `/todo list` and the tool result — including expanded mode.
+  Expanded still shows every open todo. New `maxContentLength` (default 160,
+  0 = off) truncates overlong content on write and render, so models cannot bloat
+  the panel; the tool description now asks for one short line.
+- **pi-statusline** example and the live manifest use Nerd Font glyphs
+  (`\uF084` key, `\uF132` shield) rather than emoji for the `ssh-key` and
+  `sudo` segments.
+
+### SSH and sudo status segments (2.18.0)
+
+- **pi-statusline**: new opt-in `colorValue` colors the published value as well
+  as the label; example manifest gains `ssh-key` and the three `sudo` severity
+  keys.
+- **pi-sudo 2.1.0**: publishes the cached-password countdown as one of
+  `sudo` / `sudo-warn` (≤2m) / `sudo-crit` (≤30s), so the symbol changes color as
+  time runs out. Value is remaining time (plus `· Nt` for turn limits), refreshed
+  every 5s and cleared on expiry/forget/shutdown.
+- **pi-ssh-key 1.4.0**: publishes `ssh-key` while keys are loaded — count plus
+  the soonest remaining timeout when one was requested — tracking per-key expiry
+  and clearing on unload/shutdown.
+
 ### Grab links, tokens and IDs from the session (2.17.0)
 
 - New **pi-link-picker 1.0.0**: `/grab` extracts URLs, file paths, `KEY=value`

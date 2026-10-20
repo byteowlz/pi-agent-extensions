@@ -56,6 +56,8 @@ interface OqtoTodosConfig {
 	tuiWidgetCollapsed: boolean;
 	/** After context compaction, inject the current todo list into the LLM context so the model keeps using it. */
 	preserveInCompaction: boolean;
+	/** Maximum characters stored/displayed per todo (0 = unlimited). */
+	maxContentLength: number;
 }
 
 // ============================================================================
@@ -73,7 +75,12 @@ const DEFAULT_CONFIG: OqtoTodosConfig = {
 	tuiWidget: true,
 	tuiWidgetCollapsed: true,
 	preserveInCompaction: true,
+	maxContentLength: 160,
 };
+
+/** Keep model-written todos short; excessive items get clamped on write and render. */
+const MIN_MAX_CONTENT_LENGTH = 16;
+const MAX_MAX_CONTENT_LENGTH = 4000;
 
 const TODO_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
 const TODO_PRIORITIES = ["high", "medium", "low"] as const;
@@ -90,7 +97,7 @@ const TodoParams = Type.Object({
 		Type.Array(
 			Type.Object({
 				id: Type.Optional(Type.String({ description: "Unique identifier (auto-generated if not provided)" })),
-				content: Type.String({ description: "Task description" }),
+				content: Type.String({ description: "Task description (one short line; long text is truncated)" }),
 				status: Type.Optional(StringEnum(TODO_STATUSES, { description: "Task status (default: pending)" })),
 				priority: Type.Optional(StringEnum(TODO_PRIORITIES, { description: "Task priority (default: medium)" })),
 			}),
@@ -107,7 +114,7 @@ const TodoParams = Type.Object({
 	),
 
 	// add: new todo content
-	content: Type.Optional(Type.String({ description: "Task description (for add)" })),
+	content: Type.Optional(Type.String({ description: "Task description (for add; one short line — long text is truncated)" })),
 
 	// add/update
 	status: Type.Optional(StringEnum(TODO_STATUSES)),
@@ -133,6 +140,7 @@ function loadConfig(cwd: string): OqtoTodosConfig {
 					...DEFAULT_CONFIG,
 					...userConfig,
 					tuiWidgetCollapsed: typeof userConfig.tuiWidgetCollapsed === "boolean" ? userConfig.tuiWidgetCollapsed : true,
+					maxContentLength: normalizeMaxContentLength(userConfig.maxContentLength),
 				};
 			} catch {
 				// Invalid JSON, continue to next path
@@ -208,10 +216,30 @@ function generateTodoId(): string {
 	return crypto.randomBytes(4).toString("hex");
 }
 
-function normalizeTodo(todo: Partial<TodoItem> & { content: string }): TodoItem {
+/**
+ * Clamp a todo's content to the configured budget. Truncates on a code-point
+ * boundary and appends an ellipsis so the cut is visible. 0 disables the cap.
+ */
+export function clampTodoContent(content: string, maxLength = DEFAULT_CONFIG.maxContentLength): string {
+	if (!maxLength || maxLength <= 0) return content;
+	const chars = Array.from(content);
+	if (chars.length <= maxLength) return content;
+	return `${chars
+		.slice(0, Math.max(0, maxLength - 1))
+		.join("")
+		.trimEnd()}…`;
+}
+
+export function normalizeMaxContentLength(value: unknown): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_CONFIG.maxContentLength;
+	if (value <= 0) return 0;
+	return Math.min(MAX_MAX_CONTENT_LENGTH, Math.max(MIN_MAX_CONTENT_LENGTH, Math.floor(value)));
+}
+
+function normalizeTodo(todo: Partial<TodoItem> & { content: string }, maxLength = DEFAULT_CONFIG.maxContentLength): TodoItem {
 	return {
 		id: todo.id || generateTodoId(),
-		content: todo.content,
+		content: clampTodoContent(todo.content, maxLength),
 		status: todo.status || "pending",
 		priority: todo.priority || "medium",
 	};
@@ -351,7 +379,12 @@ function truncateToWidthBgSafe(text: string, maxWidth: number, ellipsis = "...")
 
 export { truncateToWidthBgSafe };
 
-export function renderTodoLine(todo: TodoItem, theme: Theme, maxWidth: number): string {
+export function renderTodoLine(
+	todo: TodoItem,
+	theme: Theme,
+	maxWidth: number,
+	maxContentLength = DEFAULT_CONFIG.maxContentLength
+): string {
 	const icon = getStatusIcon(todo.status);
 	const priorityLabel = getPriorityLabel(todo.priority);
 	// Reserve width for the status icon prefix and the priority suffix so the
@@ -361,7 +394,7 @@ export function renderTodoLine(todo: TodoItem, theme: Theme, maxWidth: number): 
 	const prefixWidth = visibleWidth(icon) + 1;
 	const suffixWidth = priorityLabel ? visibleWidth(priorityLabel) + 1 : 0;
 	const contentWidth = Math.max(8, maxWidth - prefixWidth - suffixWidth);
-	const contentPreview = truncateToWidthBgSafe(normalizeTodoText(todo.content), contentWidth);
+	const contentPreview = truncateToWidthBgSafe(normalizeTodoText(clampTodoContent(todo.content, maxContentLength)), contentWidth);
 	let line = theme.fg(getStatusColor(todo.status), `${icon} ${contentPreview}`);
 	if (priorityLabel) {
 		const priorityColor = todo.priority === "high" ? "error" : "dim";
@@ -382,55 +415,51 @@ function orderTodos(todos: TodoItem[]): TodoItem[] {
  * Render the todo list as plain text for embedding in the LLM context after compaction.
  * Ordered by status so the model sees the most actionable items first.
  */
-function formatTodosForSummary(todos: TodoItem[]): string {
+function formatTodosForSummary(todos: TodoItem[], maxContentLength = DEFAULT_CONFIG.maxContentLength): string {
 	if (todos.length === 0) return "(no todos)";
 
 	const lines = orderTodos(todos).map((t) => {
 		const marker =
 			t.status === "in_progress" ? "[->]" : t.status === "completed" ? "[x]" : t.status === "cancelled" ? "[-]" : "[ ]";
 		const priority = t.priority !== "medium" ? ` (${t.priority} priority)` : "";
-		return `- ${marker} ${t.content}${priority}`;
+		return `- ${marker} ${clampTodoContent(t.content, maxContentLength)}${priority}`;
 	});
 
 	return lines.join("\n");
 }
 
-export function renderTodoList(todos: TodoItem[], theme: Theme, expanded: boolean, maxWidth?: number): string {
+export function renderTodoList(
+	todos: TodoItem[],
+	theme: Theme,
+	expanded: boolean,
+	maxWidth?: number,
+	maxContentLength = DEFAULT_CONFIG.maxContentLength
+): string {
 	if (todos.length === 0) {
 		return theme.fg("muted", "No todos");
 	}
 
-	const lines: string[] = [];
 	const width = maxWidth ?? (expanded ? 120 : 80);
-
 	const allOrdered = orderTodos(todos);
+	// Done/cancelled todos are never listed line by line; they are summarized.
 	const active = allOrdered.filter((t) => t.status === "in_progress" || t.status === "pending");
 	const doneLine = buildDoneLine(todos, theme);
 
-	if (expanded) {
-		// Expanded: everything, including done/cancelled todos line by line.
-		lines.push(buildSummaryLine(todos, theme));
-		lines.push("");
-		for (const todo of allOrdered) {
-			lines.push(renderTodoLine(todo, theme, width));
-		}
-	} else {
-		// Default: active todos only; done todos collapse into one line.
-		const maxItems = 5;
-		if (active.length > 0) {
-			lines.push(buildSummaryLine(todos, theme, false));
-			lines.push("");
-			for (const todo of active.slice(0, maxItems)) {
-				lines.push(renderTodoLine(todo, theme, width));
-			}
-			if (active.length > maxItems) {
-				lines.push(theme.fg("dim", `  ... ${active.length - maxItems} more`));
-			}
-		}
-		const collapsed = doneLine ?? (todos.length > 0 ? buildSummaryLine(todos, theme) : undefined);
-		if (collapsed) lines.push(collapsed);
+	if (active.length === 0) {
+		// Everything is finished: the summary already carries the counts.
+		return buildSummaryLine(todos, theme);
 	}
 
+	const lines: string[] = [buildSummaryLine(todos, theme, expanded), ""];
+	// Expanded shows every open todo; the default caps the list.
+	const maxItems = expanded ? active.length : 5;
+	for (const todo of active.slice(0, maxItems)) {
+		lines.push(renderTodoLine(todo, theme, width, maxContentLength));
+	}
+	if (active.length > maxItems) {
+		lines.push(theme.fg("dim", `  ... ${active.length - maxItems} more`));
+	}
+	if (doneLine) lines.push(doneLine);
 	return lines.join("\n");
 }
 
@@ -451,18 +480,21 @@ export class TodoResultComponent implements Component {
 	private cachedWidth = -1;
 	private cachedLines: string[] = [];
 
-	constructor(prefix: string, todos: TodoItem[], theme: Theme, expanded: boolean) {
+	private readonly maxContentLength: number;
+
+	constructor(prefix: string, todos: TodoItem[], theme: Theme, expanded: boolean, maxContentLength: number) {
 		this.prefix = prefix;
 		this.todos = todos;
 		this.theme = theme;
 		this.expanded = expanded;
+		this.maxContentLength = maxContentLength;
 	}
 
 	render(width: number): string[] {
 		if (this.cachedWidth === width) {
 			return this.cachedLines;
 		}
-		const text = this.prefix + renderTodoList(this.todos, this.theme, this.expanded, width);
+		const text = this.prefix + renderTodoList(this.todos, this.theme, this.expanded, width, this.maxContentLength);
 		const lines = text.split("\n").map((line) => truncateToWidthBgSafe(line, Math.max(1, width)));
 		this.cachedWidth = width;
 		this.cachedLines = lines;
@@ -482,6 +514,7 @@ export class TodoResultComponent implements Component {
 export default function oqtoTodosExtension(pi: ExtensionAPI) {
 	// Store reference to current todos for rendering and the TUI widget
 	let _currentTodos: TodoItem[] = [];
+	let _maxContentLength = DEFAULT_CONFIG.maxContentLength;
 	const widgetMode = createWidgetMode();
 
 	// ==========================================================================
@@ -502,6 +535,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 
 		try {
 			const config = loadConfig(ctx.cwd);
+			_maxContentLength = config.maxContentLength;
 			if (!config.enabled || !config.tuiWidget || _currentTodos.length === 0) {
 				ctx.ui.setWidget(WIDGET_KEY, undefined);
 				return;
@@ -512,7 +546,13 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 					return {
 						render: (width: number) => {
 							try {
-								return renderWidget(_currentTodos, theme, width, widgetMode.collapsed(config.tuiWidgetCollapsed));
+								return renderWidget(
+									_currentTodos,
+									theme,
+									width,
+									widgetMode.collapsed(config.tuiWidgetCollapsed),
+									config.maxContentLength
+								);
 							} catch {
 								return [truncateToWidth("[todo render error]", Math.max(0, width))];
 							}
@@ -602,7 +642,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 			const store = loadTodos(ctx, config, sessionId);
 			if (store.todos.length === 0) return;
 
-			const todosText = formatTodosForSummary(store.todos);
+			const todosText = formatTodosForSummary(store.todos, config.maxContentLength);
 			const content = `## Active To-Do List\n${todosText}\n\nKeep using the Todo tool to track and update this list as you work.`;
 
 			// triggerTurn: false appends the message to the session and the LLM
@@ -647,6 +687,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 	) {
 		saveTodos(ctx, config, todos, sessionId);
 		_currentTodos = todos;
+		_maxContentLength = config.maxContentLength;
 		updateWidget(ctx);
 		return todoResult(todos, action, extra);
 	}
@@ -658,7 +699,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 	) {
 		const snapshot = todoSnapshot(todos);
 		const boundedExtra = Object.fromEntries(
-			Object.entries(extra).map(([key, todo]) => [key, { ...todo, content: todo.content.slice(0, 4000) }])
+			Object.entries(extra).map(([key, todo]) => [key, { ...todo, content: clampTodoContent(todo.content, _maxContentLength) }])
 		);
 		return {
 			content: [{ type: "text" as const, text: JSON.stringify(snapshot, null, 2) }],
@@ -673,7 +714,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 		sessionId: string | undefined,
 		ctx: ExtensionContext
 	) {
-		const next = (params || []).map((t) => normalizeTodo(t));
+		const next = (params || []).map((t) => normalizeTodo(t, config.maxContentLength));
 		return todoSaveAndReturn(next, "write", {}, config, sessionId, ctx);
 	}
 
@@ -685,7 +726,10 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 		ctx: ExtensionContext
 	) {
 		if (!params.content) return todoError("add", "content required");
-		const newTodo = normalizeTodo({ content: params.content, status: params.status, priority: params.priority });
+		const newTodo = normalizeTodo(
+			{ content: params.content, status: params.status, priority: params.priority },
+			config.maxContentLength
+		);
 		return todoSaveAndReturn([...todos, newTodo], "add", { added: newTodo }, config, sessionId, ctx);
 	}
 
@@ -701,7 +745,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 		if (index === -1) return todoError("update", `todo ${params.id} not found`);
 		const updated: TodoItem = {
 			...todos[index],
-			...(params.content !== undefined && { content: params.content }),
+			...(params.content !== undefined && { content: clampTodoContent(params.content, config.maxContentLength) }),
 			...(params.status !== undefined && { status: params.status }),
 			...(params.priority !== undefined && { priority: params.priority }),
 		};
@@ -748,7 +792,9 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 			"add (new todo), update (modify an existing todo by id), remove (delete by id), " +
 			"clear (empty the list). Todos are displayed in the Oqto frontend panel.\n\n" +
 			"IMPORTANT: Always update todo status as you work. Set tasks to 'in_progress' when starting " +
-			"and 'completed' when done. The user relies on this panel to see your progress.",
+			"and 'completed' when done. The user relies on this panel to see your progress.\n\n" +
+			"Keep each todo to one short, actionable line (roughly under 140 characters). " +
+			"Do not paste long descriptions, file contents or multi-sentence notes; overlong content is truncated.",
 		parameters: TodoParams,
 		outputSchema: todoOutputSchema,
 		executionMode: "sequential",
@@ -837,7 +883,7 @@ export default function oqtoTodosExtension(pi: ExtensionAPI) {
 					prefix = `${theme.fg("success", `OK Wrote ${todos.length} todos`)}\n\n`;
 				}
 
-				return new TodoResultComponent(prefix, todos, theme, expanded);
+				return new TodoResultComponent(prefix, todos, theme, expanded, _maxContentLength);
 			} catch {
 				return new Text("(render error)", 0, 0);
 			}
