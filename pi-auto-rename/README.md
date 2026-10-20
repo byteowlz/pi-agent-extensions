@@ -39,9 +39,11 @@ Then reload pi or restart it.
 
 `syncTabTitle: true` (default) projects Pi's title to the calling Herdr tab or
 tmux window on session start/resume/fork and session-name changes, including
-manual renames. Pi retains `[sub] Review Selection [mini-okay-soda]` while the
-tab displays `Review Selection`. Only the known session-derived or configured
-readable-ID suffix is removed; other bracketed title text is preserved.
+manual renames. Pi retains `[sub] Review Selection [mini-okay-soda]` and the tab
+shows `[sub] Review Selection`: the `[sub]` role marker stays visible so
+subagent tabs are identifiable at a glance, while the known session-derived or
+configured readable-ID suffix is removed. `[side]` is presentation-only and is
+still stripped. Other bracketed title text is preserved.
 
 - Herdr resolves the live tab from the calling pane and verifies its registered
   session file. It never uses the UI-focused tab or a cached tab ID.
