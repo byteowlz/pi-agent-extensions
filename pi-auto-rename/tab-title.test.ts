@@ -29,8 +29,8 @@ function fixture(options: { count?: number; file?: string; move?: boolean } = {}
 	return { calls, sync: new TabTitleSync(run) };
 }
 
-test("title strips only known ID and role, preserving original name and meaningful brackets", () => {
-	expect(tabTitle(herdr.name, herdr.readableId)).toBe("Review Selection");
+test("title strips only the known ID and [side], keeping [sub] and meaningful brackets", () => {
+	expect(tabTitle(herdr.name, herdr.readableId)).toBe("[sub] Review Selection");
 	expect(herdr.name).toBe("[sub] Review Selection [mini-okay-soda]");
 	expect(tabTitle("[side] Review [draft] [not-a-known-id]", "mini-okay-soda")).toBe("Review [draft] [not-a-known-id]");
 	expect(tabTitle("[side] Review [mini-okay-soda]", "mini-okay-soda")).toBe("Review");
@@ -39,7 +39,7 @@ test("title strips only known ID and role, preserving original name and meaningf
 test("Herdr uses live caller-owned tab, never env/focused tab", async () => {
 	const f = fixture();
 	await f.sync.update(herdr);
-	expect(f.calls.at(-1)).toEqual(["herdr", "tab", "rename", "live-owner-tab", "Review Selection"]);
+	expect(f.calls.at(-1)).toEqual(["herdr", "tab", "rename", "live-owner-tab", "[sub] Review Selection"]);
 	expect(f.calls.every((c) => !c.includes("stale-tab"))).toBe(true);
 });
 
@@ -68,7 +68,7 @@ test("tmux explicitly renames calling pane's window, not active window", async (
 		return "%7|@4|1\n";
 	});
 	await sync.update({ ...herdr, env: { TMUX: "/server", TMUX_PANE: "%7" } });
-	expect(calls.at(-1)).toEqual(["tmux", "rename-window", "-t", "@4", "Review Selection"]);
+	expect(calls.at(-1)).toEqual(["tmux", "rename-window", "-t", "@4", "[sub] Review Selection"]);
 });
 
 test("tmux shared windows and missing host claims remain untouched", async () => {

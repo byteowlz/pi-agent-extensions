@@ -4,6 +4,13 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Subagent tabs keep their [sub] marker (2.18.1)
+
+- **pi-auto-rename 1.4.1**: host tab titles keep the `[sub]` role marker, so
+  subagent tabs are identifiable at a glance. Only `[side]` remains stripped for
+  presentation; the canonical Pi name is unchanged and inbound sync still
+  round-trips without duplication.
+
 ### Open-only todos, Nerd Font status glyphs (2.18.0)
 
 - **pi-todolist 1.6.0/1.7.0**: list only open todos. Completed and cancelled

@@ -14,7 +14,9 @@ export function tabTitle(name: string, readableId?: string): string {
 	if (readableId && title.endsWith(` [${readableId}]`)) title = title.slice(0, -readableId.length - 3);
 	return Array.from(
 		title
-			.replace(/^(?:\[(?:sub|side)\]\s*)+/i, "")
+			// Keep the `[sub]` role marker so subagent tabs stay identifiable;
+			// `[side]` remains presentation-only and is dropped.
+			.replace(/^(?:\[side\]\s*)+/i, "")
 			.replace(/\p{Cc}/gu, " ")
 			.trim()
 	)

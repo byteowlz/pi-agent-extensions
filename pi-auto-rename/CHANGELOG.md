@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.1
+
+- Keep the `[sub]` role marker in host tab titles so subagent tabs stay
+  identifiable; only `[side]` is stripped for presentation. The canonical Pi
+  name is unchanged, and inbound sync still round-trips without duplication.
+
 ## 1.4.0
 
 - Add opt-in **inbound** tab-title sync (`syncTabTitleInbound`, default false):
