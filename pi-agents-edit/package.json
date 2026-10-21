@@ -1,0 +1,7 @@
+{
+  "name": "pi-agents-edit",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Edit loaded AGENTS.md files in your local editor",
+  "pi": { "extensions": ["./index.ts"] }
+}
