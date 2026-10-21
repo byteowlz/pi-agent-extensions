@@ -1,0 +1,13 @@
+{
+  "name": "@byteowlz/pi-eavs",
+  "version": "0.1.0",
+  "description": "Native Pi login and scoped chat model discovery for EAVS",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=22.19.0" },
+  "keywords": ["pi-package", "pi-extension", "eavs"],
+  "files": ["index.ts", "provider.ts", "catalog.ts", "transport.ts", "refresh-loop.ts", "README.md", "CHANGELOG.md"],
+  "pi": { "extensions": ["./index.ts"] },
+  "peerDependencies": { "@earendil-works/pi-ai": "*", "@earendil-works/pi-coding-agent": "*" },
+  "repository": { "type": "git", "url": "git+https://github.com/byteowlz/pi-agent-extensions.git", "directory": "pi-eavs" }
+}
