@@ -13,6 +13,7 @@ interface Harness {
 function harness(): Harness {
 	const handlers = new Map<string, (args: string, ctx: ExtensionCommandContext) => Promise<void>>();
 	extension({
+		registerTool: () => {},
 		registerCommand: (name: string, options: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }) => {
 			handlers.set(name, options.handler);
 		},

@@ -26,7 +26,7 @@ if(process.argv.includes('-y'))console.log('ssh-ed25519 AAAA synthetic');else co
 import fs from 'node:fs';import net from 'node:net';import path from 'node:path';
 import extension from ${JSON.stringify(resolve("pi-ssh-key/index.ts"))};
 const commands=new Map(),hooks=new Map(),notes=[];
-const pi={on:(name,handler)=>hooks.set(name,handler),registerCommand:(name,command)=>commands.set(name,command.handler)};
+const pi={on:(name,handler)=>hooks.set(name,handler),registerTool: () => {}, registerCommand:(name,command)=>commands.set(name,command.handler)};
 const ctx={mode:'rpc',hasUI:true,ui:{notify:(text,kind)=>notes.push({text,kind}),custom:()=>{throw new Error('No passphrase UI expected')}}};
 const home=process.env.HOME;const key=path.join(home,'synthetic.key');fs.writeFileSync(key,'-----BEGIN OPENSSH PRIVATE KEY-----\\nsynthetic\\n');
 const open=async (name,delay=0)=>{const sock=path.join(home,name);const server=net.createServer(client=>{client.on('error',()=>{});client.once('data',()=>setTimeout(()=>client.end(Buffer.from([0,0,0,5,12,0,0,0,0])),delay))});await new Promise(resolve=>server.listen(sock,resolve));return{sock,server}};

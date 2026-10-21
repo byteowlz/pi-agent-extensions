@@ -2,12 +2,12 @@
 
 ## 2.19.1
 
-- Improve the ask panel's contrast and hierarchy. The yellow tint drops from 22%
-  to 8% (muted text 2.80:1 -> 3.84:1, accent 2.24:1 -> 3.07:1, body text
-  5.25:1 -> 7.20:1), body/description/decision use full `text` contrast, the
-  question and spec titles are bold text instead of accent, and `muted` is
-  reserved for chrome (tab strip, hints). The tab strip uses short header labels
-  with separators and a blank line, and the panel gets bottom padding.
+- Restyle the ask panel after OpenCode's question prompt: a neutral panel with
+  accent `┃` side bars instead of the muddy 22% yellow wash (body 5.25:1 ->
+  7.20:1), numbered options with the active row on `selectedBg`, picked options
+  in `success` plus `✓`, a compact tab strip with short headers, a
+  "(select all that apply)" hint for multi, and bottom padding. `muted` is
+  reserved for chrome so body/description/decision keep full `text` contrast.
 
 ## 2.19.0
 

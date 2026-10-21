@@ -1,3 +1,15 @@
+## Unreleased
+
+- Add isolated real-agent command lifecycle coverage for load/unload/reload:
+  unload-all and individual paths, inherited and owned agents, plain and
+  encrypted generated keys. Reported reload failure remains unreproduced.
+
+- Add `request_ssh_access` with explicit human approval, separate bounded approval
+  timeout and SSH key TTL, cancellation guards, redacted errors and Herdr cleanup.
+- Reuse local picker/masked passphrase and ssh-agent loading; refuse proxy tool
+  grants until the backend guarantees TTL and cancellation.
+- Add deadline regression tests and update registration test fixtures.
+
 # Changelog
 
 ## 1.4.0

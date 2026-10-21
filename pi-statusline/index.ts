@@ -387,7 +387,7 @@ function buildStats(
 }
 
 /** Right-align a right field against a left field on a fixed width; falls back gracefully. */
-function alignLeftRight(left: string, right: string, width: number): string {
+export function alignLeftRight(left: string, right: string, width: number): string {
 	const leftWidth = visibleWidth(left);
 	const rightWidth = visibleWidth(right);
 	const minPad = 2;
@@ -457,6 +457,30 @@ export function buildStatusSegments(
 	return segments;
 }
 
+/** Route inline indicators beside context, preserving manifest order and rendering. */
+export function buildStatusGroups(
+	ordered: StatuslineItem[],
+	statuses: ReadonlyMap<string, string>,
+	showInactive: boolean,
+	theme: { fg(color: string, text: string): string }
+): { inline: string[]; separate: string[] } {
+	const accessKeys = new Set(["ssh-key", "sudo", "sudo-warn", "sudo-crit", "kompressor-rolling", "xlatch"]);
+	return {
+		inline: buildStatusSegments(
+			ordered.filter((item) => accessKeys.has(item.statusKey)),
+			statuses,
+			showInactive,
+			theme
+		),
+		separate: buildStatusSegments(
+			ordered.filter((item) => !accessKeys.has(item.statusKey)),
+			statuses,
+			showInactive,
+			theme
+		),
+	};
+}
+
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return; // RPC has dialogs, but no native footer
@@ -478,6 +502,8 @@ export default function (pi: ExtensionAPI) {
 						const home = process.env.HOME || process.env.USERPROFILE;
 						const usage = computeUsage(sm);
 						const stats = buildStats(ctx, usage, footerData.getAvailableProviderCount(), theme);
+						const groups = buildStatusGroups(ordered, footerData.getExtensionStatuses(), showInactive, theme);
+						stats.left = [stats.left, ...groups.inline].join(" ");
 
 						// --- pwd line (cwd + branch + session name) ---
 						let pwd = sm.getCwd();
@@ -489,7 +515,7 @@ export default function (pi: ExtensionAPI) {
 
 						const projectIcon = showProjectIcon && imageEnabled(manifest.icon) ? projectIconEscape(sm.getCwd()) : "";
 						const lines = buildHeaderLines(pwd, stats, manifest.icon, projectIcon, rows, width, theme);
-						const segments = buildStatusSegments(ordered, footerData.getExtensionStatuses(), showInactive, theme);
+						const segments = groups.separate;
 						if (segments.length > 0) {
 							lines.push(truncateToWidth(segments.join(theme.fg("dim", " • ")), width, theme.fg("dim", "...")));
 						}
