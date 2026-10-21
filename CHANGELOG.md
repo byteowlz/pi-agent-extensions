@@ -4,6 +4,11 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Loaded instructions editor (2.22.0)
+
+- **pi-agents-edit 1.0.0**: `/agents-edit` lists loaded AGENTS.md paths and opens
+  the selected original in VISUAL/EDITOR, restoring the terminal afterwards.
+
 ### Subagent tabs keep their [sub] marker (2.18.1)
 
 - **pi-auto-rename 1.4.1**: host tab titles keep the `[sub]` role marker, so
