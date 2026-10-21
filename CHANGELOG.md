@@ -4,6 +4,15 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### EAVS scoped login and automatic policy refresh (2.20.0)
+
+- **pi-eavs 0.1.0**: self-contained native API-key `/login`, persisted server
+  metadata, scoped chat discovery/cache and native API dispatch. Explicitly
+  documents unencrypted Pi auth storage and one saved connection.
+- Session-scoped bounded metadata polling with backoff, cancellation, logout/
+  shutdown cleanup and `PI_OFFLINE`; no provider probes or inference.
+- Offline SDK lifecycle/dispatch tests and local HTTPS security fixtures.
+
 ### Loaded instructions editor (2.22.0)
 
 - **pi-agents-edit 1.0.0**: `/agents-edit` lists loaded AGENTS.md paths and opens

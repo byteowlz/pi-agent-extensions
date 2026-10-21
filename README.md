@@ -20,6 +20,7 @@ extensions and [migration evidence](./docs/pi-1-baseline.md) for proof limits.
 | [pi-conversation-edit](./pi-conversation-edit/) | Human-reviewed manual/external-editor/AI whole-message rewrites on independent session branches |
 | [pi-prompt-stash](./pi-prompt-stash/) | Scoped draft park/stash/pop, user-history multiselect and reusable editor-fill commands |
 | [pi-durable-workflow](./pi-durable-workflow/) | Experimental versioned intent/Y-N-Edit review; isolated native qualification, production recurrence unbound |
+| [pi-eavs](./pi-eavs/) | Native EAVS scoped-key login, chat discovery and automatic policy refresh |
 | [pi-env-ctx](./pi-env-ctx/) | Pi-native child-process metadata |
 | [pi-oqto-bridge](./pi-oqto-bridge/) | Oqto runtime integration |
 | [pi-todolist](./pi-todolist/) | Collapsible todo widget, formerly pi-oqto-todos |

@@ -1,0 +1,110 @@
+# pi-eavs
+
+Self-contained native provider for the installed Pi 1.0.0 SDK. Try without installing:
+
+```sh
+pi -e ./pi-eavs/index.ts
+```
+
+Run `/login`, choose **EAVS**, enter an HTTPS server origin (or its `/v1` API base),
+then an **EAVS scoped virtual key**. A secret prompt is used. Login performs only
+`GET /v1/eavs/catalog`, validates the key-filtered chat catalog, and saves the
+connection through Pi. No provider probe, inference, OAuth exchange, browser,
+credential command, upstream account identity or JWT parsing is involved.
+
+**Pi's `auth.json` is not encrypted.** The stored credential is an ordinary
+`api_key` with `key` and `env.EAVS_SERVER`. Protect the agent directory and load
+only trusted extensions. Never enter an operator/master key. The extension
+accepts the `eavs-…` virtual-key format, but only the server can enforce key
+scope. It never requests or manages operator credentials.
+
+## Models and lifecycle
+
+- One stable Pi provider ID: `eavs`. One saved server/key at a time. Logging into
+  another server replaces this connection; simultaneous multi-server profiles
+  are deliberately not implemented. Model IDs are `<gateway-provider>/<model>`
+  to avoid collisions, while native requests use the original upstream model ID.
+- Native Chat Completions, Responses and Anthropic Messages are dispatched
+  through Pi's installed API implementations. Gateway Codex uses ordinary
+  Responses, not client-side subscription OAuth. Explicit catalog provider
+  paths are checked and preserved, never replaced with a generic `/v1` path.
+  Anthropic's dispatch base omits only the validated route's terminal `/v1`,
+  because its installed SDK appends `/v1/messages` itself; an offline native SDK
+  test proves the resulting request path.
+- Server input is restricted to an HTTPS origin or `/v1` base, with no URL
+  credentials/query/fragment. Arbitrary mount prefixes, provider URL inputs,
+  plaintext HTTP (including loopback), and separate listener credentials are
+  not supported. Origin and `/v1` inputs produce exactly one catalog `/v1`.
+- Online CLI startup is primed with a bounded metadata read before provider
+  registration, using Pi's public `readStoredCredential()` (no command execution).
+  Pi also restores a validated model snapshot during cache-only initialization
+  and refreshes at session startup. The snapshot in Pi's model store has a one-way
+  server/key binding in the provider-owned validator field (`etag`); it contains
+  metadata, not keys. That validator is local and is never sent to the server.
+  Snapshots are hints, not proof of current authorization.
+- After `session_start`, authenticated metadata polling runs every **60 seconds**,
+  without overlapping polls, backing off exponentially to **15 minutes** on
+  failure. `/eavs-refresh` joins the poll if one is running. Login can reactivate
+  polling; logout, shutdown and reload abort/clean up session polling.
+- A valid empty scope or 401/403 removes models. Invalid catalogs fail closed.
+  Transient network/server failures retain last-known matching-scope models
+  and back off; the gateway still authorizes every actual request. Policy
+  changes are therefore eventually visible, not instantaneous.
+- `PI_OFFLINE` being set disables login validation and all metadata network
+  refresh, including manual refresh. Cached models may still be listed. It is
+  not an inference firewall.
+- Models are never automatically selected or replaced. Refresh removes revoked
+  models from the registry, but Pi can retain an already-selected model object;
+  dispatch rechecks current model membership, connection, API and route before
+  use. A stale selected object whose route changed must be selected again.
+- Only chat candidates with complete declared limits, modalities, reasoning and
+  positive input/output price estimates are exposed. Incomplete models are
+  skipped; an entirely incomplete catalog is rejected. Prices are
+  **unverified estimates**, not settlement. No media/classifier discovery.
+
+TLS certificate verification is explicit (even with ambient TLS disabling),
+redirects are refused, proxy environment variables are not used, and credentials
+are restricted to the selected origin. Metadata has a six-second total deadline,
+4 MiB body limit, 16 KiB header limit, cancellation and private errors. Native
+inference also uses the redirect-refusing TLS transport, with caller cancellation
+rather than a short timeout that would interrupt reasoning models. Node is
+required: Bun transport is refused rather than relying on its proxy/TLS shim.
+
+No external services, secret sync, direct-upstream fallback, global installation,
+models.json editing or EAVS source dependencies are included. Projection rules
+are adapted from EAVS `adapters/pi/provider-library.ts`; the package carries its
+own implementation and only uses host-provided Pi peers. There is no runtime
+configuration file/schema: configuration is the native login credential.
+
+## Verification (repository root)
+
+```sh
+node --import jiti/register --test pi-eavs/*.test.ts
+npm run typecheck
+node_modules/.bin/tsc --noEmit --strict --skipLibCheck --target ES2022 --module NodeNext --moduleResolution NodeNext --esModuleInterop pi-eavs/*.ts
+node_modules/.bin/biome check pi-eavs
+npm pack ./pi-eavs --dry-run
+```
+
+Tests use synthetic keys, mock native APIs, private temporary SDK credential/model
+stores and local HTTPS fixtures. OpenSSL is needed only for fixture certificates;
+no CA is installed globally. No inference network request is made, even to fixtures.
+
+The installed SDK provides native `ApiKeyAuth.login`, secret/text prompts,
+provider-scoped credential `env`, `refreshModels`, and generation-checked
+publication. No OAuth compatibility shim is necessary. It has no dedicated
+logout event for extensions; session polling observes the provider auth
+checks/resolution used by Pi's login/logout synchronization. External edits from
+another Pi process become visible on the next refresh, not as an immediate
+notification. Native provider registration starts an unawaited cache refresh in
+this SDK: offline/cached-only initial model selection or `--list-models` can race
+that restoration, although the cache becomes available subsequently. The online
+CLI path is explicitly primed and tested with an isolated HTTPS fixture. Embedded
+SDK applications with a custom credential store must initialize/refresh that
+runtime themselves; the factory reader uses Pi's default agent-directory auth
+path. No supported EAVS catalog change-event endpoint was established.
+
+The repo typecheck uses its existing `skipLibCheck` setting. Checking **all**
+installed dependency declarations without it currently fails in upstream Pi
+JSON-import declarations and a missing optional Google MCP peer; no SDK stubs,
+ambient shims or dependency modifications are used to conceal this limitation.
