@@ -189,3 +189,25 @@ unloaded, the keys expire, or the session shuts down.
 
 Keys loaded into a *reused* user agent are counted too, but only keys this
 extension added have a tracked expiry.
+
+## Agent-requested access
+
+`request_ssh_access` requires a non-empty `reason`. `key_path` is optional:
+the human picker supplies a key (only its first selection is used). Every request
+requires explicit confirmation, including unencrypted and previously loaded keys.
+Passphrases stay in the existing masked local UI and never appear in tool results.
+
+- `approval_timeout_seconds`: default 120, range 1–300; includes selection,
+  confirmation and passphrase entry. Late dialog answers cannot authorize loading.
+- `access_ttl_seconds`: default 900, range 1–3600; passed to `ssh-add -t`.
+  This is key lifetime, not approval wait time. Existing command defaults are unchanged.
+- Herdr receives blocked while waiting and release in finally. No UI means refusal.
+- Oqto proxy requests fail closed: the existing request/status protocol has no
+  enforceable access TTL or cancellation acknowledgement. The tool never falls
+  back to local loading in a proxy session. Human `/ssh-key-load` remains unchanged.
+
+Limitations: timed-out custom dialogs may remain visible until dismissed, but
+cannot load a key. Cancellation during ssh-add triggers best-effort removal;
+OS-level add/removal is not atomic. Reloading a key changes its lifetime in a
+shared agent; cancellation cleanup may remove that identity. Access TTL does not
+terminate established SSH connections. Human commands can still change key lifetime.

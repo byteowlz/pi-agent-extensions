@@ -25,7 +25,7 @@ console.log(process.argv.includes('-y')?'ssh-ed25519 AAAA synthetic':'256 SHA256
 		join(home, "fixture.ts"),
 		`import assert from 'node:assert/strict';import fs from 'node:fs';import path from 'node:path';
 import extension from ${JSON.stringify(resolve("pi-ssh-key/index.ts"))};
-const hooks=new Map(),commands=new Map(),notes=[];extension({on:(n,h)=>hooks.set(n,h),registerCommand:(n,c)=>commands.set(n,c.handler)});
+const hooks=new Map(),commands=new Map(),notes=[];extension({on:(n,h)=>hooks.set(n,h),registerTool: () => {}, registerCommand:(n,c)=>commands.set(n,c.handler)});
 const ctx={mode:'rpc',hasUI:true,ui:{notify:(text,kind)=>notes.push({text,kind}),custom:()=>{throw new Error('No passphrase expected')}}};
 const key=path.join(process.env.HOME,'fixture.key');fs.writeFileSync(key,'-----BEGIN OPENSSH PRIVATE KEY-----\\nsynthetic\\n');
 delete process.env.SSH_AUTH_SOCK;delete process.env.SSH_AGENT_PID;

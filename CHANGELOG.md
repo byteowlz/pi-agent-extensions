@@ -4,6 +4,13 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Selection ask contrast pass (2.22.1)
+
+- **pi-selection 2.19.1**: restyle the ask panel after OpenCode's question
+  prompt — neutral panel with accent `┃` side bars (body contrast 5.25:1 ->
+  7.20:1), numbered options, active row on `selectedBg`, picked options in
+  `success` with `✓`, compact header tabs, multi hint and bottom padding.
+
 ### Session surgeon: sandboxed agentic history rewrite (2.22.0)
 
 - New **pi-session-surgeon 0.1.0**: `/surgeon` stages a 0600 copy of the current
@@ -17,6 +24,11 @@ All notable changes to pi-agent-extensions will be documented in this file.
 - Fails closed without `oqto-sandbox`; no Docker path (ADR 0070 does not cover
   Docker placement). Non-Linux backends verify by `--dry-run` and state the
   effective-report gap.
+
+### Loaded instructions editor (2.22.0)
+
+- **pi-agents-edit 1.0.0**: `/agents-edit` lists loaded AGENTS.md paths and opens
+  the selected original in VISUAL/EDITOR, restoring the terminal afterwards.
 
 ### Hidden edit-agent continuation prompt (2.21.0)
 

@@ -1,15 +1,5 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import {
-	CURSOR_MARKER,
-	type Color,
-	Editor,
-	Input,
-	Key,
-	matchesKey,
-	mixColors,
-	truncateToWidth,
-	visibleWidth,
-} from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, type Color, Editor, Input, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Answer, Answers, NormalizedSpec, SelectionRecord, TuiOutcome } from "./model.js";
 import { validateAnswers } from "./validation.js";
 
@@ -282,26 +272,44 @@ function summary(state: SelectionTuiState, id: string): string {
 		.filter(Boolean)
 		.join(", ");
 }
-export type SelectionPaintRole = "plain" | "plainMuted" | "panel" | "panelMuted" | "panelAccent";
+export type SelectionPaintRole =
+	| "plain"
+	| "plainMuted"
+	| "panel"
+	| "panelMuted"
+	| "panelAccent"
+	| "panelStrong"
+	| "panelActive"
+	| "panelPicked";
 export type SelectionPaint = (text: string, role: SelectionPaintRole) => string;
 const plainPaint: SelectionPaint = (text) => text;
 
 /**
- * Build a painter that draws the question block on a subtle yellow-tinted panel.
- * Falls back to plain text when the host theme cannot style, so a partial theme
- * never crashes the interaction.
+ * Build a painter for the question block.
+ *
+ * The panel keeps only a faint warm tint: a stronger yellow mix turned into a
+ * muddy olive that destroyed contrast for muted text and accent. Body text stays
+ * at full `text` contrast; `muted` is reserved for chrome (tab strip, hints).
  */
 export function selectionPaint(theme: Theme | undefined, width: number): SelectionPaint {
 	const colors = theme?.colors as Record<string, Color> | undefined;
-	if (!theme || !colors?.toolPendingBg || !colors.warning || typeof theme.style !== "function") return plainPaint;
-	const panelBg = mixColors(colors.toolPendingBg, colors.warning, 0.22);
+	if (!theme || !colors?.toolPendingBg || typeof theme.style !== "function") return plainPaint;
+	const panelBg = colors.toolPendingBg;
+	const bar = (text: string) => theme.fg("accent", text);
+	// Leave room for the accent bars on both sides; narrow terminals degrade to plain.
+	const bodyWidth = Math.max(0, width - 2);
 	return (text, role) => {
 		if (role === "plain") return text;
 		if (role === "plainMuted") return theme.fg("muted", text);
-		const padded = `${text}${" ".repeat(Math.max(0, width - visibleWidth(text)))}`;
-		if (role === "panelMuted") return theme.style(padded, { bg: panelBg, fg: "muted" });
-		if (role === "panelAccent") return theme.style(padded, { bg: panelBg, fg: "accent", bold: true });
-		return theme.style(padded, { bg: panelBg, fg: "text" });
+		const padded = `${text}${" ".repeat(Math.max(0, bodyWidth - visibleWidth(text)))}`;
+		if (bodyWidth < 8) return padded;
+		if (role === "panelActive")
+			return `${bar("┃")}${theme.style(padded, { bg: colors.selectedBg ?? panelBg, fg: "text", bold: true })}${bar("┃")}`;
+		if (role === "panelPicked") return `${bar("┃")}${theme.style(padded, { bg: panelBg, fg: "success" })}${bar("┃")}`;
+		if (role === "panelMuted") return `${bar("┃")}${theme.style(padded, { bg: panelBg, fg: "muted" })}${bar("┃")}`;
+		if (role === "panelAccent") return `${bar("┃")}${theme.style(padded, { bg: panelBg, fg: "accent", bold: true })}${bar("┃")}`;
+		if (role === "panelStrong") return `${bar("┃")}${theme.style(padded, { bg: panelBg, fg: "text", bold: true })}${bar("┃")}`;
+		return `${bar("┃")}${theme.style(padded, { bg: panelBg, fg: "text" })}${bar("┃")}`;
 	};
 }
 
@@ -321,7 +329,7 @@ export function renderSelectionTui(
 	const h = Math.max(1, Math.floor(height));
 	const fit = (text: string, size = w) => truncateToWidth(safeSelectionText(text), size, "").replaceAll("\u001b[0m", "");
 	const lines: RenderLine[] = [
-		{ text: state.spec.title, role: "panelAccent" },
+		{ text: ` ${state.spec.title}`, role: "panelStrong" },
 		{ text: "", role: "panel" },
 	];
 	const q = state.spec.questions[state.index];
@@ -346,6 +354,8 @@ export function renderSelectionTui(
 	} else if (q) {
 		lines.push(...renderQuestion(state, w, h, fit));
 	}
+	// Bottom padding keeps the panel band from ending flush against the hint line.
+	lines.push({ text: "", role: "panel" });
 	const body = lines.slice(0, Math.max(0, h - 2));
 	body.push({ text: selectionFocusLabel(state), role: "plainMuted" });
 	body.push({ text: footer, role: "plainMuted" });
@@ -368,22 +378,26 @@ function renderQuestion(
 	const q = state.spec.questions[state.index];
 	if (state.spec.mode === "questions") {
 		// Windowed tabs, never one tab per review inventory item.
+		const label = (question: (typeof state.spec.questions)[number]): string => {
+			const raw = (question.header ?? question.title).replace(/\s+/g, " ").trim();
+			return raw.length > 18 ? `${raw.slice(0, 17)}…` : raw;
+		};
 		const tabs = state.spec.questions
 			.slice(Math.max(0, state.index - 1), state.index + 2)
-			.map(
-				(question) => `${question.id === q.id ? "[" : " "}${question.header ?? question.title}${question.id === q.id ? "]" : " "}`
-			);
-		lines.push({ text: `${state.index + 1}/${state.spec.questions.length} ${tabs.join(" | ")} | Review`, role: "panelMuted" });
+			.map((question) => (question.id === q.id ? `[${label(question)}]` : ` ${label(question)} `));
+		lines.push({ text: ` ${state.index + 1}/${state.spec.questions.length} · ${tabs.join(" · ")} · Review`, role: "panelMuted" });
+		lines.push({ text: "", role: "panel" });
 	} else {
 		lines.push({
-			text: `Inventory / Detail | Group: ${state.spec.groups.find((g) => g.id === state.group)?.title ?? "All"} | Search: ${state.search} | / search, ←→ group, b list, r review`,
+			text: ` Inventory / Detail | Group: ${state.spec.groups.find((g) => g.id === state.group)?.title ?? "All"} | Search: ${state.search} | / search, ←→ group, b list, r review`,
 			role: "panelMuted",
 		});
 	}
 	const answer = state.answers[q.id] ?? blank();
-	lines.push({ text: q.title + (q.required ? "  * required" : ""), role: "panelAccent" });
-	if (q.description) lines.push({ text: q.description, role: "panelMuted" });
-	lines.push({ text: `Decision: ${summary(state, q.id)}`, role: "panelMuted" });
+	const multiHint = q.kind === "multiple" ? "  (select all that apply)" : "";
+	lines.push({ text: ` ${q.title}${q.required ? "  * required" : ""}${multiHint}`, role: "panel" });
+	if (q.description) lines.push({ text: ` ${q.description}`, role: "panel" });
+	lines.push({ text: ` Decision: ${summary(state, q.id)}`, role: "panel" });
 	lines.push({ text: "", role: "panel" });
 	const rows = choiceRows(state, q, answer);
 	const slots = Math.max(1, h - 10);
@@ -396,23 +410,17 @@ function renderQuestion(
 
 function choiceRows(state: SelectionTuiState, q: NormalizedSpec["questions"][number], answer: Answer): RenderLine[] {
 	const rows: RenderLine[] = [];
+	const row = (index: number, label: string, picked: boolean): RenderLine => ({
+		text: ` ${index === state.option ? "▸" : " "} ${index + 1}. ${label}`,
+		role: index === state.option ? "panelActive" : picked ? "panelPicked" : "panel",
+	});
 	for (const [index, choice] of (q.options ?? []).entries()) {
-		const chosen = answer.selectedIds.includes(choice.id);
-		rows.push({
-			text: `${index === state.option ? ">" : " "} [${chosen ? "x" : " "}] ${choice.label}${choice.recommended ? "  ★ recommended" : ""}`,
-			role: chosen || index === state.option ? "panelAccent" : "panel",
-		});
+		const picked = answer.selectedIds.includes(choice.id);
+		rows.push(row(index, `${choice.label}${choice.recommended ? "  ★ recommended" : ""}${picked ? "  ✓" : ""}`, picked));
 	}
 	if (q.kind === "text") return rows;
-	const own = !!answer.text?.trim();
-	rows.push({
-		text: `${ownRowIndex(q) === state.option ? ">" : " "} [${own ? "x" : " "}] ✎ Enter your own answer…`,
-		role: own || ownRowIndex(q) === state.option ? "panelAccent" : "panel",
-	});
-	rows.push({
-		text: `${noneRowIndex(q) === state.option ? ">" : " "} [${answer.none ? "x" : " "}] — None of the above`,
-		role: answer.none || noneRowIndex(q) === state.option ? "panelAccent" : "panel",
-	});
+	rows.push(row(ownRowIndex(q), "✎ Enter your own answer…", !!answer.text?.trim()));
+	rows.push(row(noneRowIndex(q), "— None of the above", !!answer.none));
 	return rows;
 }
 
@@ -423,11 +431,11 @@ function renderSupplement(state: SelectionTuiState): RenderLine[] {
 	const description = q.options?.[state.option]?.description;
 	if (description) {
 		lines.push({ text: "", role: "panel" });
-		lines.push({ text: description, role: "panelMuted" });
+		lines.push({ text: ` ${description}`, role: "panelMuted" });
 	}
-	if (q.kind === "text") lines.push({ text: `Text: ${answer.text ?? ""} (e to edit)`, role: "panelMuted" });
-	else if (answer.text?.trim()) lines.push({ text: `Own answer: ${answer.text} (e to edit, Enter clears)`, role: "panelMuted" });
-	if (q.note) lines.push({ text: `${q.note.label ?? "Note"}: ${answer.note ?? ""} (n to edit)`, role: "panelMuted" });
+	if (q.kind === "text") lines.push({ text: ` Text: ${answer.text ?? ""} (e to edit)`, role: "panel" });
+	else if (answer.text?.trim()) lines.push({ text: ` Own answer: ${answer.text} (e to edit, Enter clears)`, role: "panel" });
+	if (q.note) lines.push({ text: ` ${q.note.label ?? "Note"}: ${answer.note ?? ""} (n to edit)`, role: "panel" });
 	return lines;
 }
 

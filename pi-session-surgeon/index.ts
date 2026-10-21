@@ -58,6 +58,33 @@ function registerSurgeryTool(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	pi.registerTool({
 		name: "session_surgery",
 		label: "Session Surgery",
+		outputSchema: Type.Union([
+			Type.Object({
+				action: Type.Literal("list"),
+				total: Type.Number(),
+				rows: Type.Array(
+					Type.Object({
+						id: Type.String(),
+						role: Type.String(),
+						editable: Type.Boolean(),
+						preview: Type.String(),
+					})
+				),
+			}),
+			Type.Object({
+				action: Type.Literal("show"),
+				id: Type.String(),
+				role: Type.String(),
+				editable: Type.Boolean(),
+			}),
+			Type.Object({ action: Type.Literal("replace"), id: Type.String() }),
+			Type.Object({
+				action: Type.Literal("verify"),
+				ok: Type.Boolean(),
+				errors: Type.Array(Type.String()),
+				messages: Type.Number(),
+			}),
+		]),
 		description:
 			"Edit the copied session history for this rewrite job. Actions: list (messages with ids and previews), " +
 			"show (one full message text), replace (rewrite one message's text), verify (structural check). " +

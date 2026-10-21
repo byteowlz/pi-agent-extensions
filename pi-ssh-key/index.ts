@@ -45,8 +45,10 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key, fuzzyFilter, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
+import { ACCESS_TTL_SECONDS, APPROVAL_TIMEOUT_SECONDS, withApprovalDeadline } from "./access-request.js";
 import { probeAgent, socketIdentity } from "./agent-connection.js";
 
 // ---------------------------------------------------------------------------
@@ -379,7 +381,7 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function oqtoProxyLoad(keyPath: string, ctx: ExtensionCommandContext): Promise<void> {
+async function oqtoProxyLoad(keyPath: string, ctx: ExtensionContext): Promise<void> {
 	const name = basename(keyPath);
 	const fp = await fingerprint(keyPath);
 	const comment = readComment(keyPath);
@@ -633,7 +635,7 @@ function addSucceeded(res: RunResult): boolean {
 // Masked passphrase prompt (adapted from pi-sudo)
 // ---------------------------------------------------------------------------
 
-async function promptPassphrase(ctx: ExtensionCommandContext, title: string, subtitle?: string): Promise<string | null> {
+async function promptPassphrase(ctx: ExtensionContext, title: string, subtitle?: string): Promise<string | null> {
 	if (ctx.mode !== "tui") return null;
 
 	// Show the pane as blocked in herdr (detection cannot classify our custom
@@ -713,7 +715,7 @@ async function promptPassphrase(ctx: ExtensionCommandContext, title: string, sub
 
 const SSH_STATUS_KEY = "ssh-key";
 const STATUS_REFRESH_MS = 5_000;
-let statusContext: ExtensionCommandContext | undefined;
+let statusContext: ExtensionContext | undefined;
 let statusTimer: ReturnType<typeof setInterval> | undefined;
 let statusPublished: string | undefined;
 
@@ -786,12 +788,12 @@ function publishSshStatus(): void {
 	} else stopStatusTimer();
 }
 
-function bindStatusContext(ctx: ExtensionCommandContext): void {
+function bindStatusContext(ctx: ExtensionContext): void {
 	statusContext = ctx;
 	publishSshStatus();
 }
 
-async function getPassphraseForKey(keyPath: string, keyName: string, ctx: ExtensionCommandContext): Promise<string | undefined> {
+async function getPassphraseForKey(keyPath: string, keyName: string, ctx: ExtensionContext): Promise<string | undefined> {
 	const cached = agent?.loadedKeys.get(keyPath)?.passphrase;
 	if (cached) return cached;
 
@@ -840,18 +842,29 @@ async function agentIdentities(a: PiAgent): Promise<string> {
 	return `${res.stdout}\n${res.stderr}`;
 }
 
-async function loadKey(keyPath: string, timeoutSecs: number, ctx: ExtensionCommandContext): Promise<LoadedKey> {
+async function loadKey(
+	keyPath: string,
+	timeoutSecs: number,
+	ctx: ExtensionContext,
+	authorization?: { passphrase?: string; signal?: AbortSignal; deadline: number }
+): Promise<LoadedKey> {
 	const epoch = agentEpoch;
 	const name = basename(keyPath);
 	const a = await ensureAgent();
 	checkAgentEpoch(epoch);
-	const passphrase = await getPassphraseForKey(keyPath, name, ctx);
+	const passphrase = authorization ? authorization.passphrase : await getPassphraseForKey(keyPath, name, ctx);
 	checkAgentEpoch(epoch);
 	const fp = await fingerprint(keyPath);
 	checkAgentEpoch(epoch);
 	if (agent !== a || process.env.SSH_AUTH_SOCK !== a.authSock || a.socketIdentity !== socketIdentity(a.authSock))
 		throw new Error("SSH agent authority changed during key loading; retry against the current agent");
+	if (authorization && (authorization.signal?.aborted || Date.now() >= authorization.deadline))
+		throw new Error("SSH request cancelled or expired");
 	const res = await addKeyToAgent(a, keyPath, passphrase, timeoutSecs);
+	if (authorization?.signal?.aborted) {
+		await runProcess("ssh-add", ["-d", keyPath], { ...process.env, SSH_AUTH_SOCK: a.authSock });
+		throw new Error("SSH request cancelled");
+	}
 
 	// macOS `ssh-add` can exit 1 (printing "No such file or directory") yet still
 	// add the key, so verify the identity is actually present in the agent
@@ -984,7 +997,7 @@ interface KeyItem {
 	comment?: string;
 }
 
-export async function pickKeys(ctx: ExtensionCommandContext, keyDir: string): Promise<KeyItem[] | undefined> {
+export async function pickKeys(ctx: ExtensionContext, keyDir: string): Promise<KeyItem[] | undefined> {
 	const paths = discoverKeys(keyDir);
 	const loadedFingerprints = await listLoadedFingerprints();
 	const items: KeyItem[] = [];
@@ -1191,6 +1204,66 @@ function formatTimeout(secs: number): string {
 // ---------------------------------------------------------------------------
 
 export default function piSshKey(pi: ExtensionAPI): void {
+	let requesting = false;
+	pi.registerTool({
+		name: "request_ssh_access",
+		label: "Request SSH Access",
+		description:
+			"Ask the human to approve loading an SSH key. Never supplies passphrases. Approval expires separately from access TTL. Proxy sessions fail closed until the grant backend supports cancellation and TTL.",
+		outputSchema: Type.Object({
+			ok: Type.Literal(true),
+			keyPath: Type.String(),
+			ttlSeconds: Type.Number(),
+		}),
+		parameters: Type.Object({
+			reason: Type.String({ minLength: 1, maxLength: 1000 }),
+			key_path: Type.Optional(Type.String({ minLength: 1 })),
+			approval_timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 300 })),
+			access_ttl_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600 })),
+		}),
+		async execute(_id, params, signal, _update, ctx) {
+			if (requesting) throw new Error("An SSH approval request is already active");
+			if (!ctx.hasUI) throw new Error("SSH access requires a human UI");
+			if (isOqtoProxySession())
+				throw new Error(
+					"Proxy grant protocol lacks guaranteed TTL and cancellation; request SSH access from the host administrator"
+				);
+			requesting = true;
+			herdrReport("blocked", "waiting for human SSH access approval");
+			const ttl = params.access_ttl_seconds ?? ACCESS_TTL_SECONDS;
+			try {
+				const deadline = Date.now() + (params.approval_timeout_seconds ?? APPROVAL_TIMEOUT_SECONDS) * 1000;
+				const approved = await withApprovalDeadline(
+					params.approval_timeout_seconds ?? APPROVAL_TIMEOUT_SECONDS,
+					signal,
+					async (check) => {
+						const config = loadConfig(ctx.cwd);
+						const path = params.key_path ? expandPath(params.key_path, ctx.cwd) : (await pickKeys(ctx, config.keyDir))?.[0]?.path;
+						check();
+						if (!path || !isPrivateKeyFile(path)) throw new Error("No valid SSH key selected");
+						if (!(await ctx.ui.confirm("Approve SSH access?", `${params.reason}\nKey: ${path}\nAccess TTL: ${ttl}s`)))
+							throw new Error("SSH access denied");
+						check();
+						const passphrase = await getPassphraseForKey(path, basename(path), ctx);
+						check();
+						return { path, passphrase };
+					}
+				);
+				await loadKey(approved.path, ttl, ctx, { passphrase: approved.passphrase, signal, deadline });
+				return {
+					content: [{ type: "text", text: `SSH access approved; key lifetime ${ttl} seconds.` }],
+					details: { ok: true, keyPath: approved.path, ttlSeconds: ttl },
+					structuredContent: { ok: true, keyPath: approved.path, ttlSeconds: ttl },
+				};
+			} catch {
+				throw new Error("SSH access not granted (denied, cancelled, approval expired, or loading failed)");
+			} finally {
+				requesting = false;
+				herdrRelease();
+			}
+		},
+	});
+
 	pi.on("session_shutdown", async () => {
 		agentEpoch++;
 		stopStatusTimer();
@@ -1215,7 +1288,7 @@ export default function piSshKey(pi: ExtensionAPI): void {
 	pi.registerCommand("ssh-key-load", {
 		description:
 			"Pick one or more SSH private keys (fuzzy search, multi-select) and load them into an ssh-agent for this process",
-		handler: async (args: string, ctx: ExtensionCommandContext) => {
+		handler: async (args: string, ctx: ExtensionContext) => {
 			const epoch = agentEpoch;
 			const cwd = process.cwd();
 			bindStatusContext(ctx);
@@ -1278,7 +1351,7 @@ export default function piSshKey(pi: ExtensionAPI): void {
 
 	pi.registerCommand("ssh-key-unload", {
 		description: "Remove a loaded SSH key (or all keys and the agent) from this process",
-		handler: async (args: string, ctx: ExtensionCommandContext) => {
+		handler: async (args: string, ctx: ExtensionContext) => {
 			bindStatusContext(ctx);
 			try {
 				if (!agent) {
@@ -1301,7 +1374,7 @@ export default function piSshKey(pi: ExtensionAPI): void {
 
 	pi.registerCommand("ssh-key-timeout", {
 		description: "Set the lifetime (seconds) of the loaded SSH key(s); 0 means no expiry",
-		handler: async (args: string, ctx: ExtensionCommandContext) => {
+		handler: async (args: string, ctx: ExtensionContext) => {
 			const tokens = args.trim().split(/\s+/).filter(Boolean);
 			if (tokens.length === 0) {
 				const config = loadConfig(process.cwd());
@@ -1325,7 +1398,7 @@ export default function piSshKey(pi: ExtensionAPI): void {
 
 	pi.registerCommand("ssh-key-status", {
 		description: "Show the loaded SSH key(s) and agent state",
-		handler: async (_args: string, ctx: ExtensionCommandContext) => {
+		handler: async (_args: string, ctx: ExtensionContext) => {
 			bindStatusContext(ctx);
 			const a = agent;
 			if (!a) {

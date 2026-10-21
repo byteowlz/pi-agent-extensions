@@ -108,3 +108,18 @@ If you prefer a richer powerline bar, `pi-powerline-footer` can consume the same
 color, selfColorize }`). The manifest above is the neutral source of truth; map
 it to that plugin's `customItems` if you use it. Either way the publishing
 extensions stay decoupled.
+
+### Inline indicators beside context
+
+Manifest entries with status keys `ssh-key`, `sudo`, `sudo-warn`,
+`sudo-crit`, `kompressor-rolling` (Kompressor), and `xlatch` render inline immediately after the context percentage/window gauge
+in the stats/model row (before the right-aligned model). They are not repeated
+on the separate status row. All other entries remain on that row.
+
+Within each group, manifest ordering, label/value colors, published expiry
+values, and `showInactive` behavior are unchanged. Narrow terminals truncate
+the stats row with the existing ANSI-aware width handling; access indicators
+may be clipped rather than wrapped or moved back to the status row.
+
+After updating an installed copy, refresh/reload Pi to load the new code.
+This source change alone does not update a separately installed copy.
