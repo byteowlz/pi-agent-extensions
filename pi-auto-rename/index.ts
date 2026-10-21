@@ -58,9 +58,18 @@ import net from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, JsonValue, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import {
+	DESCRIPTION_ENTRY_TYPE,
+	DESCRIPTION_EVENT,
+	type SessionDescription,
+	describePayload,
+	normalizeDescription,
+	normalizeTopics,
+	readSessionDescription,
+} from "./description.js";
 import { type InboundTarget, createInboundTarget } from "./tab-title-inbound.js";
 import { TabTitleSync, tabTitle } from "./tab-title.js";
 
@@ -1230,6 +1239,93 @@ export default function (pi: ExtensionAPI) {
 	let inboundSessionFile: string | undefined;
 	const tabSync = new TabTitleSync();
 
+	// ---- routing description (append-only custom entry; never model context) ----
+	const readDescription = (ctx: ExtensionContext): SessionDescription | undefined =>
+		readSessionDescription(ctx.sessionManager.getBranch());
+
+	const writeDescription = (
+		ctx: ExtensionContext,
+		input: { description: string; topics: string[]; by: "agent" | "human" }
+	): SessionDescription => {
+		const current = readDescription(ctx);
+		const record: SessionDescription = {
+			version: 1,
+			description: input.description,
+			topics: input.topics,
+			by: input.by,
+			revision: (current?.revision ?? 0) + 1,
+			updatedAt: new Date().toISOString(),
+		};
+		const sessionId = getSessionId(ctx);
+		if (sessionId) record.sessionId = sessionId;
+		pi.appendEntry(DESCRIPTION_ENTRY_TYPE, record);
+		pi.events.emit(DESCRIPTION_EVENT, describePayload(record));
+		return record;
+	};
+
+	/** Human-owned routing description: show, set or clear. */
+	const handleDescribe = (ctx: ExtensionCommandContext, config: ResolvedConfig, text: string): void => {
+		if (!config.enabled) {
+			ctx.ui.notify("Auto-rename extension is disabled.", "warning");
+			return;
+		}
+		const current = readDescription(ctx);
+		if (!text) {
+			ctx.ui.notify(
+				current
+					? `Description (${current.by}): ${current.description}${current.topics.length ? ` [${current.topics.join(", ")}]` : ""}`
+					: "No routing description set. Use /auto-rename describe <text>.",
+				"info"
+			);
+			return;
+		}
+		if (text === "--clear" || text === "clear") {
+			const cleared: SessionDescription = {
+				version: 1,
+				description: "",
+				topics: [],
+				by: "human",
+				revision: (current?.revision ?? 0) + 1,
+				updatedAt: new Date().toISOString(),
+				cleared: true,
+			};
+			const sessionId = getSessionId(ctx);
+			if (sessionId) cleared.sessionId = sessionId;
+			pi.appendEntry(DESCRIPTION_ENTRY_TYPE, cleared);
+			pi.events.emit(DESCRIPTION_EVENT, describePayload(cleared));
+			ctx.ui.notify("Routing description cleared.", "info");
+			return;
+		}
+		const normalized = normalizeDescription(text);
+		if (!normalized.ok) {
+			ctx.ui.notify(normalized.error, "error");
+			return;
+		}
+		const topics = normalizeTopics(current?.by === "human" ? current.topics : undefined);
+		const record = writeDescription(ctx, {
+			description: normalized.value,
+			topics: topics.ok ? topics.value : [],
+			by: "human",
+		});
+		ctx.ui.notify(`Description set: ${record.description}`, "info");
+	};
+
+	/** A fork keeps the intent but marks where it came from. */
+	const inheritDescriptionOnFork = (ctx: ExtensionContext): void => {
+		const current = readDescription(ctx);
+		const sessionId = getSessionId(ctx);
+		if (!current || !sessionId || current.sessionId === sessionId) return;
+		const inherited: SessionDescription = {
+			...current,
+			revision: current.revision + 1,
+			updatedAt: new Date().toISOString(),
+			sessionId,
+			...(current.sessionId ? { inheritedFrom: current.sessionId } : {}),
+		};
+		pi.appendEntry(DESCRIPTION_ENTRY_TYPE, inherited);
+		pi.events.emit(DESCRIPTION_EVENT, describePayload(inherited));
+	};
+
 	const stopInbound = () => {
 		inbound?.stop();
 		inbound = undefined;
@@ -1456,6 +1552,7 @@ export default function (pi: ExtensionAPI) {
 
 		if (event && event.reason === "fork") {
 			regenerateReadableIdOnFork(ctx);
+			inheritDescriptionOnFork(ctx);
 		}
 		void syncTitle(ctx);
 		startInbound(ctx);
@@ -1540,7 +1637,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerCommand("auto-rename", {
 		description:
-			"Auto-rename: show name, force regenerate, or set manually. Subcommands: config, regen, init, test, sync (toggle inbound host→Pi tab sync), outbound (toggle Pi→host tab sync)",
+			"Auto-rename: show name, force regenerate, or set manually. Subcommands: config, regen, init, test, describe [text|--clear] (routing hint), sync (inbound host→Pi tab sync), outbound (Pi→host tab sync)",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim();
 			const config = loadConfig(ctx.cwd);
@@ -1548,6 +1645,13 @@ export default function (pi: ExtensionAPI) {
 			if (trimmed === "regen" || trimmed === "regenerate") {
 				const prefix = resolvePrefix(config, ctx.cwd, ctx);
 				await handleRegen(ctx, config, prefix, pi, setRenamed);
+			} else if (
+				trimmed === "describe" ||
+				trimmed === "description" ||
+				trimmed.startsWith("describe ") ||
+				trimmed.startsWith("description ")
+			) {
+				handleDescribe(ctx, config, trimmed.replace(/^(?:describe|description)\s*/, "").trim());
 			} else if (trimmed === "config") {
 				handleConfig(ctx, config);
 			} else if (trimmed === "sync" || trimmed === "inbound" || trimmed === "outbound") {
@@ -1586,6 +1690,97 @@ export default function (pi: ExtensionAPI) {
 	// -----------------------------------------------------------------------
 	// The agent supplies a title sans readable id; this extension owns and
 	// generates the readable-id suffix (appended automatically when enabled).
+	// -----------------------------------------------------------------------
+	// Routing description: metadata, never authority
+	// -----------------------------------------------------------------------
+	pi.registerTool({
+		name: "describe_session",
+		label: "Describe Session",
+		outputSchema: Type.Union([
+			Type.Object({
+				ok: Type.Literal(true),
+				action: Type.Literal("describe"),
+				description: Type.String(),
+				topics: Type.Array(Type.String()),
+				revision: Type.Number(),
+			}),
+			Type.Object({
+				ok: Type.Literal(false),
+				action: Type.Literal("describe"),
+				error: Type.Object({ code: Type.String(), message: Type.String() }),
+			}),
+		]),
+		description:
+			"Set a one-line routing hint for this session, used by routing tools to decide what incoming work fits here. " +
+			"Describe the current work and any constraints (what you are changing, what you need). " +
+			"Never include credentials, tokens or secrets. This is metadata for routing, NOT permission or authority. " +
+			"Keep it under 280 characters; the user can override it and their text wins.",
+		promptSnippet:
+			"describe_session: record a one-line routing hint (<=280 chars) for this session; no secrets, not a permission.",
+		parameters: Type.Object({
+			description: Type.String({
+				description: "One short line describing the current work and constraints. Used for routing only.",
+			}),
+			topics: Type.Optional(
+				Type.Array(Type.String(), {
+					description: 'Optional lower-case routing slugs, e.g. ["herdr","pi-agent-extensions"] (max 8).',
+				})
+			),
+		}),
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			signal?.throwIfAborted();
+			const config = loadConfig(ctx.cwd);
+			if (!config.enabled)
+				return {
+					content: [{ type: "text", text: "Auto-rename extension is disabled; cannot describe the session." }],
+					details: { action: "describe", error: "disabled" },
+					isError: true,
+					structuredContent: { ok: false, action: "describe", error: "disabled" } as JsonValue,
+				};
+			const normalized = normalizeDescription(params.description);
+			if (!normalized.ok)
+				return {
+					content: [{ type: "text", text: `Could not describe: ${normalized.error}` }],
+					details: { action: "describe", error: normalized.error },
+					isError: true,
+					structuredContent: { ok: false, action: "describe", error: normalized.error } as JsonValue,
+				};
+			const topics = normalizeTopics(params.topics);
+			if (!topics.ok)
+				return {
+					content: [{ type: "text", text: `Could not describe: ${topics.error}` }],
+					details: { action: "describe", error: topics.error },
+					isError: true,
+					structuredContent: { ok: false, action: "describe", error: topics.error } as JsonValue,
+				};
+			const current = readDescription(ctx);
+			if (current?.by === "human")
+				return {
+					content: [
+						{
+							type: "text",
+							text: "Could not describe: the user set this session's description; ask them to change it.",
+						},
+					],
+					details: { action: "describe", error: "human-owned" },
+					isError: true,
+					structuredContent: { ok: false, action: "describe", error: "human-owned" } as JsonValue,
+				};
+			const record = writeDescription(ctx, { description: normalized.value, topics: topics.value, by: "agent" });
+			return {
+				content: [{ type: "text", text: `Session described: ${record.description}` }],
+				details: { action: "describe", description: record.description, topics: record.topics, revision: record.revision },
+				structuredContent: {
+					ok: true,
+					action: "describe",
+					description: record.description,
+					topics: record.topics,
+					revision: record.revision,
+				},
+			};
+		},
+	});
+
 	pi.registerTool({
 		name: "rename_session",
 		label: "Rename Session",

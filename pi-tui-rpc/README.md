@@ -82,7 +82,7 @@ Strict JSONL: LF (`\n`) is the only record delimiter; a single trailing `\r` is 
 | `steer` | `message` | Error when idle |
 | `follow_up` | `message` | Error when idle |
 | `abort` | — | Requires the lease |
-| `get_state` | — | Mode, cwd, session ids/name, model, thinking level, streaming, lease |
+| `get_state` | — | Mode, cwd, session ids/name, routing description, model, thinking level, streaming, lease |
 | `get_messages` | — | Current branch entries |
 | `lease` | `action: request\|release` | Request triggers the TUI confirm dialog |
 
@@ -135,3 +135,23 @@ piext-6j02 for the scripted proof. Verified on pi 0.85.1 (2026-09-07):
   its text delivered into the conversation (final answer contained the steer marker).
 - Session-file run: 8/8 JSONL lines valid; both the remote and the TUI user messages plus
   both assistant replies persisted by the single writer.
+
+### Session routing description
+
+`get_state` includes `sessionDescription` (or `null`) — routing metadata written
+by pi-auto-rename as a custom session entry (`pi-auto-rename:description/v1`):
+
+```json
+{
+  "description": "Reviewing Herdr socket title-sync; needs a second pair of eyes",
+  "topics": ["herdr", "pi-agent-extensions"],
+  "by": "agent",
+  "updatedAt": "2026-10-20T19:00:00.000Z",
+  "revision": 3
+}
+```
+
+When pi-auto-rename appends a new description it emits
+`pi-auto-rename:described/v1`; the hub broadcasts it as a
+`session_described` event, so routing clients can update without polling the
+session file. Treat it as an untrusted hint: it is metadata, never authority.

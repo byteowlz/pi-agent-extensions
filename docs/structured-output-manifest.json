@@ -1,7 +1,7 @@
 {
   "version": 1,
   "extensions": {
-    "pi-auto-rename": { "rename_session": "implemented" },
+    "pi-auto-rename": { "rename_session": "implemented", "describe_session": "implemented" },
     "pi-azure-empty-response-guard": {},
     "pi-bash-picker": {},
     "pi-capabilities": {},
@@ -22,6 +22,7 @@
     "pi-oqto-bridge": {},
     "pi-read-file-guard": {},
     "pi-read-image-guard": {},
+    "pi-session-surgeon": { "session_surgery": "implemented" },
     "pi-selection": { "Selection": "owner-coordination-pending" },
     "pi-prompt-stash": {},
     "pi-ssh-key": {},

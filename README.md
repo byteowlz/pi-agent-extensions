@@ -12,6 +12,7 @@ extensions and [migration evidence](./docs/pi-1-baseline.md) for proof limits.
 | Extension | Purpose |
 |-----------|---------|
 | [pi-auto-rename](./pi-auto-rename/) | Session naming |
+| [pi-session-surgeon](./pi-session-surgeon/) | Sandboxed agentic rewrite of a session copy (`/surgeon`) with restriction-only oqto-sandbox policy |
 | [pi-session-tools](./pi-session-tools/) | Session routing and subagent orchestration |
 | [pi-history-search](./pi-history-search/) | Search/read previous sessions |
 | [pi-introspection](./pi-introspection/) | Session/model/context information |

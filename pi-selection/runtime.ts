@@ -23,6 +23,21 @@ export interface RuntimeOptions {
 	root: string;
 	lanAddress?: string;
 	browserTtlMs?: number;
+	/** Default `ask` wait budget in ms. 0 disables the timeout. */
+	askTimeoutMs?: number;
+}
+
+/** Default: an unanswered ask is abandoned after 10 minutes. */
+export const DEFAULT_ASK_TIMEOUT_MS = 600_000;
+
+/** Thrown when an `ask` exceeded its wait budget. */
+export class SelectionTimeoutError extends Error {
+	constructor(readonly timeoutMs: number) {
+		super(
+			`Selection ask timed out after ${Math.round(timeoutMs / 1000)}s; the draft was cancelled. Re-ask if the answer is still needed, or use action=get to inspect the cancelled draft.`
+		);
+		this.name = "SelectionTimeoutError";
+	}
 }
 export interface RuntimePresenters {
 	browser: typeof startBrowserReview;
@@ -87,16 +102,38 @@ export class SelectionRuntime {
 		signal?: AbortSignal,
 		progress?: Progress
 	): Promise<SelectionResult> {
-		const signals = [this.lifetime.signal, signal, ctx.signal].filter((value): value is AbortSignal => !!value);
+		const askTimeoutMs = request.action === "ask" ? (this.options.askTimeoutMs ?? DEFAULT_ASK_TIMEOUT_MS) : 0;
+		const timeout = new AbortController();
+		const timeoutState = { timedOut: false, ms: askTimeoutMs };
+		const timer =
+			askTimeoutMs > 0
+				? setTimeout(() => {
+						timeoutState.timedOut = true;
+						timeout.abort();
+					}, askTimeoutMs)
+				: undefined;
+		timer?.unref?.();
+		const signals = [this.lifetime.signal, signal, ctx.signal, timeout.signal].filter((value): value is AbortSignal => !!value);
 		const combined = AbortSignal.any(signals);
-		return this.executeScoped({ ...ctx, signal: combined }, request, combined, progress);
+		try {
+			const result = await this.executeScoped({ ...ctx, signal: combined }, request, combined, progress, timeoutState);
+			if (timeoutState.timedOut) throw new SelectionTimeoutError(askTimeoutMs);
+			return result;
+		} catch (error) {
+			// An abort inside the wait surfaces as AbortError; report the real cause.
+			if (timeoutState.timedOut && !(error instanceof SelectionTimeoutError)) throw new SelectionTimeoutError(askTimeoutMs);
+			throw error;
+		} finally {
+			if (timer) clearTimeout(timer);
+		}
 	}
 
 	private async executeScoped(
 		ctx: ExtensionContext,
 		request: SelectionRequest,
 		signal: AbortSignal,
-		progress?: Progress
+		progress?: Progress,
+		timeoutState?: { timedOut: boolean; ms: number }
 	): Promise<SelectionResult> {
 		const scope = this.scope(ctx);
 		const epoch = this.epoch;
@@ -132,6 +169,16 @@ export class SelectionRuntime {
 			if (this.epoch === epoch) {
 				this.hosts.delete(record.id);
 				await this.closeBrowser(record.id);
+			}
+			if (timeoutState?.timedOut && this.epoch === epoch) {
+				// TUI aborts already cancel their draft; browser/host waits may not.
+				try {
+					const fresh = await this.store.get(record.id, scope);
+					if (fresh.state === "draft") await this.store.cancel(record.id, scope, fresh.revision);
+				} catch {
+					/* best effort: the timeout error still reports the outcome */
+				}
+				throw new SelectionTimeoutError(timeoutState.ms);
 			}
 			throw error;
 		} finally {

@@ -113,6 +113,45 @@ function defaultSocketPath(): string {
 	return path.join(os.tmpdir(), `pi-tui-rpc-${process.pid}.sock`);
 }
 
+/**
+ * Routing description written by pi-auto-rename as a custom session entry.
+ * Duplicated literal (extensions stay standalone); a contract test pins them together.
+ */
+const DESCRIPTION_ENTRY_TYPE = "pi-auto-rename:description/v1";
+const DESCRIPTION_EVENT = "pi-auto-rename:described/v1";
+
+export interface SessionDescriptionSummary {
+	description: string;
+	topics: string[];
+	by: "agent" | "human";
+	updatedAt: string;
+	revision: number;
+}
+
+/** Read the latest description from a session branch (custom entries only). */
+export function readSessionDescription(entries: readonly unknown[]): SessionDescriptionSummary | null {
+	let latest: SessionDescriptionSummary | null = null;
+	let cleared = false;
+	for (const entry of entries) {
+		if (!entry || typeof entry !== "object") continue;
+		const record = entry as { type?: unknown; customType?: unknown; data?: unknown };
+		if (record.type !== "custom" || record.customType !== DESCRIPTION_ENTRY_TYPE) continue;
+		const data = record.data as Record<string, unknown> | undefined;
+		if (!data || data.version !== 1 || typeof data.description !== "string") continue;
+		if (data.by !== "agent" && data.by !== "human") continue;
+		if (typeof data.updatedAt !== "string" || typeof data.revision !== "number") continue;
+		cleared = data.cleared === true;
+		latest = {
+			description: data.description,
+			topics: Array.isArray(data.topics) ? data.topics.filter((t): t is string => typeof t === "string") : [],
+			by: data.by,
+			updatedAt: data.updatedAt,
+			revision: data.revision,
+		};
+	}
+	return latest && !cleared ? latest : null;
+}
+
 interface SessionSnapshot {
 	mode: "tui" | "rpc";
 	cwd: string;
@@ -120,6 +159,7 @@ interface SessionSnapshot {
 	sessionId: string | null;
 	leafId: string | null;
 	sessionName: string | null;
+	sessionDescription: SessionDescriptionSummary | null;
 	model: ModelSummary | null;
 	thinkingLevel: string | null;
 	isStreaming: boolean;
@@ -174,6 +214,7 @@ export default function (pi: ExtensionAPI) {
 				sessionId: null,
 				leafId: null,
 				sessionName: pi.getSessionName() ?? null,
+				sessionDescription: null,
 				model: null,
 				thinkingLevel: null,
 				isStreaming: false,
@@ -189,6 +230,7 @@ export default function (pi: ExtensionAPI) {
 			sessionId: ctx.sessionManager.getSessionId(),
 			leafId: ctx.sessionManager.getLeafId() ?? null,
 			sessionName: pi.getSessionName() ?? null,
+			sessionDescription: readSessionDescription(ctx.sessionManager.getBranch()),
 			// pi RPC shape: the full model object.
 			model: ctx.model ? toModelSummary(ctx.model) : null,
 			thinkingLevel: pi.getThinkingLevel(),
@@ -467,6 +509,12 @@ export default function (pi: ExtensionAPI) {
 		await startHub();
 		hub?.broadcast(eventFrame("session_start", event));
 		updateTuiStatus();
+	});
+
+	// pi-auto-rename emits this after it appends a description entry; surface it
+	// live so routing clients do not have to poll the session file.
+	pi.events?.on?.(DESCRIPTION_EVENT, (payload) => {
+		hub?.broadcast(eventFrame("session_described", payload));
 	});
 
 	pi.on("session_shutdown", async (event) => {

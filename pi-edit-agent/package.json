@@ -1,7 +1,7 @@
 {
   "name": "@byteowlz/pi-edit-agent",
-  "version": "2.0.0",
-  "description": "Edit an assistant (agent) message and continue from there — like /tree, but you can edit the agent message",
+  "version": "2.1.0",
+  "description": "Edit an assistant (agent) message and continue from there \u2014 like /tree, but you can edit the agent message",
   "type": "module",
   "keywords": [
     "pi-package",

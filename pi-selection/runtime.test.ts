@@ -425,3 +425,61 @@ test("all control failures are correlated replies, never chat/entries; success a
 	for (const handler of h.lifecycle.values()) await handler({}, h.ctx);
 	assert.equal(h.statuses.at(-1)?.value, undefined);
 });
+
+test("ask times out, cancels the draft and reports a clear cause", async () => {
+	const h = harness();
+	h.ctx.mode = "tui";
+	const runtime = new SelectionRuntime(
+		h.pi,
+		{ root: await root(), askTimeoutMs: 1_100 },
+		{
+			async browser() {
+				throw new Error("browser is not used by this test");
+			},
+			// A TUI owns the wait until aborted; the runtime must abort it.
+			tui: (ctx) =>
+				new Promise<TuiOutcome>((resolve) => {
+					ctx.signal?.addEventListener("abort", () => resolve({ action: "cancel", answers: {} }));
+				}),
+		}
+	);
+	let cancels = 0;
+	const cancel = runtime.store.cancel.bind(runtime.store);
+	runtime.store.cancel = (async (...args: Parameters<typeof cancel>) => {
+		cancels++;
+		return cancel(...args);
+	}) as typeof runtime.store.cancel;
+	await assert.rejects(runtime.execute(h.ctx, { action: "ask", spec }), (error: Error) => {
+		assert.equal(error.name, "SelectionTimeoutError");
+		assert.match(error.message, /timed out after 1s/);
+		assert.match(error.message, /draft was cancelled/);
+		return true;
+	});
+	assert.equal(cancels, 1);
+	await runtime.reset();
+});
+
+test("askTimeoutMs 0 disables the timeout and non-ask actions are never timed out", async () => {
+	const h = harness();
+	h.ctx.mode = "tui";
+	const runtime = new SelectionRuntime(
+		h.pi,
+		{ root: await root(), askTimeoutMs: 0 },
+		{
+			async browser() {
+				throw new Error("browser is not used by this test");
+			},
+			// Resolve slightly later than a tiny timeout would allow.
+			tui: async () => {
+				await new Promise((resolve) => setTimeout(resolve, 30));
+				return { action: "submit", answers: { q: { answered: true, selectedIds: [], text: "ok" } } };
+			},
+		}
+	);
+	const result = await runtime.execute(h.ctx, { action: "ask", spec });
+	assert.equal(result.record.state, "submitted");
+	// get never waits, so it cannot be affected by the ask budget.
+	const fetched = await runtime.execute(h.ctx, { action: "get", id: result.record.id });
+	assert.equal(fetched.record.state, "submitted");
+	await runtime.reset();
+});

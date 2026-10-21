@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.19.1
+
+- Improve the ask panel's contrast and hierarchy. The yellow tint drops from 22%
+  to 8% (muted text 2.80:1 -> 3.84:1, accent 2.24:1 -> 3.07:1, body text
+  5.25:1 -> 7.20:1), body/description/decision use full `text` contrast, the
+  question and spec titles are bold text instead of accent, and `muted` is
+  reserved for chrome (tab strip, hints). The tab strip uses short header labels
+  with separators and a blank line, and the panel gets bottom padding.
+
+## 2.19.0
+
+- `ask` now has a default 10-minute wait budget (`--selection-ask-timeout-ms`,
+  0 disables, max 1 hour). On timeout the presentation is aborted, the draft is
+  cancelled and a `SelectionTimeoutError` explains the budget and recovery.
+- Report the calling Herdr pane as `blocked` while an `ask` waits, and release
+  it on submit/cancel/timeout/error (best-effort, same contract as pi-sudo).
+- Tests: timeout cancels the draft and reports a clear cause; `0` disables it and
+  non-ask actions are unaffected; a fake Herdr CLI verifies the blocked/release
+  args and the no-Herdr no-op.
+
 ## 2.16.0
 
 - Improve the `ask` TUI. Every single/multiple question now always shows two

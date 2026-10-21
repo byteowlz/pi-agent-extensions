@@ -4,8 +4,10 @@ import type { JsonValue } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { herdrBlocked, herdrRelease } from "./herdr.js";
 import type { Answers } from "./model.js";
 import { type SelectionRequest, type SelectionResult, SelectionRuntime } from "./runtime.js";
+import { DEFAULT_ASK_TIMEOUT_MS } from "./runtime.js";
 import { selectionSpecSchema } from "./schema.js";
 
 const actions = ["ask", "create", "get", "open", "close"] as const;
@@ -84,6 +86,11 @@ export default function selection(pi: ExtensionAPI): void {
 		description: "Browser access lifetime in milliseconds (maximum one hour)",
 		default: "1800000",
 	});
+	pi.registerFlag("selection-ask-timeout-ms", {
+		type: "string",
+		description: `Default wait budget for action=ask in milliseconds (0 waits indefinitely, maximum one hour). Default ${DEFAULT_ASK_TIMEOUT_MS}.`,
+		default: String(DEFAULT_ASK_TIMEOUT_MS),
+	});
 	let runtime: SelectionRuntime | undefined;
 	const getRuntime = (): SelectionRuntime => {
 		if (!runtime) {
@@ -91,6 +98,9 @@ export default function selection(pi: ExtensionAPI): void {
 			const lan = pi.getFlag("selection-lan-address");
 			const ttl = Number(pi.getFlag("selection-browser-ttl-ms"));
 			if (!Number.isSafeInteger(ttl) || ttl < 1000 || ttl > 3_600_000) throw new Error("Invalid browser lifetime");
+			const askTimeout = Number(pi.getFlag("selection-ask-timeout-ms"));
+			if (!Number.isSafeInteger(askTimeout) || askTimeout < 0 || askTimeout > 3_600_000)
+				throw new Error("Invalid ask timeout (0 disables it, maximum one hour)");
 			const root =
 				typeof configured === "string" && configured
 					? configured
@@ -99,6 +109,7 @@ export default function selection(pi: ExtensionAPI): void {
 				root,
 				lanAddress: typeof lan === "string" && lan ? lan : undefined,
 				browserTtlMs: ttl,
+				askTimeoutMs: askTimeout,
 			});
 		}
 		return runtime;
@@ -122,7 +133,7 @@ export default function selection(pi: ExtensionAPI): void {
 		label: "Selection",
 		exposure: "model-only",
 		description:
-			'Ask structured questions or review inventories with single/multiple choices, an own-answer text row, an explicit "None of the above" answer (satisfies required), standalone text and notes. Supply version:1 spec with mode questions/review and a root title. Questions use {id,title,kind}, NOT text/question as the prompt field; kind is single/multiple/text. single/multiple require options:[{id,label}]; text omits options. See the spec schema for a complete example. Native TUI, negotiated host or protected browser fallback. ask waits for submission; create returns a draft/presentation; get retrieves it; open resumes; close cancels. Never interprets answers as permission grants. No pairwise labeling or secret entry.',
+			'Ask structured questions or review inventories with single/multiple choices, an own-answer text row, an explicit "None of the above" answer (satisfies required), standalone text and notes. Supply version:1 spec with mode questions/review and a root title. Questions use {id,title,kind}, NOT text/question as the prompt field; kind is single/multiple/text. single/multiple require options:[{id,label}]; text omits options. See the spec schema for a complete example. Native TUI, negotiated host or protected browser fallback. ask waits for submission (default 10 min, then cancels the draft with a timeout error); create returns a draft/presentation; get retrieves it; open resumes; close cancels. Never interprets answers as permission grants. No pairwise labeling or secret entry.',
 		annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
 		parameters: Type.Object(
 			{
@@ -147,23 +158,31 @@ export default function selection(pi: ExtensionAPI): void {
 			return new Text(theme.fg("accent", line), 0, 0);
 		},
 		async execute(_id, params, signal, onUpdate, ctx) {
-			const result = await getRuntime().execute(
-				ctx,
-				{
-					...params,
-					action: (params.action ?? "ask") as SelectionRequest["action"],
-					presentation: params.presentation as SelectionRequest["presentation"],
-				},
-				signal,
-				(progress) => {
-					onUpdate?.({ content: [{ type: "text", text: summary(progress) }], details: progress });
-				}
-			);
-			return {
-				content: [{ type: "text", text: summary(result) }],
-				details: result,
-				structuredContent: JSON.parse(JSON.stringify(result)) as JsonValue,
-			};
+			const action = (params.action ?? "ask") as SelectionRequest["action"];
+			// An `ask` blocks the turn until a human acts or the timeout fires.
+			const blocking = action === "ask";
+			if (blocking) herdrBlocked("selection: awaiting human answer");
+			try {
+				const result = await getRuntime().execute(
+					ctx,
+					{
+						...params,
+						action,
+						presentation: params.presentation as SelectionRequest["presentation"],
+					},
+					signal,
+					(progress) => {
+						onUpdate?.({ content: [{ type: "text", text: summary(progress) }], details: progress });
+					}
+				);
+				return {
+					content: [{ type: "text", text: summary(result) }],
+					details: result,
+					structuredContent: JSON.parse(JSON.stringify(result)) as JsonValue,
+				};
+			} finally {
+				if (blocking) herdrRelease();
+			}
 		},
 	});
 

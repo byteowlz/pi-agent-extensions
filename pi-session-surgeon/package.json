@@ -1,0 +1,23 @@
+{
+  "name": "@byteowlz/pi-session-surgeon",
+  "version": "0.1.0",
+  "description": "Sandboxed agentic rewrite of a session's history",
+  "type": "module",
+  "keywords": ["pi-package", "pi-extension", "pi-coding-agent", "sandbox"],
+  "files": ["*.ts", "README.md", "CHANGELOG.md", "LICENSE"],
+  "pi": { "extensions": ["./index.ts"] },
+  "homepage": "https://github.com/byteowlz/pi-agent-extensions/tree/main/pi-session-surgeon",
+  "bugs": { "url": "https://github.com/byteowlz/pi-agent-extensions/issues" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/byteowlz/pi-agent-extensions.git",
+    "directory": "pi-session-surgeon"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "1.0.0",
+    "@earendil-works/pi-ai": "1.0.0",
+    "@earendil-works/pi-coding-agent": "1.0.0",
+    "@earendil-works/pi-tui": "1.0.0"
+  },
+  "license": "MIT"
+}

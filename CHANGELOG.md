@@ -4,6 +4,42 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Session surgeon: sandboxed agentic history rewrite (2.22.0)
+
+- New **pi-session-surgeon 0.1.0**: `/surgeon` stages a 0600 copy of the current
+  session, proves a restriction-only `oqto-sandbox` overlay (`--overlay` +
+  `--print-effective --json`, ADR 0070), runs a dedicated Pi agent inside it,
+  verifies the JSONL, reviews the diff and publishes a new branch. The original
+  session is untouched.
+- The agent gets only `session_surgery` (list/show/replace/verify) plus
+  read/grep; text-only replacement preserves ids/parents/timestamps/tool blocks
+  with atomic writes and a `.bak`.
+- Fails closed without `oqto-sandbox`; no Docker path (ADR 0070 does not cover
+  Docker placement). Non-Linux backends verify by `--dry-run` and state the
+  effective-report gap.
+
+### Hidden edit-agent continuation prompt (2.21.0)
+
+- **pi-edit-agent 2.1.0**: `/edit-agent` no longer injects a visible
+  "I edited your previous message" turn. The continuation prompt is sent as a
+  hidden custom message (`display: false`, `triggerTurn: true`), so the model
+  still knows about the edit while the transcript stays clean. Opt out with
+  `hideContinuePrompt: false`.
+
+### Session routing description (2.20.0)
+
+- **pi-auto-rename 1.5.0**: add a routing description stored as an append-only
+  `pi-auto-rename:description/v1` custom session entry (durable, travels with the
+  file, never in LLM context). Agent surface: `describe_session` (<=280 chars,
+  <=8 topic slugs, control chars stripped, secret-shaped text rejected). Human
+  surface: `/auto-rename describe [text|--clear]`, and human text wins. Forks
+  re-append with `inheritedFrom`. Emits `pi-auto-rename:described/v1`.
+- **pi-tui-rpc**: `get_state` now returns `sessionDescription` and broadcasts a
+  `session_described` event, so routing clients can query over the existing
+  local socket instead of parsing session files.
+- The description is routing metadata only; it must never be treated as
+  permission or authority.
+
 ### EAVS scoped login and automatic policy refresh (2.20.0)
 
 - **pi-eavs 0.1.0**: self-contained native API-key `/login`, persisted server
@@ -13,10 +49,14 @@ All notable changes to pi-agent-extensions will be documented in this file.
   shutdown cleanup and `PI_OFFLINE`; no provider probes or inference.
 - Offline SDK lifecycle/dispatch tests and local HTTPS security fixtures.
 
-### Loaded instructions editor (2.22.0)
+### Ask timeout and blocked status (2.19.0)
 
-- **pi-agents-edit 1.0.0**: `/agents-edit` lists loaded AGENTS.md paths and opens
-  the selected original in VISUAL/EDITOR, restoring the terminal afterwards.
+- **pi-selection 2.19.0**: `ask` gets a default 10-minute wait budget
+  (`--selection-ask-timeout-ms`, 0 disables, max 1 hour). On timeout the
+  presentation aborts, the draft is cancelled and the agent gets a clear
+  `SelectionTimeoutError`.
+- While an `ask` blocks, the Herdr pane is reported as `blocked`
+  (`--source pi-selection`) and released afterwards; no-op outside Herdr.
 
 ### Subagent tabs keep their [sub] marker (2.18.1)
 
