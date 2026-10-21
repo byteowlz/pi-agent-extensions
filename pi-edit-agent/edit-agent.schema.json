@@ -6,14 +6,22 @@
   "properties": {
     "continuePrompt": {
       "type": "string",
-      "description": "User message sent to trigger the continuation turn after editing an assistant message.",
+      "description": "Message sent to trigger the continuation turn after editing an assistant message (hidden by default).",
       "default": "I edited your previous message. Continue from there."
     },
     "defaultAction": {
       "type": "string",
-      "enum": ["continue", "editOnly"],
+      "enum": [
+        "continue",
+        "editOnly"
+      ],
       "description": "Action taken when you press Esc on the 'what next?' prompt.",
       "default": "continue"
+    },
+    "hideContinuePrompt": {
+      "type": "boolean",
+      "default": true,
+      "description": "Send the continuation prompt as a hidden custom message: it stays in LLM context but is not rendered as a user turn in the transcript. Set false for the old visible behaviour."
     }
   }
 }

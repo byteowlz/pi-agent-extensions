@@ -66,7 +66,8 @@ Optional. Place `edit-agent.json` in `./`, `./.pi/`, or `~/.pi/agent/`:
 ```json
 {
   "continuePrompt": "I edited your previous message. Continue from there.",
-  "defaultAction": "continue"
+  "defaultAction": "continue",
+  "hideContinuePrompt": true
 }
 ```
 
@@ -74,6 +75,7 @@ Optional. Place `edit-agent.json` in `./`, `./.pi/`, or `~/.pi/agent/`:
 | --------------- | ----------------------------- | ------------------------------------------------------------- | -------------------------------------------------------- |
 | `continuePrompt`| string                        | `"I edited your previous message. Continue from there."`      | User message sent to trigger the continuation turn.      |
 | `defaultAction` | `"continue"` \| `"editOnly"` | `"continue"`                                                  | What happens when you press Esc on the "what next?" prompt. |
+| `hideContinuePrompt` | boolean | `true` | Send the continuation prompt as a hidden custom message (in LLM context, not rendered as a user turn). `false` restores the visible turn. |
 
 See `edit-agent.schema.json` / `edit-agent.example.json`.
 

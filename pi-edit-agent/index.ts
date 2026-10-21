@@ -29,16 +29,24 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 // ── Config ───────────────────────────────────────────────────────────
 
-interface EditAgentConfig {
-	/** User message sent to trigger the continuation turn after an edit. */
+export interface EditAgentConfig {
+	/** Message sent to trigger the continuation turn after an edit. */
 	continuePrompt: string;
 	/** What happens when you press Esc on the "what next?" prompt. */
 	defaultAction: "continue" | "editOnly";
+	/**
+	 * Keep the continuation prompt out of the chat transcript. It is still sent
+	 * to the model (as a hidden custom message) so the turn can start.
+	 */
+	hideContinuePrompt: boolean;
 }
+
+export const CONTINUE_MESSAGE_TYPE = "pi-edit-agent:continue";
 
 const DEFAULTS: EditAgentConfig = {
 	continuePrompt: "I edited your previous message. Continue from there.",
 	defaultAction: "continue",
+	hideContinuePrompt: true,
 };
 
 function loadConfig(cwd: string): EditAgentConfig {
@@ -54,6 +62,7 @@ function loadConfig(cwd: string): EditAgentConfig {
 			return {
 				continuePrompt: typeof raw.continuePrompt === "string" ? raw.continuePrompt : DEFAULTS.continuePrompt,
 				defaultAction: raw.defaultAction === "editOnly" ? "editOnly" : "continue",
+				hideContinuePrompt: typeof raw.hideContinuePrompt === "boolean" ? raw.hideContinuePrompt : DEFAULTS.hideContinuePrompt,
 			};
 		} catch {
 			// ignore malformed config, try next candidate
@@ -222,6 +231,33 @@ export default function (pi: ExtensionAPI) {
 	});
 }
 
+/**
+ * Start the continuation turn. Hidden by default: the prompt stays in LLM
+ * context but is not rendered as a user turn in the transcript.
+ */
+export async function sendContinuation(
+	sctx: { sendMessage: (...args: never[]) => Promise<void>; sendUserMessage: (...args: never[]) => Promise<void> },
+	config: EditAgentConfig
+): Promise<void> {
+	if (config.hideContinuePrompt) {
+		await (
+			sctx.sendMessage as unknown as (
+				message: { customType: string; content: { type: "text"; text: string }[]; display: boolean },
+				options: { triggerTurn: boolean }
+			) => Promise<void>
+		)(
+			{
+				customType: CONTINUE_MESSAGE_TYPE,
+				content: [{ type: "text", text: config.continuePrompt }],
+				display: false,
+			},
+			{ triggerTurn: true }
+		);
+		return;
+	}
+	await (sctx.sendUserMessage as unknown as (content: string) => Promise<void>)(config.continuePrompt);
+}
+
 /** Apply the edit, refresh the live view, and optionally continue the agent. */
 async function applyAndRefresh(ctx: ExtensionCommandContext, target: AssistantPick, editedText: string): Promise<void> {
 	const config = loadConfig(ctx.cwd);
@@ -246,9 +282,8 @@ async function applyAndRefresh(ctx: ExtensionCommandContext, target: AssistantPi
 			const opts = ["▶  Continue from edit", "✎  Keep edit only (no auto-continue)"];
 			const choice = await sctx.ui.select("Agent message edited. What next?", opts);
 			const shouldContinue = choice === undefined ? config.defaultAction === "continue" : choice === opts[0];
-			if (shouldContinue) {
-				await sctx.sendUserMessage(config.continuePrompt);
-			}
+			if (!shouldContinue) return;
+			await sendContinuation(sctx, config);
 		},
 	});
 

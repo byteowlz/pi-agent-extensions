@@ -75,11 +75,29 @@ Default root: `$XDG_STATE_HOME/pi-selection/reviews` or `~/.local/state/pi-selec
 
 Questions use tabs and a final review; inventories use searchable/grouped list/detail views. Tab/Shift+Tab navigate, arrows select, Enter chooses/advances, Space toggles multi, `r` opens final review, `/` searches review, `e` edits text, `n` notes, `s` skips, `u` defers as unsure, `?` resets unanswered. Editing owns ordinary letters. Multiline Enter inserts a newline; Ctrl+Enter finishes editing. **Ctrl+o switches to browser while preserving draft. Esc cancels.** Follow the on-screen help for confirm-none controls.
 
+## Ask timeout and blocked status
+
+`ask` waits for a human answer. It is bounded by default so an unattended prompt
+cannot block a turn forever:
+
+- `--selection-ask-timeout-ms MS`: 0 disables the timeout, otherwise 1 second to
+  1 hour; **default 10 minutes**.
+- On timeout the presentation is aborted, the draft is **cancelled**, and the tool
+  returns a `SelectionTimeoutError` naming the budget and telling the agent it may
+  re-ask (or `get` the cancelled draft). The record is never left half-open.
+- `get`, `create`, `open` and `close` never wait, so the budget does not apply.
+- While an `ask` is blocking, the calling Herdr pane is reported as **blocked**
+  (`pane report-agent --state blocked --source pi-selection`, message
+  `selection: awaiting human answer`). Reporting is best-effort, uses the same
+  contract as pi-sudo/pi-ssh-key, and is released on submit, cancel, timeout or
+  error. Outside Herdr it is a no-op.
+
 ## Browser and runtime flags
 
 - `--selection-state-dir DIR`: dedicated private result root.
 - `--selection-lan-address PRIVATE_IP`: explicitly permit LAN fallback if tailnet cannot be used.
 - `--selection-browser-ttl-ms MS`: 1 second to 1 hour; default 30 minutes.
+- `--selection-ask-timeout-ms MS`: 0 (wait indefinitely) or 1 second to 1 hour; default 10 minutes.
 
 Tailnet is preferred: discover a locally assigned Tailscale IPv4 in 100.64/10. LAN requires an explicit locally assigned RFC1918 IPv4. No automatic public/wildcard/loopback/Funnel fallback and no Tailscale Serve configuration changes. The app uses a short-lived fragment bearer token, authenticated API, strict Host/origin/CSRF, body limits and nonce CSP. Token stays in tab sessionStorage to support reload and is removed from the visible URL. URLs may appear in tool results/history; treat them as temporary credentials. Tailnet transport is protected by Tailscale; **plain HTTP LAN is not encrypted**. Do not use this for passwords/secrets.
 

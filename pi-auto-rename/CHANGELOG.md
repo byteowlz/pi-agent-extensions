@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.0
+
+- Add a routing description alongside the session name, stored as an
+  append-only `pi-auto-rename:description/v1` custom session entry (never in
+  LLM context, durable, travels with the file).
+- `describe_session` tool (≤280 chars, ≤8 slug topics, control chars stripped,
+  secret-shaped text rejected) and `/auto-rename describe [text|--clear]` for
+  humans. Human text wins; the tool refuses to overwrite it.
+- Forks re-append the description with `inheritedFrom` so inherited intent is
+  visible. Emits `pi-auto-rename:described/v1` for in-process consumers.
+
 ## 1.4.1
 
 - Keep the `[sub]` role marker in host tab titles so subagent tabs stay

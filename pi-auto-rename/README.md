@@ -354,3 +354,44 @@ This is the canonical field for session names in pi-agent session files.
 ## License
 
 MIT
+
+## Routing description
+
+Besides the display name, a session can carry a one-line **routing description**
+used to decide whether incoming work fits here. It is stored as an append-only
+custom session entry and never enters LLM context:
+
+```json
+{
+  "version": 1,
+  "description": "Reviewing Herdr socket title-sync; needs a second pair of eyes",
+  "topics": ["herdr", "pi-agent-extensions"],
+  "by": "agent",
+  "revision": 3,
+  "updatedAt": "2026-10-20T19:00:00.000Z",
+  "sessionId": "…"
+}
+```
+
+Written as `customType: "pi-auto-rename:description/v1"` in the session JSONL,
+so it is durable, travels with the file, and is readable by any local process.
+`getBranch()` filtering on `type === "custom"` recovers the latest entry.
+
+- **Agent** — the `describe_session` tool: one line, ≤280 characters, ≤8
+  lower-case topic slugs (≤32 chars). Control characters are stripped; empty,
+  oversized or secret-looking text is rejected with an actionable error.
+- **Human** — `/auto-rename describe [text]` shows or sets it;
+  `/auto-rename describe --clear` clears it. **Human text wins**: the tool
+  refuses to overwrite a description whose `by` is `human`.
+- **Fork** — a fork re-appends the parent's description with `inheritedFrom`
+  set to the parent session id, so inherited intent is visible rather than
+  silently assumed.
+
+Exposure: `pi-tui-rpc` `get_state` returns `sessionDescription` and broadcasts a
+`session_described` event on change. The extension also emits
+`pi-auto-rename:described/v1` in-process for other extensions.
+
+**Not authority.** The description is untrusted model output used for ranking;
+never derive permissions, capability or trust from it, and prefer validated
+`topics` plus cwd/repo/labels for reliable routing. It is stored in the session
+file, so never put secrets in it.
