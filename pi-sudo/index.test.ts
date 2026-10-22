@@ -60,3 +60,21 @@ describe("pi-sudo guard: sudoGuardDecision", () => {
 		expect(sudoGuardDecision("sudo true").reason).toContain(GUARD_ALLOW_TOKEN);
 	});
 });
+
+describe("pi-sudo guard: heredoc bodies that are data, not commands", () => {
+	test("a commit message heredoc with backticked sudo is data", () => {
+		const cmd = ["git commit -q -F - <<'EOF'", "fix: mention `sudo` and `ssh host 'sudo x'` in prose", "EOF"].join("\n");
+		expect(sudoGuardDecision(cmd).block).toBe(false);
+	});
+
+	test("a local shell heredoc still counts", () => {
+		expect(sudoGuardDecision("bash <<EOF\nsudo rm -rf /tmp/x\nEOF").block).toBe(true);
+		expect(sudoGuardDecision("sh -c 'x' <<EOF\nsudo true\nEOF").block).toBe(true);
+	});
+
+	test("remote stdin heredoc is not a local command, even with bash -s", () => {
+		const cmd = ["ssh box bash -s <<EOF", "sudo systemctl restart nginx", "EOF"].join("\n");
+		// The remote branch scans the command line, not the stdin body.
+		expect(sudoGuardDecision(cmd).block).toBe(false);
+	});
+});

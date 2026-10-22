@@ -4,6 +4,15 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Sudo guard ignores heredoc prose (2.22.1)
+
+- **pi-sudo 2.1.1**: the guard no longer treats heredoc bodies as executable
+  command text unless a local shell runs them. `git commit -F - <<EOF` messages
+  and `ssh … <<'EOF'` stdin containing the word "sudo" (quoted, backticked or
+  plain) no longer block; `bash <<EOF … sudo … EOF` still does. The remote `ssh`
+  branch keeps inspecting the raw command line (so `ssh host 'sudo …'` is still
+  blocked) with heredoc bodies removed.
+
 ### Selection ask contrast pass (2.22.1)
 
 - **pi-selection 2.19.1**: restyle the ask panel after OpenCode's question
