@@ -302,12 +302,42 @@ function parseSshArgs(raw: string | undefined): string[] {
 }
 
 /**
- * Reduce a bash command to the text that could actually run: command
- * substitutions ($(…), `…`) are preserved because their content executes;
- * quoted spans are data (not command position) and comments are inert, so they
- * are stripped to avoid false positives on `sudo` appearing as plain text
- * (commit messages, docs, grep patterns, …).
+ * Remove heredoc bodies (stdin data) while keeping the command line.
+ *
+ * Heredoc prose routinely contains the word "sudo" — quoted, backticked or
+ * plain — and it is data for anything that does not execute it.
  */
+export function stripHeredocBodies(cmd: string): string {
+	const out: string[] = [];
+	const pending: string[] = [];
+	for (const line of cmd.split("\n")) {
+		if (pending.length) {
+			if (line.trimEnd() === pending[0]) {
+				pending.shift();
+				out.push(line);
+			}
+			continue;
+		}
+		out.push(line);
+		for (const match of line.matchAll(/<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/g)) {
+			if (match[2]) pending.push(match[2]);
+		}
+	}
+	return out.join("\n");
+}
+
+/**
+ * Does a heredoc body actually execute *locally*?
+ *
+ * `bash <<EOF … EOF` runs the body; `git commit -F - <<EOF … EOF` and
+ * `ssh host bash -s <<EOF … EOF` only consume it as data. Guessing wrong here
+ * means either a false positive (prose with backticks/`sudo`) or a miss.
+ */
+export function heredocExecutesLocally(cmd: string, commandText: string): boolean {
+	if (/(^|[\s;&|])ssh\s/.test(commandText)) return false; // remote stdin, not a local command
+	return /(^|[\s;&|])(?:sudo\s+)?(?:bash|sh|zsh|dash|ksh)\b[^\n]*<<-?/.test(cmd);
+}
+
 export function guardRelevantText(cmd: string): string {
 	// Pull out command substitutions first: their content executes.
 	let residual = "";
@@ -362,15 +392,19 @@ export const GUARD_ALLOW_TOKEN = "pi-sudo:allow";
  */
 export function sudoGuardDecision(cmd: string): GuardDecision {
 	const relevant = guardRelevantText(cmd);
+	// Local risk ignores heredoc bodies unless a local shell will execute them.
+	// Heredoc prose frequently contains backticked or quoted words like "sudo".
+	const localText = heredocExecutesLocally(cmd, stripHeredocBodies(cmd)) ? relevant : guardRelevantText(stripHeredocBodies(cmd));
 	// `sudo -n` (non-interactive) is allowed: the local regex excludes it via
 	// lookahead, the remote branch checks for it on the raw command.
-	const hasInteractive = /(^|[\s;&|])sudo(\s+(?!-n\b)|$)/.test(relevant);
-	// Remote: quoted text after `ssh` is a remote command that executes, so the
-	// sudo check for the remote branch runs against the RAW command; `ssh` must
-	// itself be at command position in the stripped text (quoted `ssh` text is
-	// just data — e.g. a commit message mentioning it).
-	const sshAtCommandPos = /(^|[\s;&|])ssh\s/.test(relevant);
-	const hasRemoteInteractive = sshAtCommandPos && /\bsudo\b/.test(cmd) && !/\bsudo\s+-n\b/.test(cmd);
+	const hasInteractive = /(^|[\s;&|])sudo(\s+(?!-n\b)|$)/.test(localText);
+	// Remote: quoted text after `ssh` is a remote command that executes, so this
+	// branch inspects the raw command line rather than the stripped text. Heredoc
+	// bodies are stdin for the remote shell, not the remote command, so they are
+	// removed first; a quoted `sudo` inside them is prose, not elevation.
+	const remoteText = stripHeredocBodies(cmd);
+	const sshAtCommandPos = /(^|[\s;&|])ssh\s/.test(guardRelevantText(remoteText));
+	const hasRemoteInteractive = sshAtCommandPos && /\bsudo\b/.test(remoteText) && !/\bsudo\s+-n\b/.test(remoteText);
 	const hit = hasInteractive || hasRemoteInteractive;
 	const remote = hasRemoteInteractive;
 	const reason = remote

@@ -66,6 +66,13 @@ since it cannot hang.
 To avoid false positives, the guard matches `sudo` only where it could
 actually run: quoted spans and comments are stripped first, while command
 substitutions (`$(…)`, backticks) are kept because their content executes.
+Heredoc bodies are treated as data unless a *local* shell executes them:
+`bash <<EOF … sudo … EOF` still blocks, while `git commit -F - <<EOF … EOF`
+and `ssh host bash -s <<EOF … EOF` do not, because the body is prose or remote
+stdin rather than a local command. The remote branch inspects the raw command
+line (so `ssh host 'sudo …'` is still blocked) with heredoc bodies removed, so
+prose like `echo "not readable without sudo"` inside `ssh … <<'EOF'` and
+backticked `sudo` in a commit message no longer block.
 When `sudo` appears only as text (commit messages, docs, grep patterns), the
 command author can append the shell comment `# pi-sudo:allow` to bypass the
 guard — the user sees a notification when that happens. The guard's behaviour
