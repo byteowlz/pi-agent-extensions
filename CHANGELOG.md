@@ -4,6 +4,10 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### EAVS catalog visibility diagnostics (2.22.2)
+
+- **pi-eavs 0.1.2**: restore self-hosted models with missing pricing; label unknown prices explicitly and preserve the distinction across cached metadata. Report accepted/omitted/unknown-price counts without changing gateway policy. Pi numeric costs use documented zero accounting placeholders for unknown prices.
+
 ### Sudo guard ignores heredoc prose (2.22.1)
 
 - **pi-sudo 2.1.1**: the guard no longer treats heredoc bodies as executable

@@ -127,7 +127,7 @@ test("projection preserves provider paths, native mappings, limits, skip policy 
 	assert.throws(() => projectCatalog(origin, duplicate));
 	const unpriced = catalog();
 	for (const p of unpriced.providers) p.models[0].pricing.rates.input = 0;
-	assert.throws(() => projectCatalog(origin, unpriced));
+	assert.equal(projectCatalog(origin, unpriced).models.length, 3);
 	assert.throws(() => projectCatalog(origin, { ...catalog(), scope: "all-models" }));
 	assert.throws(() => restoreCatalog(origin, [{ ...projection.models[0], baseUrl: "https://evil.example/chat/v1" }]));
 });
