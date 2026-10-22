@@ -151,6 +151,33 @@ test(
 					);
 				}
 				mode = "startup";
+				for (const sdk of [
+					resolve("node_modules/@earendil-works/pi-coding-agent/dist/index.js"),
+					process.env.EAVS_TEST_INSTALLED_SDK,
+				].filter(Boolean)) {
+					const source = `
+import {createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager} from ${JSON.stringify(sdk)};
+const dir=process.env.PI_CODING_AGENT_DIR;
+const loader=new DefaultResourceLoader({cwd:dir,agentDir:dir,noSkills:true,noPromptTemplates:true,noThemes:true,additionalExtensionPaths:[${JSON.stringify(resolve("pi-eavs/index.ts"))}]});
+await loader.reload();
+const {session}=await createAgentSession({cwd:dir,agentDir:dir,resourceLoader:loader,sessionManager:SessionManager.inMemory(),settingsManager:SettingsManager.inMemory(),tools:[]});
+try {
+await session.bindExtensions({});
+await new Promise(r=>setTimeout(r,100));
+const answers=[${JSON.stringify(origin)},${JSON.stringify(key)}];
+try {await session.modelRuntime.login('eavs','api_key',{signal:new AbortController().signal,prompt:async()=>answers.shift(),notify:()=>{}});console.log(JSON.stringify({ok:true,models:session.modelRuntime.getModels('eavs').map(m=>m.id)}));}
+catch(e) {console.log(JSON.stringify({ok:false,synchronization:e.name==='CredentialSynchronizationError',causeKind:['AbortError','SyntaxError','TypeError'].includes(e.cause?.name)?e.cause.name:'other',causeCode:['EACCES','EPERM','ELOCKED','ENOENT'].includes(e.cause?.code)?e.cause.code:undefined}));}
+} finally {session.dispose();}
+`;
+					const result = await exec("node", ["--input-type=module", "-e", source], {
+						cwd: dir,
+						env: { PATH: process.env.PATH, HOME: dir, PI_CODING_AGENT_DIR: dir, NODE_EXTRA_CA_CERTS: join(dir, "cert.pem") },
+						timeout: 15_000,
+					});
+					assert.ok(!result.stdout.includes(key));
+					assert.deepEqual(JSON.parse(result.stdout), { ok: true, models: ["fixture/startup-model"] }, result.stdout);
+					await rm(join(dir, "auth.json"), { force: true });
+				}
 				await writeFile(
 					join(dir, "auth.json"),
 					JSON.stringify({ eavs: { type: "api_key", key, env: { EAVS_SERVER: origin } } }),

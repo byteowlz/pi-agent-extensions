@@ -1,6 +1,6 @@
 # pi-eavs
 
-Self-contained native provider for the installed Pi 1.0.0 SDK. Try without installing:
+Self-contained native provider for Pi's native-provider SDK (tested against repository and bundled runtimes). Try without installing:
 
 ```sh
 pi -e ./pi-eavs/index.ts
@@ -76,6 +76,27 @@ are adapted from EAVS `adapters/pi/provider-library.ts`; the package carries its
 own implementation and only uses host-provided Pi peers. There is no runtime
 configuration file/schema: configuration is the native login credential.
 
+## Troubleshooting login and refresh
+
+`/eavs-refresh` reports only safe categories: authorization denied (check key/scope),
+network/TLS (check connectivity/trust), catalog schema (check gateway compatibility),
+SDK API compatibility, or local state/publication (check Pi storage integrity and
+permissions). It never displays raw exception text, cache fragments or credentials.
+
+Catalog validation and credential synchronization are separate steps. A successful
+validation followed by `CredentialSynchronizationError` does **not** imply a rejected
+key: Pi may have already saved `key` and `env.EAVS_SERVER` in `auth.json`, then failed
+to read or publish its shared models cache. A synthetic truncated models-store JSON
+reproduces both native login failure (with a `SyntaxError` cause) and manual refresh
+failure even with a valid catalog. Restarting or `/reload` cannot repair that file.
+
+Do not delete credentials, edit `models.json`, or silently reset the generic SDK
+cache. Obtain explicit consent before privately backing up/quarantining a corrupt
+`models-store.json`, preserving its exact bytes and restrictive permissions. Repair
+belongs to Pi's storage lifecycle; this extension only diagnoses and leaves cache
+bytes untouched. A healthy-cache metadata refresh remains a separate verification
+step after any authorized recovery. Poll scheduling is unchanged in this release.
+
 ## Verification (repository root)
 
 ```sh
@@ -85,6 +106,15 @@ node_modules/.bin/tsc --noEmit --strict --skipLibCheck --target ES2022 --module 
 node_modules/.bin/biome check pi-eavs
 npm pack ./pi-eavs --dry-run
 ```
+
+To additionally exercise native login in a particular installed SDK, set
+`EAVS_TEST_INSTALLED_SDK` to its absolute `pi-coding-agent/dist/index.js` path
+when running the tests. The HTTPS test loads the actual extension, creates and
+binds a real SDK session, performs native API-key login, and verifies the published
+model ID against both SDKs. It does not drive the terminal login dialog. Child
+processes have isolated HOME/agent directories and trust only the temporary CA.
+Failure diagnostics expose only allowlisted error categories/codes, not error
+messages, credentials, response bodies or auth files.
 
 Tests use synthetic keys, mock native APIs, private temporary SDK credential/model
 stores and local HTTPS fixtures. OpenSSL is needed only for fixture certificates;

@@ -1,6 +1,7 @@
 export interface RefreshOutcome {
 	failed: boolean;
 	configured: boolean;
+	diagnostic?: string;
 }
 
 /** Session-owned bounded polling: one request at a time, exponential backoff,
