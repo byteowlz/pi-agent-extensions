@@ -73,7 +73,12 @@ function compat(value: unknown): NonNullable<Model<"openai-completions">["compat
 }
 
 function modelCompat(api: NativeApi, provider: unknown, model: unknown) {
-	return api === "openai-completions" ? { compat: { ...compat(provider), ...compat(model) } } : {};
+	if (api === "openai-completions") return { compat: { ...compat(provider), ...compat(model) } };
+	// Models that reject budget thinking (e.g. Claude Sonnet 5.5): Pi then sends
+	// adaptive thinking with an effort mapped from the thinking level.
+	if (api === "anthropic-messages" && object(model) && model.forceAdaptiveThinking === true)
+		return { compat: { forceAdaptiveThinking: true } };
+	return {};
 }
 
 export type EavsModel = Model<NativeApi> & { eavsPricing?: "unknown"; eavsReasoningEfforts?: string[] };

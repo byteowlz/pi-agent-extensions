@@ -4,6 +4,10 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### EAVS adaptive thinking (2.23.6)
+
+- **pi-eavs 0.2.5**: honor the catalog's `forceAdaptiveThinking` for Anthropic models.
+
 ### EAVS thinking levels from the catalog (2.23.5)
 
 - **pi-eavs 0.2.4**: offer only the thinking levels the upstream accepts, from the EAVS catalog's `reasoning_efforts`.
