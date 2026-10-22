@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Projected requests now send `X-Provider` matching the catalog's provider-pinned path, overriding any caller value, so the gateway never falls back to model-name provider heuristics (e.g. a self-hosted `deepseek-*` model being routed to an unconfigured `deepseek` provider).
+- Warn at session start when hand-written `models.json` providers target the saved EAVS origin directly; the warning names them and the remedy (`/login` → EAVS with the bare server URL). Provider names only; never keys.
+
 ## 0.2.0
 
 - HTTPS remains the default. Explicit exact-origin HTTP exceptions support localhost, tailnet and other intentional gateways without inferring network trust.

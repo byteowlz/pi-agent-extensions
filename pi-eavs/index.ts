@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir, readStoredCredential } from "@earendil-works/pi-coding-agent";
+import { serverAddress } from "./catalog.js";
 import { HttpPolicy } from "./http-policy.js";
 import { type CatalogSummary, type EavsOptions, eavsProvider } from "./provider.js";
 import { RefreshLoop } from "./refresh-loop.js";
@@ -13,6 +14,32 @@ function diagnostic(error: unknown): string {
 		return "Catalog schema invalid: check gateway catalog compatibility; invalid scope is removed.";
 	}
 	return "Local state/publication failure: check Pi auth and models-store file integrity/permissions and persisted EAVS_SERVER. A malformed models-store.json can block login and refresh. Back up privately; request consent before quarantining it. Do not delete auth.json or models.json.";
+}
+
+/** Non-EAVS providers whose models target the EAVS gateway origin directly.
+ * Such hand-written entries skip catalog routing and can hit the gateway's
+ * model-name provider heuristics; only provider names are returned. */
+export function directGatewayProviders(models: readonly { provider: string; baseUrl: string }[], origin: string): string[] {
+	const names = new Set<string>();
+	for (const model of models) {
+		if (model.provider === "eavs") continue;
+		try {
+			if (new URL(model.baseUrl).origin === origin) names.add(model.provider);
+		} catch {
+			/* Not a URL; nothing to compare. */
+		}
+	}
+	return [...names].sort();
+}
+
+function warnDirectGatewayEntries(ctx: ExtensionContext, origin: string | undefined) {
+	if (!origin || typeof ctx.modelRegistry?.getAll !== "function") return;
+	const names = directGatewayProviders(ctx.modelRegistry.getAll(), origin);
+	if (!names.length) return;
+	ctx.ui.notify(
+		`models.json provider(s) ${names.join(", ")} call the EAVS gateway directly and bypass its catalog routing, so requests can reach the wrong upstream. Remove them; /login → EAVS with the bare server URL discovers every provider and pins each route.`,
+		"warning"
+	);
 }
 
 export default async function (pi: ExtensionAPI) {
@@ -81,6 +108,13 @@ export async function initializeEavs(
 	pi.registerProvider(provider);
 	pi.on("session_start", async (_event, ctx) => {
 		context = ctx;
+		try {
+			const credential = readCredential("eavs");
+			const server = credential?.type === "api_key" ? credential.env?.EAVS_SERVER : undefined;
+			warnDirectGatewayEntries(ctx, server ? serverAddress(server) : undefined);
+		} catch {
+			/* Advisory only; never block startup or surface credential state. */
+		}
 		if (!offline()) loop.start();
 	});
 	pi.on("session_shutdown", async () => {

@@ -236,21 +236,33 @@ export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 		stream(model, context, requestOptions) {
 			return dispatch(
 				model,
-				(native, safeFetch) => delegate.stream(native, context, { ...requestOptions, fetch: safeFetch }),
+				(native, safeFetch, gatewayProvider) =>
+					delegate.stream(native, context, {
+						...requestOptions,
+						headers: { ...requestOptions?.headers, "X-Provider": gatewayProvider },
+						fetch: safeFetch,
+					}),
 				requestOptions?.apiKey
 			);
 		},
 		streamSimple(model, context, requestOptions) {
 			return dispatch(
 				model,
-				(native, safeFetch) => delegate.streamSimple(native, context, { ...requestOptions, fetch: safeFetch }),
+				(native, safeFetch, gatewayProvider) =>
+					delegate.streamSimple(native, context, {
+						...requestOptions,
+						headers: { ...requestOptions?.headers, "X-Provider": gatewayProvider },
+						fetch: safeFetch,
+					}),
 				requestOptions?.apiKey
 			);
 		},
 	};
 	function dispatch(
 		model: Model<NativeApi>,
-		run: (native: Model<NativeApi>, safeFetch: typeof fetch) => ReturnType<Provider["streamSimple"]>,
+		// The catalog path already pins the provider; X-Provider makes that pin
+		// explicit so the gateway never falls back to model-name heuristics.
+		run: (native: Model<NativeApi>, safeFetch: typeof fetch, gatewayProvider: string) => ReturnType<Provider["streamSimple"]>,
 		key?: string
 	) {
 		return lazyStream(model, async () => {
@@ -283,7 +295,8 @@ export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 						(status) => {
 							responseStatus = status;
 						}
-					)
+					),
+					known.id.slice(0, known.id.indexOf("/"))
 				);
 			} catch {
 				throw new Error(failure());

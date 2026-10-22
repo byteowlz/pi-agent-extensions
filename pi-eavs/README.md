@@ -124,6 +124,13 @@ configuration file/schema: configuration is the native login credential.
 
 ## Troubleshooting inference
 
+Use only `/login` → EAVS with the bare server URL (for example
+`https://eavs.example`); the catalog supplies every provider route. Do not add
+hand-written `models.json` providers for the EAVS origin: they skip the pinned
+`/<provider>/v1` routes, and the gateway's unprefixed route may pick a provider
+from the model name. The extension warns at session start when it finds such
+entries. Projected requests also send `X-Provider` matching the pinned path.
+
 Inference failures expose only the HTTP status, or indicate that no HTTP
 response was received (transport/SDK setup). A 200 followed by a failure points
 to streaming/protocol/cancellation, not initial key admission. A 401/403 can be

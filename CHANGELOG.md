@@ -4,6 +4,10 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### EAVS provider pinning (2.23.1)
+
+- **pi-eavs 0.2.1**: send `X-Provider` on every projected request alongside the provider-pinned path; warn about hand-written `models.json` entries that target the EAVS gateway directly.
+
 ### Explicit EAVS HTTP exceptions (2.23.0)
 
 - **pi-eavs 0.2.0**: exact-origin HTTP opt-in with native login consent before secret entry; session-only or private saved user exceptions. No implicit localhost/tailnet trust, project-granted exceptions, redirects, proxies or TLS relaxation.
