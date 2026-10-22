@@ -40,7 +40,9 @@ export function describeFailure(state: TransportState | undefined): string {
 		case "response":
 			return state.status < 300
 				? `EAVS returned HTTP ${state.status}, but the response stream failed or was cancelled.`
-				: `EAVS request rejected with HTTP ${state.status} by the gateway or upstream.`;
+				: `EAVS request rejected with HTTP ${state.status} by the gateway or upstream.${
+						state.detail ? ` Upstream said: "${state.detail}"` : ""
+					}`;
 	}
 }
 

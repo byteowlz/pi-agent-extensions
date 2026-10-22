@@ -5,9 +5,9 @@ import { InMemoryModelsStore } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { HttpPolicy } from "./http-policy.js";
 import { describeFailure, eavsProvider } from "./provider.js";
-import { type TransportState, fetchCatalog, secureFetch } from "./transport.js";
+import { type TransportState, fetchCatalog, secureFetch, upstreamDetail } from "./transport.js";
 
-test("explicit HTTP uses bounded direct transport; native failures disclose status but never bodies", async () => {
+test("explicit HTTP uses bounded direct transport; native failures show the sanitized upstream message, never keys", async () => {
 	let origin = "";
 	let mode = "catalog";
 	let requests = 0;
@@ -129,7 +129,7 @@ test("explicit HTTP uses bounded direct transport; native failures disclose stat
 		assert.equal(result.stopReason, "error");
 		assert.match(result.errorMessage ?? "", /HTTP 403/);
 		assert.ok(!result.errorMessage?.includes(key));
-		assert.ok(!result.errorMessage?.includes("secret-body"));
+		assert.match(result.errorMessage ?? "", /Upstream said: "private \[redacted\] secret-body"/);
 		mode = "redirect";
 		await assert.rejects(
 			secureFetch(origin, () => policy.origins())(`${origin}/local/v1/chat/completions`, {
@@ -191,4 +191,39 @@ test("transport reports a safe stage and network code when the server drops the 
 	assert.match(describeFailure(undefined), /never sent/);
 	assert.match(describeFailure({ stage: "response", status: 200 }), /HTTP 200, but the response stream failed/);
 	assert.match(describeFailure({ stage: "response", status: 403 }), /rejected with HTTP 403/);
+});
+
+test("upstream error detail is extracted, bounded and redacted", () => {
+	const vllm = JSON.stringify({
+		error: {
+			code: "BadRequestError",
+			message: "Unexpected reasoning effort minimal. Supported types are xhigh (default), medium, and low.",
+			type: "invalid_request_error",
+		},
+	});
+	assert.equal(
+		upstreamDetail(vllm),
+		"Unexpected reasoning effort minimal. Supported types are xhigh (default), medium, and low."
+	);
+	assert.equal(upstreamDetail(JSON.stringify({ message: "plain message" })), "plain message");
+	assert.equal(upstreamDetail(JSON.stringify({ detail: "fastapi detail" })), "fastapi detail");
+	assert.equal(upstreamDetail(JSON.stringify({ error: "string error" })), "string error");
+	assert.equal(upstreamDetail("Bad Gateway\r\n\tupstream down"), "Bad Gateway upstream down");
+	assert.equal(upstreamDetail(""), undefined);
+	assert.equal(upstreamDetail(JSON.stringify({ ok: false })), undefined);
+	const leaky = upstreamDetail(
+		JSON.stringify({
+			error: {
+				message: "bad key eavs-AbC_123-xyz sk-or-v1-synthetic000 Bearer abc.def token=0123456789abcdef0123456789abcdef0123",
+			},
+		})
+	);
+	assert.ok(leaky);
+	for (const secret of ["eavs-AbC", "sk-or-v1", "abc.def", "0123456789abcdef0123456789abcdef"])
+		assert.ok(!leaky.includes(secret), `${secret} leaked: ${leaky}`);
+	assert.ok((upstreamDetail("x".repeat(5000)) ?? "").length <= 301);
+	assert.match(
+		describeFailure({ stage: "response", status: 400, detail: "Unexpected reasoning effort minimal." }),
+		/HTTP 400 by the gateway or upstream\. Upstream said: "Unexpected reasoning effort minimal\."/
+	);
 });

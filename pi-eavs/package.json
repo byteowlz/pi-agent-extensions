@@ -1,6 +1,6 @@
 {
   "name": "@byteowlz/pi-eavs",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Native Pi login and scoped chat model discovery for EAVS",
   "type": "module",
   "license": "MIT",

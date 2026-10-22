@@ -136,8 +136,11 @@ locally (destination or HTTP exception), was cancelled, hit a network error
 before any HTTP response (with the Node/OpenSSL code, such as `ECONNRESET` or
 `ENOTFOUND`, and the request size), was rejected with an HTTP status, or failed
 while streaming after HTTP 200. A 401/403 can come from the gateway or the
-upstream; it is not automatically proof that the scoped key is invalid. URLs,
-headers, request/response bodies and raw SDK errors are never displayed.
+upstream; it is not automatically proof that the scoped key is invalid. For HTTP
+rejections the upstream's own error message is shown (`Upstream said: "..."`):
+extracted from a bounded body prefix, single-line, capped at 300 characters, with
+key-, bearer- and token-shaped values redacted. URLs, headers, raw bodies and raw
+SDK errors are never displayed.
 
 ## Troubleshooting login and refresh
 

@@ -4,6 +4,10 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### EAVS upstream error messages (2.23.4)
+
+- **pi-eavs 0.2.3**: HTTP rejections show the upstream's sanitized error message (bounded, single-line, secrets redacted) instead of only the status.
+
 ### EAVS failure stages (2.23.2)
 
 - **pi-eavs 0.2.2**: stage-specific inference errors (with safe network codes and request size); API clients imported from the embedded `pi-ai/compat` module.
