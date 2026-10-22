@@ -40,7 +40,14 @@ function connection(credential?: Credential) {
 	}
 }
 
+export interface CatalogSummary {
+	models: number;
+	skipped: number;
+	unknownPricing: number;
+}
+
 export interface EavsOptions {
+	onCatalogSummary?: (summary: CatalogSummary) => void;
 	onAuthChange?: (configured: boolean) => void;
 	fetchCatalog?: CatalogFetch;
 	/** Dependency injection for offline dispatch tests, not runtime configuration. */
@@ -58,6 +65,15 @@ function project(origin: string, value: unknown): Projection {
 export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 	const fetchMetadata = options.fetchCatalog ?? fetchCatalog;
 	const apis = options.apis ?? implementations;
+	const projectMetadata = (origin: string, value: unknown) => {
+		const projection = project(origin, value);
+		options.onCatalogSummary?.({
+			models: projection.models.length,
+			skipped: projection.skipped,
+			unknownPricing: projection.models.filter((m) => m.eavsPricing === "unknown").length,
+		});
+		return projection;
+	};
 	let models: Model<NativeApi>[] = [];
 	let binding: string | undefined;
 	let pending: { binding: string; projection: Projection } | undefined;
@@ -92,7 +108,7 @@ export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 						type: "progress",
 						message: "Validating scoped chat catalog metadata only; no probe or inference.",
 					});
-					const projection = project(origin, await fetchMetadata(origin, key, interaction.signal));
+					const projection = projectMetadata(origin, await fetchMetadata(origin, key, interaction.signal));
 					interaction.signal.throwIfAborted();
 					const credential: ApiKeyCredential = { type: "api_key", key, env: { EAVS_SERVER: origin } };
 					const configured = connection(credential);
@@ -100,7 +116,7 @@ export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 					pending = { binding: configured.binding, projection };
 					interaction.notify({
 						type: "info",
-						message: `Validated ${projection.models.length} chat models; skipped ${projection.skipped} incomplete models. Prices are unverified estimates, not settlement. Empty scope is valid. If Pi reports credential synchronization failure next, run /eavs-refresh for a safe diagnostic; local cache publication may have failed even though validation succeeded.`,
+						message: `Validated ${projection.models.length} chat models; skipped ${projection.skipped} incomplete models. Prices are unverified estimates, not settlement; models labeled price unknown use zero local accounting placeholders, not verified free inference. Empty scope is valid. If Pi reports credential synchronization failure next, run /eavs-refresh for a safe diagnostic; local cache publication may have failed even though validation succeeded.`,
 					});
 					return credential;
 				} catch (error) {
@@ -152,7 +168,7 @@ export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 				let next: Model<NativeApi>[] | undefined;
 				if (pending?.binding === c.binding) next = pending.projection.models;
 				else if (context.allowNetwork && process.env.PI_OFFLINE === undefined)
-					next = project(c.origin, await fetchMetadata(c.origin, c.key, context.signal)).models;
+					next = projectMetadata(c.origin, await fetchMetadata(c.origin, c.key, context.signal)).models;
 				else if (binding === c.binding) return;
 				else if (context.stored?.etag === c.binding) next = restoreCatalog(c.origin, context.stored.models);
 				if (!next) next = [];

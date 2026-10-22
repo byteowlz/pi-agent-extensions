@@ -61,13 +61,20 @@ function modelCompat(api: NativeApi, provider: unknown, model: unknown) {
 	return api === "openai-completions" ? { compat: { ...compat(provider), ...compat(model) } } : {};
 }
 
+export type EavsModel = Model<NativeApi> & { eavsPricing?: "unknown" };
+const UNKNOWN_PRICE_SUFFIX = " [price unknown]";
+
 export interface Projection {
-	models: Model<NativeApi>[];
+	models: EavsModel[];
 	skipped: number;
 }
 
-// Adapted from EAVS adapters/pi/provider-library.ts: same schema, native route
-// allowlist, pricing/capability skip policy. Vendored logic has no sibling dependency.
+function priceLabel(model: EavsModel): string {
+	return model.eavsPricing === "unknown" ? UNKNOWN_PRICE_SUFFIX : "";
+}
+
+// Adapted from EAVS adapters/pi/provider-library.ts: same schema and native route
+// allowlist. Missing prices do not exclude self-hosted models; invalid metadata does.
 export function projectCatalog(origin: string, catalog: unknown): Projection {
 	if (
 		serverOrigin(origin) !== origin ||
@@ -78,7 +85,7 @@ export function projectCatalog(origin: string, catalog: unknown): Projection {
 		catalog.providers.length > 256
 	)
 		throw unavailable();
-	const models: Model<NativeApi>[] = [];
+	const models: EavsModel[] = [];
 	const seen = new Set<string>();
 	let count = 0;
 	let skipped = 0;
@@ -106,7 +113,7 @@ export function projectCatalog(origin: string, catalog: unknown): Projection {
 			models.push({
 				...projected,
 				id: `${p.id}/${m.id}`,
-				name: `${p.id}: ${m.name}`,
+				name: `${p.id}: ${m.name}${priceLabel(projected)}`,
 				provider: "eavs",
 				baseUrl: `${origin}${p.base_path}`,
 				...modelCompat(route[0], p.compat, m.compat),
@@ -117,21 +124,20 @@ export function projectCatalog(origin: string, catalog: unknown): Projection {
 	return { models, skipped };
 }
 
-function projectModel(m: Record<string, unknown>, api: NativeApi): Model<NativeApi> | undefined {
-	const price = m.pricing;
+function modelCost(price: unknown): EavsModel["cost"] | undefined {
+	// Pi requires numeric costs. Zero here is an accounting placeholder, NOT
+	// a price estimate or gateway budget exemption; preserve unknown separately.
+	if (price === null || price === undefined) return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 	if (!object(price) || price.status !== "unverified_estimate" || price.unit !== "USD_per_million_tokens" || !object(price.rates))
 		return;
 	const { input, output, cache_read: cacheRead, cache_write: cacheWrite } = price.rates;
-	if (
-		![input, output, cacheRead, cacheWrite].every((v) => typeof v === "number" && Number.isFinite(v) && v >= 0) ||
-		typeof input !== "number" ||
-		input <= 0 ||
-		typeof output !== "number" ||
-		output <= 0 ||
-		typeof cacheRead !== "number" ||
-		typeof cacheWrite !== "number"
-	)
-		return;
+	if (![input, output, cacheRead, cacheWrite].every((v) => typeof v === "number" && Number.isFinite(v) && v >= 0)) return;
+	return { input, output, cacheRead, cacheWrite } as EavsModel["cost"];
+}
+
+function projectModel(m: Record<string, unknown>, api: NativeApi): EavsModel | undefined {
+	const cost = modelCost(m.pricing);
+	if (!cost) return;
 	if (
 		typeof m.context_window !== "number" ||
 		!Number.isInteger(m.context_window) ||
@@ -157,12 +163,23 @@ function projectModel(m: Record<string, unknown>, api: NativeApi): Model<NativeA
 		input: m.input,
 		contextWindow: m.context_window,
 		maxTokens: m.max_tokens,
-		cost: { input, output, cacheRead, cacheWrite },
+		cost,
+		...(m.pricing === null || m.pricing === undefined ? { eavsPricing: "unknown" as const } : {}),
 	};
 }
 
+function restorePriceLabel(m: Record<string, unknown>, provider: string) {
+	if (!object(m.cost) || (m.eavsPricing !== undefined && m.eavsPricing !== "unknown")) throw unavailable();
+	const unknownPrice = m.eavsPricing === "unknown";
+	if (unknownPrice && [m.cost.input, m.cost.output, m.cost.cacheRead, m.cost.cacheWrite].some((rate) => rate !== 0))
+		throw unavailable();
+	const label = typeof m.name === "string" ? m.name.replace(`${provider}: `, "") : undefined;
+	const name = unknownPrice && label?.endsWith(UNKNOWN_PRICE_SUFFIX) ? label.slice(0, -UNKNOWN_PRICE_SUFFIX.length) : label;
+	return { unknownPrice, name };
+}
+
 /** Revalidate persisted metadata instead of trusting cache URLs/headers. */
-export function restoreCatalog(origin: string, cached: readonly unknown[]): Model<NativeApi>[] {
+export function restoreCatalog(origin: string, cached: readonly unknown[]): EavsModel[] {
 	if (cached.length > 4096) throw unavailable();
 	const providers = new Map<string, Record<string, unknown>>();
 	for (const m of cached) {
@@ -194,19 +211,22 @@ export function restoreCatalog(origin: string, cached: readonly unknown[]): Mode
 			providers.set(provider, p);
 		}
 		if (p.api !== m.api) throw unavailable();
+		const { unknownPrice, name } = restorePriceLabel(m, provider);
 		(p.models as unknown[]).push({
 			id,
-			name: typeof m.name === "string" ? m.name.replace(`${provider}: `, "") : undefined,
+			name,
 			input: m.input,
 			reasoning: m.reasoning,
 			context_window: m.contextWindow,
 			max_tokens: m.maxTokens,
 			compat: m.compat,
-			pricing: {
-				status: "unverified_estimate",
-				unit: "USD_per_million_tokens",
-				rates: { input: m.cost.input, output: m.cost.output, cache_read: m.cost.cacheRead, cache_write: m.cost.cacheWrite },
-			},
+			pricing: unknownPrice
+				? null
+				: {
+						status: "unverified_estimate",
+						unit: "USD_per_million_tokens",
+						rates: { input: m.cost.input, output: m.cost.output, cache_read: m.cost.cacheRead, cache_write: m.cost.cacheWrite },
+					},
 		});
 	}
 	return projectCatalog(origin, { schema_version: 1, scope: "key-filtered-chat-candidates", providers: [...providers.values()] })

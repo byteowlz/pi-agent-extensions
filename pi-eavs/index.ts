@@ -1,5 +1,5 @@
 import { type ExtensionAPI, type ExtensionContext, readStoredCredential } from "@earendil-works/pi-coding-agent";
-import { type EavsOptions, eavsProvider } from "./provider.js";
+import { type CatalogSummary, type EavsOptions, eavsProvider } from "./provider.js";
 import { RefreshLoop } from "./refresh-loop.js";
 import { CatalogError } from "./transport.js";
 
@@ -23,6 +23,7 @@ export async function initializeEavs(
 	readCredential: typeof readStoredCredential = readStoredCredential
 ) {
 	let context: ExtensionContext | undefined;
+	const catalogState: { summary?: CatalogSummary } = {};
 	const offline = () => process.env.PI_OFFLINE !== undefined;
 	const loop = new RefreshLoop(async (signal) => {
 		if (!context || offline()) return { failed: false, configured: false };
@@ -44,6 +45,10 @@ export async function initializeEavs(
 	});
 	const provider = eavsProvider({
 		...options,
+		onCatalogSummary(value) {
+			catalogState.summary = value;
+			options.onCatalogSummary?.(value);
+		},
 		onAuthChange(configured) {
 			if (configured && context && !offline()) loop.start();
 			else loop.stop();
@@ -90,14 +95,18 @@ export async function initializeEavs(
 				return;
 			}
 			context = ctx;
+			catalogState.summary = undefined;
 			const outcome = await loop.run();
+			const summary = catalogState.summary as CatalogSummary | undefined;
 			ctx.ui.notify(
 				!outcome.configured
 					? "EAVS is not connected. Use /login."
 					: outcome.failed
 						? `EAVS metadata refresh failed. ${outcome.diagnostic ?? diagnostic(undefined)} No inference attempted.`
-						: "EAVS chat metadata refreshed; empty scope has no models. Prices are unverified estimates.",
-				outcome.failed || !outcome.configured ? "warning" : "info"
+						: summary
+							? `EAVS metadata refreshed: ${summary.models} models; omitted ${summary.skipped} with invalid pricing or capabilities. ${summary.unknownPricing} models have unknown pricing (zero local accounting placeholders, not verified free). Gateway authorization and budgets still apply.`
+							: "EAVS chat metadata refreshed; empty scope has no models. Prices are unverified estimates.",
+				outcome.failed || !outcome.configured || (summary?.skipped ?? 0) > 0 ? "warning" : "info"
 			);
 		},
 	});

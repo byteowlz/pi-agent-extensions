@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2
+
+- Decouple model discovery from missing/null pricing, restoring self-hosted models. Preserve an explicit unknown-price marker and visible name suffix across cached metadata; zero numeric costs are Pi-local accounting placeholders, never verified-free rates or a gateway budget exemption.
+- Accept explicit nonnegative price estimates, including zero; malformed supplied pricing and invalid capabilities remain rejected.
+- Manual refresh reports accepted/omitted/unknown-price counts. Actual scoped metadata now projects and publishes all 40 models (five unknown-price) through installed 1.3 and repository SDK, including cache roundtrip. No inference or user-cache mutation.
+
 ## 0.1.1
 
 - Add safe actionable refresh diagnostics for authorization, network/TLS, catalog schema, SDK compatibility, and local state/publication failures; never display raw errors or credentials.

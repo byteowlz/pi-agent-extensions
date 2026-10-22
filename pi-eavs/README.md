@@ -57,10 +57,18 @@ scope. It never requests or manages operator credentials.
   models from the registry, but Pi can retain an already-selected model object;
   dispatch rechecks current model membership, connection, API and route before
   use. A stale selected object whose route changed must be selected again.
-- Only chat candidates with complete declared limits, modalities, reasoning and
-  positive input/output price estimates are exposed. Incomplete models are
-  skipped; an entirely incomplete catalog is rejected. Prices are
-  **unverified estimates**, not settlement. No media/classifier discovery.
+- Chat candidates require complete declared limits, modalities and reasoning;
+  missing/null pricing does not hide self-hosted models. These models carry
+  `eavsPricing: "unknown"` and a visible `[price unknown]` name suffix, preserved
+  across cache reloads. Pi requires numeric costs, so their cost fields use zero
+  **local accounting placeholders**, not fabricated price estimates or verified
+  free inference. Pi session cost totals therefore exclude unknown charges.
+  Gateway authorization and budget enforcement remain unchanged and may still
+  reject an unpriced request for a capped key.
+- Supplied estimates must have finite nonnegative rates (explicit zero is valid).
+  Malformed pricing/capabilities are skipped; an entirely invalid catalog is
+  rejected. Estimates are **unverified**, not settlement. `/eavs-refresh` reports
+  accepted, omitted and unknown-price counts. No media/classifier discovery.
 
 TLS certificate verification is explicit (even with ambient TLS disabling),
 redirects are refused, proxy environment variables are not used, and credentials
