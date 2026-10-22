@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.4
+
+- Map the catalog's per-model `reasoning_efforts` to Pi's `thinkingLevelMap`: levels the upstream rejects are hidden and `xhigh` is offered when accepted (e.g. a vLLM accepting low/medium/xhigh offers off, low, medium, xhigh). Malformed values are ignored; models without the field keep Pi's defaults. Preserved across cache restoration.
+
 ## 0.2.3
 
 - HTTP rejections now show the upstream's error message, e.g. `Upstream said: "Unexpected reasoning effort minimal. Supported types are xhigh (default), medium, and low."`, instead of only the status. The message is extracted from at most 16 KiB of the error body (`error.message`, `message`, `detail` or plain text), flattened to one line, capped at 300 characters, and key/bearer/token-shaped values are redacted. URLs, headers and raw bodies are still never shown.
