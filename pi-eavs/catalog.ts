@@ -83,7 +83,7 @@ function modelCompat(api: NativeApi, provider: unknown, model: unknown) {
 
 export type EavsModel = Model<NativeApi> & { eavsPricing?: "unknown"; eavsReasoningEfforts?: string[] };
 
-const EFFORT_LEVELS = ["none", "off", "minimal", "low", "medium", "high", "xhigh"];
+const EFFORT_LEVELS = ["none", "off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /** Gateway-reported accepted reasoning efforts, or undefined if unusable.
  * Advisory metadata: malformed values are ignored, never fatal. */
@@ -93,12 +93,13 @@ function reasoningEfforts(value: unknown): string[] | undefined {
 	return efforts.length === value.length && efforts.some((v) => v !== "none" && v !== "off") ? efforts : undefined;
 }
 
-/** Hide Pi thinking levels the upstream rejects; expose xhigh only when
- * accepted. Pi clamps a hidden selection upward, like the gateway rewrite. */
+/** Hide Pi thinking levels the upstream rejects; expose xhigh and max only
+ * when accepted. Pi clamps a hidden selection upward, like the gateway rewrite. */
 function thinkingLevelMap(efforts: string[]): NonNullable<Model<NativeApi>["thinkingLevelMap"]> {
-	const map: NonNullable<Model<NativeApi>["thinkingLevelMap"]> = { max: null };
+	const map: NonNullable<Model<NativeApi>["thinkingLevelMap"]> = {};
 	for (const level of ["minimal", "low", "medium", "high"] as const) if (!efforts.includes(level)) map[level] = null;
 	map.xhigh = efforts.includes("xhigh") ? "xhigh" : null;
+	map.max = efforts.includes("max") ? "max" : null;
 	return map;
 }
 const UNKNOWN_PRICE_SUFFIX = " [price unknown]";
@@ -110,6 +111,31 @@ export interface Projection {
 
 function priceLabel(model: EavsModel): string {
 	return model.eavsPricing === "unknown" ? UNKNOWN_PRICE_SUFFIX : "";
+}
+
+/** Catalog API name -> Pi native API and path suffix under the base path. */
+const ROUTES: Record<string, [NativeApi, string]> = {
+	"openai-completions": ["openai-completions", "/chat/completions"],
+	"openai-responses": ["openai-responses", "/responses"],
+	"openai-codex-responses": ["openai-responses", "/responses"],
+	"anthropic-messages": ["anthropic-messages", "/messages"],
+};
+
+/** The validated provider route; invalid provider metadata is fatal. */
+function providerRoute(p: Record<string, unknown>): [NativeApi, string] {
+	const route = typeof p.api === "string" && Object.hasOwn(ROUTES, p.api) ? ROUTES[p.api] : undefined;
+	if (!route || p.operation !== "chat" || p.base_path !== `/${p.id}/v1` || p.request_path !== `${p.base_path}${route[1]}`)
+		throw unavailable();
+	return route;
+}
+
+/** A model's own native API route on a multi-format gateway, the provider
+ * route when it declares none, or undefined when its declaration is invalid
+ * (unknown API or a path outside the provider's base path). */
+function ownRoute(m: Record<string, unknown>, fallback: [NativeApi, string], basePath: string): [NativeApi, string] | undefined {
+	if (m.api === undefined && m.request_path === undefined) return fallback;
+	const own = typeof m.api === "string" && Object.hasOwn(ROUTES, m.api) ? ROUTES[m.api] : undefined;
+	return own && m.request_path === `${basePath}${own[1]}` ? own : undefined;
 }
 
 // Adapted from EAVS adapters/pi/provider-library.ts: same schema and native route
@@ -131,20 +157,13 @@ export function projectCatalog(origin: string, catalog: unknown, allowHttpOrigin
 	for (const p of catalog.providers) {
 		if (!object(p) || !identifier(p.id) || seen.has(p.id) || !Array.isArray(p.models)) throw unavailable();
 		seen.add(p.id);
-		const routes: Record<string, [NativeApi, string]> = {
-			"openai-completions": ["openai-completions", "/chat/completions"],
-			"openai-responses": ["openai-responses", "/responses"],
-			"openai-codex-responses": ["openai-responses", "/responses"],
-			"anthropic-messages": ["anthropic-messages", "/messages"],
-		};
-		const route = typeof p.api === "string" && Object.hasOwn(routes, p.api) ? routes[p.api] : undefined;
-		if (!route || p.operation !== "chat" || p.base_path !== `/${p.id}/v1` || p.request_path !== `${p.base_path}${route[1]}`)
-			throw unavailable();
+		const route = providerRoute(p);
 		const ids = new Set<string>();
 		for (const m of p.models) {
 			if (++count > 4096 || !object(m) || !text(m.id) || !text(m.name) || ids.has(m.id)) throw unavailable();
 			ids.add(m.id);
-			const projected = projectModel(m, route[0]);
+			const modelRoute = ownRoute(m, route, p.base_path as string);
+			const projected = modelRoute && projectModel(m, modelRoute[0]);
 			if (!projected) {
 				skipped++;
 				continue;
@@ -155,7 +174,7 @@ export function projectCatalog(origin: string, catalog: unknown, allowHttpOrigin
 				name: `${p.id}: ${m.name}${priceLabel(projected)}`,
 				provider: "eavs",
 				baseUrl: `${origin}${p.base_path}`,
-				...modelCompat(route[0], p.compat, m.compat),
+				...modelCompat(modelRoute[0], modelRoute[0] === route[0] ? p.compat : undefined, m.compat),
 			});
 		}
 	}
@@ -255,11 +274,12 @@ export function restoreCatalog(
 			};
 			providers.set(provider, p);
 		}
-		if (p.api !== m.api) throw unavailable();
 		const { unknownPrice, name } = restorePriceLabel(m, provider);
 		(p.models as unknown[]).push({
 			id,
 			name,
+			api: m.api,
+			request_path: `/${provider}/v1${suffix}`,
 			input: m.input,
 			reasoning: m.reasoning,
 			context_window: m.contextWindow,

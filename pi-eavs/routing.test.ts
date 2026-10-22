@@ -34,12 +34,13 @@ const catalog = {
 };
 
 test("projected native requests pin the gateway provider by path AND X-Provider", async () => {
-	const captured: { path: string; provider: string | null; model: string }[] = [];
+	const captured: { path: string; provider: string | null; model: string; session: string | null }[] = [];
 	const mockFetch: typeof fetch = async (input, init) => {
 		const request = new Request(input, init);
 		captured.push({
 			path: new URL(request.url).pathname,
 			provider: request.headers.get("x-provider"),
+			session: request.headers.get("x-session-affinity"),
 			model: ((await request.json()) as { model: string }).model,
 		});
 		return new Response(JSON.stringify({ error: { type: "invalid_request_error", message: "offline" } }), {
@@ -80,9 +81,18 @@ test("projected native requests pin the gateway provider by path AND X-Provider"
 			.streamSimple(
 				m,
 				{ messages: [{ role: "user", content: "offline", timestamp: 0 }] },
-				{ maxRetries: 0, headers: { "X-Provider": "spoofed" } }
+				{ maxRetries: 0, sessionId: "pi-session-1", headers: { "X-Provider": "spoofed" } }
 			)
 			.result();
+	// Pi's session id reaches the gateway on every API, for upstream affinity.
+	assert.deepEqual(
+		captured.map(({ session }) => session),
+		["pi-session-1", "pi-session-1", "pi-session-1"]
+	);
+	await runtime
+		.streamSimple(models[0], { messages: [{ role: "user", content: "offline", timestamp: 0 }] }, { maxRetries: 0 })
+		.result();
+	assert.equal(captured.pop()?.session, null, "no session id, no header");
 	assert.deepEqual(
 		captured.map(({ path, provider, model: id }) => [path, provider, id]),
 		[
