@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2
+
+- Inference failures name the stage that failed instead of "failed or cancelled": request never built, blocked locally, cancelled, network error with its Node/OpenSSL code and request size, HTTP rejection, or stream failure after HTTP 200. Only stage, error code, status and size are shown; never URLs, headers, bodies or keys.
+- Load the native API clients from `@earendil-works/pi-ai/compat`, an embedded module in bundled Pi runtimes, instead of `/api/*` subpaths that a bundled runtime may not expose. A test pins extension imports to the embedded set (read from the installed runtime when available).
+
 ## 0.2.1
 
 - Projected requests now send `X-Provider` matching the catalog's provider-pinned path, overriding any caller value, so the gateway never falls back to model-name provider heuristics (e.g. a self-hosted `deepseek-*` model being routed to an unconfigured `deepseek` provider).

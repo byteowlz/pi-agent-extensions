@@ -6,9 +6,9 @@ import {
 	type Provider,
 	type ProviderStreams,
 	createProvider,
-	lazyApi,
 	lazyStream,
 } from "@earendil-works/pi-ai";
+import { anthropicMessagesApi, openAICompletionsApi, openAIResponsesApi } from "@earendil-works/pi-ai/compat";
 import {
 	type NativeApi,
 	type Projection,
@@ -20,12 +20,36 @@ import {
 	unavailable,
 } from "./catalog.js";
 import { HttpPolicy } from "./http-policy.js";
-import { CatalogError, type CatalogFetch, fetchCatalog, secureFetch } from "./transport.js";
+import { CatalogError, type CatalogFetch, type TransportState, fetchCatalog, secureFetch } from "./transport.js";
 
+/** One specific, safe sentence per failure stage: what happened and what to check. */
+export function describeFailure(state: TransportState | undefined): string {
+	switch (state?.stage) {
+		case undefined:
+			return "EAVS request was never sent: Pi failed while building it (SDK/request setup). Check for an extension or option that rewrites the request.";
+		case "started":
+			return "EAVS request was never sent: the request could not be prepared for transport.";
+		case "refused":
+			return "EAVS request blocked locally: its destination is not the saved EAVS server, or its HTTP exception was removed. Run /login.";
+		case "cancelled":
+			return "EAVS request cancelled before a response.";
+		case "sending":
+			return `EAVS request failed while sending (${state.bodyKiB} KiB) without a network error code.`;
+		case "network":
+			return `EAVS request failed with network error ${state.code ?? "(no code)"} after sending ${state.bodyKiB} KiB, before any HTTP response. ECONNRESET/EPIPE suggest the gateway or proxy closed the connection (for example a request size limit); ENOTFOUND/ECONNREFUSED/ETIMEDOUT point to DNS or reachability; certificate codes point to TLS trust.`;
+		case "response":
+			return state.status < 300
+				? `EAVS returned HTTP ${state.status}, but the response stream failed or was cancelled.`
+				: `EAVS request rejected with HTTP ${state.status} by the gateway or upstream.`;
+	}
+}
+
+// Bundled Pi runtimes expose only embedded modules to extensions; the
+// /api/* subpaths are not among them. The compat factories load lazily too.
 const implementations: Record<NativeApi, ProviderStreams> = {
-	"openai-completions": lazyApi(() => import("@earendil-works/pi-ai/api/openai-completions")),
-	"openai-responses": lazyApi(() => import("@earendil-works/pi-ai/api/openai-responses")),
-	"anthropic-messages": lazyApi(() => import("@earendil-works/pi-ai/api/anthropic-messages")),
+	"openai-completions": openAICompletionsApi(),
+	"openai-responses": openAIResponsesApi(),
+	"anthropic-messages": anthropicMessagesApi(),
 };
 
 function storedConnection(credential: Credential | undefined, allowHttpOrigins: readonly string[]) {
@@ -280,11 +304,8 @@ export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 				id: known.id.slice(known.id.indexOf("/") + 1),
 				baseUrl: known.api === "anthropic-messages" ? known.baseUrl.slice(0, -3) : known.baseUrl,
 			};
-			let responseStatus: number | undefined;
-			const failure = () =>
-				responseStatus
-					? `EAVS request failed or cancelled (HTTP ${responseStatus}; ${responseStatus < 300 ? "response stream/protocol failure" : "gateway/upstream rejected the request"}).`
-					: "EAVS request failed or cancelled before an HTTP response (transport or SDK setup failure).";
+			let state: TransportState | undefined;
+			const failure = () => describeFailure(state);
 			let stream: ReturnType<Provider["streamSimple"]>;
 			try {
 				stream = run(
@@ -292,8 +313,8 @@ export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 					secureFetch(
 						origin,
 						() => httpOrigins(origin),
-						(status) => {
-							responseStatus = status;
+						(next) => {
+							state = next;
 						}
 					),
 					known.id.slice(0, known.id.indexOf("/"))
