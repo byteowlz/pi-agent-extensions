@@ -47,6 +47,14 @@ export interface EavsOptions {
 	apis?: Record<NativeApi, ProviderStreams>;
 }
 
+function project(origin: string, value: unknown): Projection {
+	try {
+		return projectCatalog(origin, value);
+	} catch {
+		throw new CatalogError("invalid");
+	}
+}
+
 export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 	const fetchMetadata = options.fetchCatalog ?? fetchCatalog;
 	const apis = options.apis ?? implementations;
@@ -84,7 +92,7 @@ export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 						type: "progress",
 						message: "Validating scoped chat catalog metadata only; no probe or inference.",
 					});
-					const projection = projectCatalog(origin, await fetchMetadata(origin, key, interaction.signal));
+					const projection = project(origin, await fetchMetadata(origin, key, interaction.signal));
 					interaction.signal.throwIfAborted();
 					const credential: ApiKeyCredential = { type: "api_key", key, env: { EAVS_SERVER: origin } };
 					const configured = connection(credential);
@@ -92,11 +100,11 @@ export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 					pending = { binding: configured.binding, projection };
 					interaction.notify({
 						type: "info",
-						message: `Validated ${projection.models.length} chat models; skipped ${projection.skipped} incomplete models. Prices are unverified estimates, not settlement. Empty scope is valid.`,
+						message: `Validated ${projection.models.length} chat models; skipped ${projection.skipped} incomplete models. Prices are unverified estimates, not settlement. Empty scope is valid. If Pi reports credential synchronization failure next, run /eavs-refresh for a safe diagnostic; local cache publication may have failed even though validation succeeded.`,
 					});
 					return credential;
-				} catch {
-					throw unavailable();
+				} catch (error) {
+					throw error instanceof CatalogError ? error : unavailable();
 				}
 			},
 			async check({ credential }: { credential?: ApiKeyCredential }) {
@@ -144,7 +152,7 @@ export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 				let next: Model<NativeApi>[] | undefined;
 				if (pending?.binding === c.binding) next = pending.projection.models;
 				else if (context.allowNetwork && process.env.PI_OFFLINE === undefined)
-					next = projectCatalog(c.origin, await fetchMetadata(c.origin, c.key, context.signal)).models;
+					next = project(c.origin, await fetchMetadata(c.origin, c.key, context.signal)).models;
 				else if (binding === c.binding) return;
 				else if (context.stored?.etag === c.binding) next = restoreCatalog(c.origin, context.stored.models);
 				if (!next) next = [];

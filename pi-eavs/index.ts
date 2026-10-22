@@ -1,18 +1,49 @@
 import { type ExtensionAPI, type ExtensionContext, readStoredCredential } from "@earendil-works/pi-coding-agent";
-import { eavsProvider } from "./provider.js";
+import { type EavsOptions, eavsProvider } from "./provider.js";
 import { RefreshLoop } from "./refresh-loop.js";
+import { CatalogError } from "./transport.js";
+
+function diagnostic(error: unknown): string {
+	if (error instanceof CatalogError) {
+		if (error.kind === "auth") return "Authorization denied: check scoped-key expiry and scope, then /login.";
+		if (error.kind === "transient")
+			return "Network/TLS or gateway unavailable: check HTTPS trust and connectivity; cached models are retained.";
+		return "Catalog schema invalid: check gateway catalog compatibility; invalid scope is removed.";
+	}
+	return "Local state/publication failure: check Pi auth and models-store file integrity/permissions and persisted EAVS_SERVER. A malformed models-store.json can block login and refresh. Back up privately; request consent before quarantining it. Do not delete auth.json or models.json.";
+}
 
 export default async function (pi: ExtensionAPI) {
+	return initializeEavs(pi);
+}
+
+export async function initializeEavs(
+	pi: ExtensionAPI,
+	options: EavsOptions = {},
+	readCredential: typeof readStoredCredential = readStoredCredential
+) {
 	let context: ExtensionContext | undefined;
 	const offline = () => process.env.PI_OFFLINE !== undefined;
 	const loop = new RefreshLoop(async (signal) => {
 		if (!context || offline()) return { failed: false, configured: false };
-		const auth = await context.modelRegistry.getProviderAuth("eavs");
-		if (!auth || signal.aborted) return { failed: false, configured: false };
-		const result = await context.modelRegistry.refresh({ providers: ["eavs"], force: true, allowNetwork: true, signal });
-		return { failed: result.aborted || result.errors.has("eavs"), configured: true };
+		if (typeof context.modelRegistry.getProviderAuth !== "function" || typeof context.modelRegistry.refresh !== "function")
+			return {
+				failed: true,
+				configured: true,
+				diagnostic: "SDK compatibility: update Pi to a native-provider runtime exposing registry getProviderAuth and refresh.",
+			};
+		try {
+			const auth = await context.modelRegistry.getProviderAuth("eavs");
+			if (!auth || signal.aborted) return { failed: false, configured: false };
+			const result = await context.modelRegistry.refresh({ providers: ["eavs"], force: true, allowNetwork: true, signal });
+			const error = result.errors.get("eavs");
+			return { failed: result.aborted || !!error, configured: true, diagnostic: error ? diagnostic(error) : undefined };
+		} catch {
+			return { failed: true, configured: true, diagnostic: diagnostic(undefined) };
+		}
 	});
 	const provider = eavsProvider({
+		...options,
 		onAuthChange(configured) {
 			if (configured && context && !offline()) loop.start();
 			else loop.stop();
@@ -23,7 +54,7 @@ export default async function (pi: ExtensionAPI) {
 	// reader (no interpolation/command execution and no credential writes).
 	if (!offline()) {
 		try {
-			const credential = readStoredCredential("eavs");
+			const credential = readCredential("eavs");
 			if (credential)
 				await provider.refreshModels?.({
 					credential,
@@ -64,7 +95,7 @@ export default async function (pi: ExtensionAPI) {
 				!outcome.configured
 					? "EAVS is not connected. Use /login."
 					: outcome.failed
-						? "EAVS metadata refresh failed or cancelled. Transient failures retain cached models; revoked or invalid scope removes them. Gateway authorization still applies. No inference attempted."
+						? `EAVS metadata refresh failed. ${outcome.diagnostic ?? diagnostic(undefined)} No inference attempted.`
 						: "EAVS chat metadata refreshed; empty scope has no models. Prices are unverified estimates.",
 				outcome.failed || !outcome.configured ? "warning" : "info"
 			);
