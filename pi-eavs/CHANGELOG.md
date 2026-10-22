@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.5
+
+- Pass the catalog's `forceAdaptiveThinking` model compat through for `anthropic-messages` models, so Pi sends adaptive thinking with a level-mapped effort to models that reject budget thinking (e.g. Claude Sonnet 5.5). Other compat flags stay OpenAI-completions only.
+
 ## 0.2.4
 
 - Map the catalog's per-model `reasoning_efforts` to Pi's `thinkingLevelMap`: levels the upstream rejects are hidden and `xhigh` is offered when accepted (e.g. a vLLM accepting low/medium/xhigh offers off, low, medium, xhigh). Malformed values are ignored; models without the field keep Pi's defaults. Preserved across cache restoration.

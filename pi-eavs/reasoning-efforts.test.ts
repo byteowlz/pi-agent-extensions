@@ -60,3 +60,27 @@ test("malformed or unusable reasoning_efforts are ignored, never fatal", () => {
 	const nonReasoning = projectCatalog(origin, catalog([model("m", { reasoning: false, reasoning_efforts: ["low"] })])).models[0];
 	assert.equal(nonReasoning.thinkingLevelMap, undefined);
 });
+
+test("anthropic forceAdaptiveThinking from the catalog reaches Pi, other compat stays OpenAI-only", () => {
+	const anthropic = {
+		schema_version: 1,
+		scope: "key-filtered-chat-candidates",
+		providers: [
+			{
+				id: "anthropic",
+				api: "anthropic-messages",
+				operation: "chat",
+				base_path: "/anthropic/v1",
+				request_path: "/anthropic/v1/messages",
+				models: [
+					model("claude-sonnet-5-5", { compat: { forceAdaptiveThinking: true, supportsStore: false } }),
+					model("claude-old"),
+				],
+			},
+		],
+	};
+	const { models } = projectCatalog(origin, anthropic);
+	assert.deepEqual(models[0].compat, { forceAdaptiveThinking: true });
+	assert.equal(models[1].compat, undefined);
+	assert.deepEqual(restoreCatalog(origin, JSON.parse(JSON.stringify(models))), models);
+});
