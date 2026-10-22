@@ -15,6 +15,21 @@ export class CatalogError extends Error {
 		);
 	}
 }
+/** Safe per-request transport progress: no URLs, headers, bodies or keys. */
+export type TransportState =
+	| { stage: "started" }
+	| { stage: "refused" }
+	| { stage: "sending"; bodyKiB: number }
+	| { stage: "network"; code?: string; bodyKiB: number }
+	| { stage: "cancelled" }
+	| { stage: "response"; status: number };
+
+// Node/OpenSSL error codes identify the failure class and contain no secrets.
+const safeCode = (error: unknown): string | undefined => {
+	const code = (error as { code?: unknown } | undefined)?.code;
+	return typeof code === "string" && /^[A-Z][A-Z0-9_]{1,47}$/.test(code) ? code : undefined;
+};
+
 export type CatalogFetch = (
 	origin: string,
 	key: string,
@@ -29,28 +44,50 @@ export type CatalogFetch = (
 export function secureFetch(
 	origin: string,
 	httpOrigins: () => readonly string[] = () => [],
-	onStatus?: (status: number | undefined) => void
+	onState?: (state: TransportState) => void
 ): typeof fetch {
 	serverOrigin(origin, httpOrigins());
 	return async (input, init) => {
-		onStatus?.(undefined);
+		onState?.({ stage: "started" });
+		const refuse = () => {
+			onState?.({ stage: "refused" });
+			return new Error("EAVS request destination refused.");
+		};
 		if ((globalThis as { Bun?: unknown }).Bun) throw new Error("EAVS secure transport requires Node.js.");
 		const req = new Request(input, init);
 		const url = new URL(req.url);
-		if (url.origin !== origin || url.username || url.password || url.hash || serverOrigin(origin, httpOrigins()) !== origin)
-			throw new Error("EAVS request destination refused.");
-		req.signal.throwIfAborted();
+		if (url.origin !== origin || url.username || url.password || url.hash) throw refuse();
+		try {
+			serverOrigin(origin, httpOrigins());
+		} catch {
+			throw refuse();
+		}
+		const cancelled = () => {
+			onState?.({ stage: "cancelled" });
+			req.signal.throwIfAborted();
+		};
+		if (req.signal.aborted) cancelled();
 		const body = req.body ? Buffer.from(await req.arrayBuffer()) : undefined;
+		const bodyKiB = Math.ceil((body?.byteLength ?? 0) / 1024);
 		// Buffering a request can yield; honor revocation/cancellation before sending.
-		serverOrigin(origin, httpOrigins());
-		req.signal.throwIfAborted();
+		try {
+			serverOrigin(origin, httpOrigins());
+		} catch {
+			throw refuse();
+		}
+		if (req.signal.aborted) cancelled();
+		onState?.({ stage: "sending", bodyKiB });
 		return new Promise<Response>((resolve, reject) => {
 			const tls = url.protocol === "https:";
 			const agent = tls
 				? new HttpsAgent({ keepAlive: false, rejectUnauthorized: true, ...{ proxyEnv: {} } })
 				: new HttpAgent({ keepAlive: false, ...{ proxyEnv: {} } });
 			const request = tls ? httpsRequest : httpRequest;
-			const fail = () => reject(new Error("EAVS secure request failed."));
+			let aborted = false;
+			const fail = (error?: unknown) => {
+				onState?.(aborted ? { stage: "cancelled" } : { stage: "network", code: safeCode(error), bodyKiB });
+				reject(new Error("EAVS secure request failed."));
+			};
 			const outgoing = request(
 				url,
 				{
@@ -62,10 +99,10 @@ export function secureFetch(
 				},
 				(incoming) => {
 					const status = incoming.statusCode ?? 500;
-					onStatus?.(status);
+					onState?.({ stage: "response", status });
 					if (status >= 300 && status < 400) {
 						incoming.destroy();
-						fail();
+						reject(new Error("EAVS secure request failed."));
 						return;
 					}
 					const headers = new Headers();
@@ -75,7 +112,10 @@ export function secureFetch(
 					resolve(new Response([204, 205, 304].includes(status) || req.method === "HEAD" ? null : stream, { status, headers }));
 				}
 			);
-			const abort = () => outgoing.destroy(new Error("EAVS request cancelled."));
+			const abort = () => {
+				aborted = true;
+				outgoing.destroy(new Error("EAVS request cancelled."));
+			};
 			outgoing.on("error", fail);
 			// Metadata has a six-second total deadline; inference uses its caller signal.
 			outgoing.once("close", () => {

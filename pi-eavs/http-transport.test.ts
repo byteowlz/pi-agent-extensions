@@ -4,8 +4,8 @@ import { test } from "node:test";
 import { InMemoryModelsStore } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { HttpPolicy } from "./http-policy.js";
-import { eavsProvider } from "./provider.js";
-import { fetchCatalog, secureFetch } from "./transport.js";
+import { describeFailure, eavsProvider } from "./provider.js";
+import { type TransportState, fetchCatalog, secureFetch } from "./transport.js";
 
 test("explicit HTTP uses bounded direct transport; native failures disclose status but never bodies", async () => {
 	let origin = "";
@@ -152,4 +152,43 @@ test("explicit HTTP uses bounded direct transport; native failures disclose stat
 		server.closeAllConnections();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 	}
+});
+
+test("transport reports a safe stage and network code when the server drops the connection", async () => {
+	const server = createServer((req) => req.socket.destroy());
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const address = server.address();
+	assert.ok(address && typeof address !== "string");
+	const origin = `http://127.0.0.1:${address.port}`;
+	const states: TransportState[] = [];
+	try {
+		const send = secureFetch(
+			origin,
+			() => [origin],
+			(state) => states.push(state)
+		);
+		await assert.rejects(send(`${origin}/x/v1/chat/completions`, { method: "POST", body: "y".repeat(3000) }));
+		const last = states.at(-1);
+		assert.equal(last?.stage, "network");
+		assert.ok(last?.stage === "network" && last.bodyKiB === 3 && last.code && /^[A-Z_]+$/.test(last.code));
+		assert.match(describeFailure(last), /network error E[A-Z]+ after sending 3 KiB/);
+		await assert.rejects(
+			secureFetch(
+				origin,
+				() => [origin],
+				(state) => states.push(state)
+			)("http://127.0.0.1:1/x")
+		);
+		assert.equal(states.at(-1)?.stage, "refused");
+		const cancelled = new AbortController();
+		cancelled.abort();
+		await assert.rejects(send(`${origin}/x`, { signal: cancelled.signal }));
+		assert.equal(states.at(-1)?.stage, "cancelled");
+	} finally {
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	}
+	assert.match(describeFailure(undefined), /never sent/);
+	assert.match(describeFailure({ stage: "response", status: 200 }), /HTTP 200, but the response stream failed/);
+	assert.match(describeFailure({ stage: "response", status: 403 }), /rejected with HTTP 403/);
 });

@@ -4,6 +4,10 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### EAVS failure stages (2.23.2)
+
+- **pi-eavs 0.2.2**: stage-specific inference errors (with safe network codes and request size); API clients imported from the embedded `pi-ai/compat` module.
+
 ### EAVS provider pinning (2.23.1)
 
 - **pi-eavs 0.2.1**: send `X-Provider` on every projected request alongside the provider-pinned path; warn about hand-written `models.json` entries that target the EAVS gateway directly.

@@ -131,11 +131,13 @@ hand-written `models.json` providers for the EAVS origin: they skip the pinned
 from the model name. The extension warns at session start when it finds such
 entries. Projected requests also send `X-Provider` matching the pinned path.
 
-Inference failures expose only the HTTP status, or indicate that no HTTP
-response was received (transport/SDK setup). A 200 followed by a failure points
-to streaming/protocol/cancellation, not initial key admission. A 401/403 can be
-gateway or upstream rejection; it is not automatically proof the scoped key is
-invalid. Raw SDK error text, response bodies and headers are never displayed.
+Inference errors name the failing stage: the request was never built, was blocked
+locally (destination or HTTP exception), was cancelled, hit a network error
+before any HTTP response (with the Node/OpenSSL code, such as `ECONNRESET` or
+`ENOTFOUND`, and the request size), was rejected with an HTTP status, or failed
+while streaming after HTTP 200. A 401/403 can come from the gateway or the
+upstream; it is not automatically proof that the scoped key is invalid. URLs,
+headers, request/response bodies and raw SDK errors are never displayed.
 
 ## Troubleshooting login and refresh
 
