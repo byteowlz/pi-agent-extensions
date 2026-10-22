@@ -280,42 +280,93 @@ export type SelectionPaintRole =
 	| "panelAccent"
 	| "panelStrong"
 	| "panelActive"
-	| "panelPicked";
-export type SelectionPaint = (text: string, role: SelectionPaintRole) => string;
-const plainPaint: SelectionPaint = (text) => text;
+	| "panelPicked"
+	| "tab"
+	| "tabActive";
+export interface PaintSpan {
+	text: string;
+	role: SelectionPaintRole;
+}
+export type SelectionPaint = (content: string | readonly PaintSpan[], role?: SelectionPaintRole) => string;
+const plainPaint: SelectionPaint = (content) =>
+	typeof content === "string" ? content : content.map((span) => span.text).join("");
+
+type SpanStyle = { fg: string; bold?: boolean; bg?: "panel" | "accent" | "selected" };
+
+function styleFor(role: SelectionPaintRole): SpanStyle | undefined {
+	switch (role) {
+		case "plain":
+			return undefined;
+		case "plainMuted":
+		case "panelMuted":
+		case "tab":
+			return { fg: "muted" };
+		case "panelAccent":
+			return { fg: "accent", bold: true };
+		case "panelStrong":
+			return { fg: "text", bold: true };
+		case "panelPicked":
+			return { fg: "success" };
+		case "panelActive":
+			return { fg: "text", bold: true, bg: "selected" };
+		case "tabActive":
+			return { fg: "text", bold: true, bg: "accent" };
+		default:
+			return { fg: "text" };
+	}
+}
 
 /**
- * Build a painter for the question block.
- *
- * The panel keeps only a faint warm tint: a stronger yellow mix turned into a
- * muddy olive that destroyed contrast for muted text and accent. Body text stays
- * at full `text` contrast; `muted` is reserved for chrome (tab strip, hints).
+ * Segment-aware painter for the question block: a neutral panel with accent side
+ * bars, filled tab chips and two-tone rows (muted number, coloured label), after
+ * OpenCode's question prompt. Falls back to plain text when the host theme cannot
+ * style, so a partial theme never crashes the interaction.
  */
 export function selectionPaint(theme: Theme | undefined, width: number): SelectionPaint {
 	const colors = theme?.colors as Record<string, Color> | undefined;
 	if (!theme || !colors?.toolPendingBg || typeof theme.style !== "function") return plainPaint;
 	const panelBg = colors.toolPendingBg;
 	const bar = (text: string) => theme.fg("accent", text);
-	// Leave room for the accent bars on both sides; narrow terminals degrade to plain.
 	const bodyWidth = Math.max(0, width - 2);
-	return (text, role) => {
-		if (role === "plain") return text;
-		if (role === "plainMuted") return theme.fg("muted", text);
-		const padded = `${text}${" ".repeat(Math.max(0, bodyWidth - visibleWidth(text)))}`;
-		if (bodyWidth < 8) return padded;
-		if (role === "panelActive")
-			return `${bar("┃")}${theme.style(padded, { bg: colors.selectedBg ?? panelBg, fg: "text", bold: true })}${bar("┃")}`;
-		if (role === "panelPicked") return `${bar("┃")}${theme.style(padded, { bg: panelBg, fg: "success" })}${bar("┃")}`;
-		if (role === "panelMuted") return `${bar("┃")}${theme.style(padded, { bg: panelBg, fg: "muted" })}${bar("┃")}`;
-		if (role === "panelAccent") return `${bar("┃")}${theme.style(padded, { bg: panelBg, fg: "accent", bold: true })}${bar("┃")}`;
-		if (role === "panelStrong") return `${bar("┃")}${theme.style(padded, { bg: panelBg, fg: "text", bold: true })}${bar("┃")}`;
-		return `${bar("┃")}${theme.style(padded, { bg: panelBg, fg: "text" })}${bar("┃")}`;
+	return (content, role) => {
+		const spans: readonly PaintSpan[] = typeof content === "string" ? [{ text: content, role: role ?? "panel" }] : content;
+		const plain = spans.map((span) => span.text).join("");
+		// Outside the panel: keep the terminal background (no bars, no padding).
+		if (spans.every((span) => span.role === "plain")) return plain;
+		if (spans.every((span) => span.role === "plainMuted")) return theme.fg("muted", plain);
+		let body = "";
+		let used = 0;
+		for (const span of spans) {
+			// The bars live outside the padded body: never let a span overflow it.
+			const room = Math.max(0, bodyWidth - used);
+			if (room === 0) break;
+			const text = truncateToWidth(span.text, room, "");
+			if (!text) continue;
+			const style = styleFor(span.role);
+			if (!style) {
+				body += text;
+				used += visibleWidth(text);
+				continue;
+			}
+			const bg = style.bg === "accent" ? colors.accent : style.bg === "selected" ? (colors.selectedBg ?? panelBg) : panelBg;
+			body += theme.style(text, {
+				bg,
+				fg: style.fg as "text" | "muted" | "accent" | "success",
+				...(style.bold ? { bold: true } : {}),
+			});
+			used += visibleWidth(text);
+		}
+		const pad = theme.style(" ".repeat(Math.max(0, bodyWidth - used)), { bg: panelBg });
+		if (bodyWidth < 8) return body + " ".repeat(Math.max(0, bodyWidth - used));
+		return `${bar("┃")}${body}${pad}${bar("┃")}`;
 	};
 }
 
 interface RenderLine {
 	text: string;
 	role: SelectionPaintRole;
+	/** Optional segmented styling; falls back to `text`/`role`. */
+	spans?: readonly PaintSpan[];
 }
 
 /** Bounded by both terminal dimensions, with a scrolling inventory and option viewport. */
@@ -359,7 +410,20 @@ export function renderSelectionTui(
 	const body = lines.slice(0, Math.max(0, h - 2));
 	body.push({ text: selectionFocusLabel(state), role: "plainMuted" });
 	body.push({ text: footer, role: "plainMuted" });
-	return body.slice(-h).map((line) => paint(fit(line.text), line.role));
+	// Fit spans cumulatively so plain (unthemed) rendering also stays within width.
+	const fitSpans = (spans: readonly PaintSpan[]): PaintSpan[] => {
+		const out: PaintSpan[] = [];
+		let room = w;
+		for (const span of spans) {
+			if (room <= 0) break;
+			const text = fit(span.text, room);
+			if (!text) continue;
+			out.push({ text, role: span.role });
+			room -= visibleWidth(text);
+		}
+		return out;
+	};
+	return body.slice(-h).map((line) => (line.spans ? paint(fitSpans(line.spans)) : paint(fit(line.text), line.role)));
 }
 
 function selectionFocusLabel(state: SelectionTuiState): string {
@@ -382,10 +446,17 @@ function renderQuestion(
 			const raw = (question.header ?? question.title).replace(/\s+/g, " ").trim();
 			return raw.length > 18 ? `${raw.slice(0, 17)}…` : raw;
 		};
-		const tabs = state.spec.questions
-			.slice(Math.max(0, state.index - 1), state.index + 2)
-			.map((question) => (question.id === q.id ? `[${label(question)}]` : ` ${label(question)} `));
-		lines.push({ text: ` ${state.index + 1}/${state.spec.questions.length} · ${tabs.join(" · ")} · Review`, role: "panelMuted" });
+		const tabs = state.spec.questions.slice(Math.max(0, state.index - 1), state.index + 2);
+		const tabSpans: PaintSpan[] = [{ text: ` ${state.index + 1}/${state.spec.questions.length} `, role: "panelMuted" }];
+		for (const question of tabs) {
+			tabSpans.push({ text: " · ", role: "panelMuted" });
+			tabSpans.push({
+				text: ` ${label(question)} `,
+				role: question.id === q.id ? "tabActive" : "tab",
+			});
+		}
+		tabSpans.push({ text: " · ", role: "panelMuted" }, { text: " Review ", role: "tab" });
+		lines.push({ text: "", role: "panelMuted", spans: tabSpans });
 		lines.push({ text: "", role: "panel" });
 	} else {
 		lines.push({
@@ -410,13 +481,21 @@ function renderQuestion(
 
 function choiceRows(state: SelectionTuiState, q: NormalizedSpec["questions"][number], answer: Answer): RenderLine[] {
 	const rows: RenderLine[] = [];
-	const row = (index: number, label: string, picked: boolean): RenderLine => ({
-		text: ` ${index === state.option ? "▸" : " "} ${index + 1}. ${label}`,
-		role: index === state.option ? "panelActive" : picked ? "panelPicked" : "panel",
-	});
+	const row = (index: number, label: string, picked: boolean): RenderLine => {
+		const marker = `${index === state.option ? "▸" : " "} ${index + 1}. `;
+		if (index === state.option) return { text: ` ${marker}${label}${picked ? "  ✓" : ""}`, role: "panelActive" };
+		return {
+			text: "",
+			role: "panel",
+			spans: [
+				{ text: `  ${marker}`, role: "panelMuted" },
+				{ text: `${label}${picked ? "  ✓" : ""}`, role: picked ? "panelPicked" : "panel" },
+			],
+		};
+	};
 	for (const [index, choice] of (q.options ?? []).entries()) {
 		const picked = answer.selectedIds.includes(choice.id);
-		rows.push(row(index, `${choice.label}${choice.recommended ? "  ★ recommended" : ""}${picked ? "  ✓" : ""}`, picked));
+		rows.push(row(index, `${choice.label}${choice.recommended ? "  ★ recommended" : ""}`, picked));
 	}
 	if (q.kind === "text") return rows;
 	rows.push(row(ownRowIndex(q), "✎ Enter your own answer…", !!answer.text?.trim()));

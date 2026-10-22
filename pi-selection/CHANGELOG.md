@@ -8,6 +8,10 @@
   in `success` plus `✓`, a compact tab strip with short headers, a
   "(select all that apply)" hint for multi, and bottom padding. `muted` is
   reserved for chrome so body/description/decision keep full `text` contrast.
+- Segment-level painting: tabs are filled chips (accent background on the active
+  question) and option rows are two-tone (muted number, coloured label), so the
+  prompt matches OpenCode's layout rather than approximating it with brackets.
+  Narrow widths still clamp to the column.
 
 ## 2.19.0
 
