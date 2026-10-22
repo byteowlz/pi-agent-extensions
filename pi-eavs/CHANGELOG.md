@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.6
+
+- Per-model native API: models whose catalog entry declares their own `api`
+  (e.g. Anthropic Messages for Qwen/MiniMax, Responses for GPT on a
+  chat-completions gateway like OpenCode Go) are served with their native API
+  and request path; models with an unsupported or out-of-provider API are
+  skipped. Pi thinking levels now include `max` when the upstream accepts it.
+- Pi's session id is sent to the gateway as `x-session-affinity` on every API
+  format, so EAVS can keep upstream sessions per conversation.
+
 ## 0.2.5
 
 - Pass the catalog's `forceAdaptiveThinking` model compat through for `anthropic-messages` models, so Pi sends adaptive thinking with a level-mapped effort to models that reject budget thinking (e.g. Claude Sonnet 5.5). Other compat flags stay OpenAI-completions only.

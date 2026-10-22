@@ -91,6 +91,19 @@ function project(origin: string, value: unknown, allowHttpOrigins: readonly stri
 	}
 }
 
+/** Gateway routing headers: the catalog provider pin (overriding callers) and
+ * Pi's session id, which EAVS turns into a key-scoped upstream session. */
+function gatewayHeaders(
+	options: { headers?: Record<string, string>; sessionId?: string } | undefined,
+	gatewayProvider: string
+): Record<string, string> {
+	return {
+		...options?.headers,
+		...(options?.sessionId ? { "x-session-affinity": options.sessionId } : {}),
+		"X-Provider": gatewayProvider,
+	};
+}
+
 export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 	const policy = options.httpPolicy ?? new HttpPolicy();
 	const httpOrigins = (origin: string) => (origin.startsWith("http:") ? policy.origins() : []);
@@ -265,7 +278,7 @@ export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 				(native, safeFetch, gatewayProvider) =>
 					delegate.stream(native, context, {
 						...requestOptions,
-						headers: { ...requestOptions?.headers, "X-Provider": gatewayProvider },
+						headers: gatewayHeaders(requestOptions, gatewayProvider),
 						fetch: safeFetch,
 					}),
 				requestOptions?.apiKey
@@ -277,7 +290,7 @@ export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 				(native, safeFetch, gatewayProvider) =>
 					delegate.streamSimple(native, context, {
 						...requestOptions,
-						headers: { ...requestOptions?.headers, "X-Provider": gatewayProvider },
+						headers: gatewayHeaders(requestOptions, gatewayProvider),
 						fetch: safeFetch,
 					}),
 				requestOptions?.apiKey
