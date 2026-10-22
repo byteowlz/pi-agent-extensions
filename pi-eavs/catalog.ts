@@ -76,7 +76,26 @@ function modelCompat(api: NativeApi, provider: unknown, model: unknown) {
 	return api === "openai-completions" ? { compat: { ...compat(provider), ...compat(model) } } : {};
 }
 
-export type EavsModel = Model<NativeApi> & { eavsPricing?: "unknown" };
+export type EavsModel = Model<NativeApi> & { eavsPricing?: "unknown"; eavsReasoningEfforts?: string[] };
+
+const EFFORT_LEVELS = ["none", "off", "minimal", "low", "medium", "high", "xhigh"];
+
+/** Gateway-reported accepted reasoning efforts, or undefined if unusable.
+ * Advisory metadata: malformed values are ignored, never fatal. */
+function reasoningEfforts(value: unknown): string[] | undefined {
+	if (!Array.isArray(value) || !value.length || value.length > 16) return;
+	const efforts = value.filter((v): v is string => typeof v === "string" && EFFORT_LEVELS.includes(v));
+	return efforts.length === value.length && efforts.some((v) => v !== "none" && v !== "off") ? efforts : undefined;
+}
+
+/** Hide Pi thinking levels the upstream rejects; expose xhigh only when
+ * accepted. Pi clamps a hidden selection upward, like the gateway rewrite. */
+function thinkingLevelMap(efforts: string[]): NonNullable<Model<NativeApi>["thinkingLevelMap"]> {
+	const map: NonNullable<Model<NativeApi>["thinkingLevelMap"]> = { max: null };
+	for (const level of ["minimal", "low", "medium", "high"] as const) if (!efforts.includes(level)) map[level] = null;
+	map.xhigh = efforts.includes("xhigh") ? "xhigh" : null;
+	return map;
+}
 const UNKNOWN_PRICE_SUFFIX = " [price unknown]";
 
 export interface Projection {
@@ -153,6 +172,7 @@ function modelCost(price: unknown): EavsModel["cost"] | undefined {
 function projectModel(m: Record<string, unknown>, api: NativeApi): EavsModel | undefined {
 	const cost = modelCost(m.pricing);
 	if (!cost) return;
+	const efforts = m.reasoning === true ? reasoningEfforts(m.reasoning_efforts) : undefined;
 	if (
 		typeof m.context_window !== "number" ||
 		!Number.isInteger(m.context_window) ||
@@ -180,6 +200,7 @@ function projectModel(m: Record<string, unknown>, api: NativeApi): EavsModel | u
 		maxTokens: m.max_tokens,
 		cost,
 		...(m.pricing === null || m.pricing === undefined ? { eavsPricing: "unknown" as const } : {}),
+		...(efforts ? { thinkingLevelMap: thinkingLevelMap(efforts), eavsReasoningEfforts: efforts } : {}),
 	};
 }
 
@@ -239,6 +260,7 @@ export function restoreCatalog(
 			context_window: m.contextWindow,
 			max_tokens: m.maxTokens,
 			compat: m.compat,
+			reasoning_efforts: m.eavsReasoningEfforts,
 			pricing: unknownPrice
 				? null
 				: {

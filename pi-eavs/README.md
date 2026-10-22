@@ -142,6 +142,11 @@ extracted from a bounded body prefix, single-line, capped at 300 characters, wit
 key-, bearer- and token-shaped values redacted. URLs, headers, raw bodies and raw
 SDK errors are never displayed.
 
+When the gateway reports which reasoning efforts a model accepts (catalog
+`reasoning_efforts`, declared in EAVS or learned from upstream errors), Pi only
+offers those thinking levels for it; `xhigh` appears when accepted. A hidden
+level selected elsewhere clamps upward, matching the gateway's own rewrite.
+
 ## Troubleshooting login and refresh
 
 `/eavs-refresh` reports only safe categories: authorization denied (check key/scope),

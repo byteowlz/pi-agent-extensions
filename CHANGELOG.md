@@ -4,6 +4,10 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### EAVS thinking levels from the catalog (2.23.5)
+
+- **pi-eavs 0.2.4**: offer only the thinking levels the upstream accepts, from the EAVS catalog's `reasoning_efforts`.
+
 ### EAVS upstream error messages (2.23.4)
 
 - **pi-eavs 0.2.3**: HTTP rejections show the upstream's sanitized error message (bounded, single-line, secrets redacted) instead of only the status.
