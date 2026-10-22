@@ -48,7 +48,7 @@ import { basename, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key, fuzzyFilter, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { ACCESS_TTL_SECONDS, APPROVAL_TIMEOUT_SECONDS, withApprovalDeadline } from "./access-request.js";
+import { ACCESS_TTL_SECONDS, APPROVAL_TIMEOUT_SECONDS, findExistingGrant, withApprovalDeadline } from "./access-request.js";
 import { probeAgent, socketIdentity } from "./agent-connection.js";
 
 // ---------------------------------------------------------------------------
@@ -1222,6 +1222,21 @@ export default function piSshKey(pi: ExtensionAPI): void {
 			access_ttl_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600 })),
 		}),
 		async execute(_id, params, signal, _update, ctx) {
+			const granted = findExistingGrant(
+				agent?.loadedKeys.values() ?? [],
+				await listLoadedFingerprints(),
+				params.key_path ? expandPath(params.key_path, ctx.cwd) : undefined
+			);
+			if (granted) {
+				// Already approved and still live: auto-approve without extending its lifetime.
+				const remaining = granted.expiresAt === undefined ? 0 : Math.ceil((granted.expiresAt - Date.now()) / 1000);
+				const lifetime = remaining > 0 ? `${remaining} seconds remaining` : "no expiry";
+				return {
+					content: [{ type: "text", text: `SSH key ${basename(granted.keyPath)} already granted (${lifetime}).` }],
+					details: { ok: true, keyPath: granted.keyPath, ttlSeconds: remaining },
+					structuredContent: { ok: true, keyPath: granted.keyPath, ttlSeconds: remaining },
+				};
+			}
 			if (requesting) throw new Error("An SSH approval request is already active");
 			if (!ctx.hasUI) throw new Error("SSH access requires a human UI");
 			if (isOqtoProxySession())
