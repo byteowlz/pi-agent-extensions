@@ -1,0 +1,6 @@
+{
+  "allowHttpOrigins": [
+    "http://localhost:8080",
+    "http://eavs.my-tailnet.ts.net:8080"
+  ]
+}

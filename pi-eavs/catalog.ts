@@ -15,11 +15,19 @@ const text = (v: unknown): v is string =>
 	});
 
 /** Only origin or the documented /v1 API base, never an arbitrary path rewrite. */
-export function serverOrigin(value: string): string {
+export function serverAddress(value: string): string {
 	try {
+		if (
+			typeof value !== "string" ||
+			value.length > 2048 ||
+			Array.from(value).some((c) => c.charCodeAt(0) <= 32 || c.charCodeAt(0) === 127) ||
+			value.includes("?") ||
+			value.includes("#")
+		)
+			throw unavailable();
 		const url = new URL(value);
 		if (
-			url.protocol !== "https:" ||
+			!["https:", "http:"].includes(url.protocol) ||
 			url.username ||
 			url.password ||
 			url.search ||
@@ -29,8 +37,15 @@ export function serverOrigin(value: string): string {
 			throw unavailable();
 		return url.origin;
 	} catch {
-		throw new Error("EAVS requires an HTTPS origin or /v1 API base without credentials, query or fragment.");
+		throw new Error("EAVS requires an HTTP(S) origin or /v1 API base without credentials, query or fragment.");
 	}
+}
+
+export function serverOrigin(value: string, allowHttpOrigins: readonly string[] = []): string {
+	const origin = serverAddress(value);
+	if (origin.startsWith("http:") && !allowHttpOrigins.includes(origin))
+		throw new Error("EAVS HTTP requires an explicit exact-origin exception; use /login to approve it.");
+	return origin;
 }
 
 export function scopedKey(value: unknown): string {
@@ -75,9 +90,9 @@ function priceLabel(model: EavsModel): string {
 
 // Adapted from EAVS adapters/pi/provider-library.ts: same schema and native route
 // allowlist. Missing prices do not exclude self-hosted models; invalid metadata does.
-export function projectCatalog(origin: string, catalog: unknown): Projection {
+export function projectCatalog(origin: string, catalog: unknown, allowHttpOrigins: readonly string[] = []): Projection {
 	if (
-		serverOrigin(origin) !== origin ||
+		serverOrigin(origin, allowHttpOrigins) !== origin ||
 		!object(catalog) ||
 		catalog.schema_version !== 1 ||
 		catalog.scope !== "key-filtered-chat-candidates" ||
@@ -179,7 +194,11 @@ function restorePriceLabel(m: Record<string, unknown>, provider: string) {
 }
 
 /** Revalidate persisted metadata instead of trusting cache URLs/headers. */
-export function restoreCatalog(origin: string, cached: readonly unknown[]): EavsModel[] {
+export function restoreCatalog(
+	origin: string,
+	cached: readonly unknown[],
+	allowHttpOrigins: readonly string[] = []
+): EavsModel[] {
 	if (cached.length > 4096) throw unavailable();
 	const providers = new Map<string, Record<string, unknown>>();
 	for (const m of cached) {
@@ -229,6 +248,9 @@ export function restoreCatalog(origin: string, cached: readonly unknown[]): Eavs
 					},
 		});
 	}
-	return projectCatalog(origin, { schema_version: 1, scope: "key-filtered-chat-candidates", providers: [...providers.values()] })
-		.models;
+	return projectCatalog(
+		origin,
+		{ schema_version: 1, scope: "key-filtered-chat-candidates", providers: [...providers.values()] },
+		allowHttpOrigins
+	).models;
 }

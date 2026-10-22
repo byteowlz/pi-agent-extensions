@@ -6,8 +6,8 @@ Self-contained native provider for Pi's native-provider SDK (tested against repo
 pi -e ./pi-eavs/index.ts
 ```
 
-Run `/login`, choose **EAVS**, enter an HTTPS server origin (or its `/v1` API base),
-then an **EAVS scoped virtual key**. A secret prompt is used. Login performs only
+Run `/login`, choose **EAVS**, enter a server origin (or its `/v1` API base),
+then an **EAVS scoped virtual key**. HTTPS is the default; HTTP requires explicit consent as described below. A secret prompt is used. Login performs only
 `GET /v1/eavs/catalog`, validates the key-filtered chat catalog, and saves the
 connection through Pi. No provider probe, inference, OAuth exchange, browser,
 credential command, upstream account identity or JWT parsing is involved.
@@ -17,6 +17,44 @@ credential command, upstream account identity or JWT parsing is involved.
 only trusted extensions. Never enter an operator/master key. The extension
 accepts the `eavs-…` virtual-key format, but only the server can enforce key
 scope. It never requests or manages operator credentials.
+
+## HTTP exceptions
+
+HTTP is denied by default, including localhost and tailnet addresses. For an
+unapproved HTTP address, `/login` asks **before the secret prompt or network**:
+
+- **Cancel** (first/default choice): no key request or network access.
+- **Allow once**: permit that exact origin until reload/session shutdown. The
+  credential is still saved normally, but after restart it cannot be used over
+  HTTP until consent is given again. Cancelled/failed login revokes the new
+  one-time permission.
+- **Save exception**: persist that exact origin in `<agent-dir>/pi-eavs.json`
+  (`~/.pi/agent/pi-eavs.json` by default; honors `PI_CODING_AGENT_DIR`). This
+  saves the network exception independently of whether key entry later succeeds.
+
+```json
+{
+  "allowHttpOrigins": [
+    "http://localhost:8080",
+    "http://eavs.my-tailnet.ts.net:8080"
+  ]
+}
+```
+
+Origins must be canonical (no trailing slash, path, credentials, query, fragment
+or wildcard); scheme, hostname and port must match exactly. No private-IP or
+Tailscale trust is inferred. HTTP exposes the key and request to the underlying
+connection; use it only on a trusted channel (such as your Tailscale tunnel).
+Saved configuration is rechecked before HTTP requests; removing an exception
+blocks subsequent requests. A still-active one-time permission must also expire
+or be cleared via reload/session shutdown.
+
+For security this policy deliberately reads **user agent configuration only**,
+not cwd/project configuration or catalog/cache data. Writes are locked, private
+and atomic; malformed/busy files fail closed. Symlinked configuration may be
+read, but must be edited manually rather than overwritten by login. See
+`pi-eavs.schema.json` and `pi-eavs.example.json`. HTTPS still verifies TLS;
+redirects and environment proxies stay disabled for both protocols.
 
 ## Models and lifecycle
 
@@ -31,10 +69,10 @@ scope. It never requests or manages operator credentials.
   Anthropic's dispatch base omits only the validated route's terminal `/v1`,
   because its installed SDK appends `/v1/messages` itself; an offline native SDK
   test proves the resulting request path.
-- Server input is restricted to an HTTPS origin or `/v1` base, with no URL
-  credentials/query/fragment. Arbitrary mount prefixes, provider URL inputs,
-  plaintext HTTP (including loopback), and separate listener credentials are
-  not supported. Origin and `/v1` inputs produce exactly one catalog `/v1`.
+- Server input is restricted to an HTTP(S) origin or `/v1` base, with no URL
+  credentials/query/fragment. HTTP needs an explicit exact-origin exception.
+  Arbitrary mount prefixes, provider URL inputs and separate listener credentials
+  are not supported. Origin and `/v1` inputs produce exactly one catalog `/v1`.
 - Online CLI startup is primed with a bounded metadata read before provider
   registration, using Pi's public `readStoredCredential()` (no command execution).
   Pi also restores a validated model snapshot during cache-only initialization
@@ -83,6 +121,14 @@ models.json editing or EAVS source dependencies are included. Projection rules
 are adapted from EAVS `adapters/pi/provider-library.ts`; the package carries its
 own implementation and only uses host-provided Pi peers. There is no runtime
 configuration file/schema: configuration is the native login credential.
+
+## Troubleshooting inference
+
+Inference failures expose only the HTTP status, or indicate that no HTTP
+response was received (transport/SDK setup). A 200 followed by a failure points
+to streaming/protocol/cancellation, not initial key admission. A 401/403 can be
+gateway or upstream rejection; it is not automatically proof the scoped key is
+invalid. Raw SDK error text, response bodies and headers are never displayed.
 
 ## Troubleshooting login and refresh
 

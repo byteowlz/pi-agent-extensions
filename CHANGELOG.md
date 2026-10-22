@@ -4,6 +4,11 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Explicit EAVS HTTP exceptions (2.23.0)
+
+- **pi-eavs 0.2.0**: exact-origin HTTP opt-in with native login consent before secret entry; session-only or private saved user exceptions. No implicit localhost/tailnet trust, project-granted exceptions, redirects, proxies or TLS relaxation.
+- Preserve safe inference HTTP status diagnostics without exposing upstream error bodies; distinguish pre-response transport/setup failures.
+
 ### EAVS catalog visibility diagnostics (2.22.2)
 
 - **pi-eavs 0.1.2**: restore self-hosted models with missing pricing; label unknown prices explicitly and preserve the distinction across cached metadata. Report accepted/omitted/unknown-price counts without changing gateway policy. Pi numeric costs use documented zero accounting placeholders for unknown prices.
