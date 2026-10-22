@@ -36,3 +36,29 @@ export async function withApprovalDeadline<T>(
 		if (abort) signal?.removeEventListener("abort", abort);
 	}
 }
+
+export interface GrantedKey {
+	keyPath: string;
+	fingerprint?: string;
+	expiresAt?: number;
+}
+
+/**
+ * An unexpired key this session already loaded (i.e. already granted) that
+ * satisfies the request. A requested path must match exactly; without a path
+ * any live grant qualifies. `held` = fingerprints the agent still reports.
+ */
+export function findExistingGrant<T extends GrantedKey>(
+	keys: Iterable<T>,
+	held: ReadonlySet<string>,
+	keyPath?: string,
+	now = Date.now()
+): T | undefined {
+	for (const key of keys) {
+		if (keyPath && key.keyPath !== keyPath) continue;
+		if (typeof key.expiresAt === "number" && key.expiresAt <= now) continue;
+		if (!key.fingerprint || !held.has(key.fingerprint)) continue;
+		return key;
+	}
+	return undefined;
+}

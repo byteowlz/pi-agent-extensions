@@ -1,5 +1,9 @@
 ## Unreleased
 
+- `request_ssh_access` auto-approves when the requested key (or, without
+  `key_path`, any key) is already granted and still live in the agent; no
+  prompt, and the existing lifetime is not extended.
+
 - Add isolated real-agent command lifecycle coverage for load/unload/reload:
   unload-all and individual paths, inherited and owned agents, plain and
   encrypted generated keys. Reported reload failure remains unreproduced.

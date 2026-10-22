@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { ACCESS_TTL_SECONDS, APPROVAL_TIMEOUT_SECONDS, withApprovalDeadline } from "./access-request.js";
+import { ACCESS_TTL_SECONDS, APPROVAL_TIMEOUT_SECONDS, findExistingGrant, withApprovalDeadline } from "./access-request.js";
 
 test("approval and access defaults are independently bounded", () => {
 	expect(APPROVAL_TIMEOUT_SECONDS).toBe(120);
@@ -37,4 +37,19 @@ test("already cancelled request never starts", async () => {
 		})
 	).rejects.toThrow();
 	expect(started).toBe(false);
+});
+
+test("existing live grant is reused; expired, unloaded or other keys are not", () => {
+	const now = 1_000_000;
+	const keys = [
+		{ keyPath: "/k/a", fingerprint: "SHA256:a", expiresAt: now + 5000 },
+		{ keyPath: "/k/b", fingerprint: "SHA256:b", expiresAt: now - 1 },
+		{ keyPath: "/k/c", fingerprint: "SHA256:c" },
+	];
+	const held = new Set(["SHA256:a", "SHA256:b"]);
+	expect(findExistingGrant(keys, held, "/k/a", now)?.keyPath).toBe("/k/a");
+	expect(findExistingGrant(keys, held, "/k/b", now)).toBeUndefined(); // expired
+	expect(findExistingGrant(keys, held, "/k/c", now)).toBeUndefined(); // no longer in agent
+	expect(findExistingGrant(keys, held, "/k/x", now)).toBeUndefined();
+	expect(findExistingGrant(keys, held, undefined, now)?.keyPath).toBe("/k/a");
 });
