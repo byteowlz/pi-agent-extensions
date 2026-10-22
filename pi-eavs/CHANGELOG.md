@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3
+
+- HTTP rejections now show the upstream's error message, e.g. `Upstream said: "Unexpected reasoning effort minimal. Supported types are xhigh (default), medium, and low."`, instead of only the status. The message is extracted from at most 16 KiB of the error body (`error.message`, `message`, `detail` or plain text), flattened to one line, capped at 300 characters, and key/bearer/token-shaped values are redacted. URLs, headers and raw bodies are still never shown.
+
 ## 0.2.2
 
 - Inference failures name the stage that failed instead of "failed or cancelled": request never built, blocked locally, cancelled, network error with its Node/OpenSSL code and request size, HTTP rejection, or stream failure after HTTP 200. Only stage, error code, status and size are shown; never URLs, headers, bodies or keys.

@@ -15,14 +15,60 @@ export class CatalogError extends Error {
 		);
 	}
 }
-/** Safe per-request transport progress: no URLs, headers, bodies or keys. */
+/** Safe per-request transport progress: no URLs, headers, raw bodies or keys.
+ * `detail` is the upstream error message only, extracted and sanitized. */
 export type TransportState =
 	| { stage: "started" }
 	| { stage: "refused" }
 	| { stage: "sending"; bodyKiB: number }
 	| { stage: "network"; code?: string; bodyKiB: number }
 	| { stage: "cancelled" }
-	| { stage: "response"; status: number };
+	| { stage: "response"; status: number; detail?: string };
+
+const MAX_ERROR_BODY_BYTES = 16 * 1024;
+const MAX_DETAIL_CHARS = 300;
+// Anything credential-shaped: EAVS/OpenAI-style keys, bearer values, key=value
+// secrets and long opaque tokens. Upstreams sometimes echo request headers.
+const SECRET_PATTERNS = [
+	/\b(?:eavs|sk|pk|rk)-[A-Za-z0-9_-]{6,}/g,
+	/\bBearer\s+\S+/gi,
+	/\b(?:api[_-]?key|token|secret|password|authorization)\s*[=:]\s*\S+/gi,
+	/\b[A-Za-z0-9+/_-]{32,}={0,2}/g,
+];
+
+/** The human-readable message from an upstream error body, or undefined.
+ * Single line, control characters removed, secrets redacted, length capped. */
+export function upstreamDetail(body: string): string | undefined {
+	let text: unknown = body;
+	try {
+		const parsed: unknown = JSON.parse(body);
+		const pick = (v: unknown): unknown => {
+			if (!v || typeof v !== "object") return;
+			const o = v as Record<string, unknown>;
+			if (typeof o.error === "string") return o.error;
+			return (
+				pick(o.error) ??
+				(typeof o.message === "string" ? o.message : undefined) ??
+				(typeof o.detail === "string" ? o.detail : undefined)
+			);
+		};
+		text = pick(parsed);
+	} catch {
+		/* Not JSON: use the plain text body. */
+	}
+	if (typeof text !== "string") return;
+	let detail = Array.from(text)
+		.map((c) => {
+			const code = c.charCodeAt(0);
+			return code < 32 || (code >= 127 && code <= 159) ? " " : c;
+		})
+		.join("")
+		.replace(/\s+/g, " ")
+		.trim();
+	for (const pattern of SECRET_PATTERNS) detail = detail.replace(pattern, "[redacted]");
+	if (!detail) return;
+	return detail.length > MAX_DETAIL_CHARS ? `${detail.slice(0, MAX_DETAIL_CHARS)}…` : detail;
+}
 
 // Node/OpenSSL error codes identify the failure class and contain no secrets.
 const safeCode = (error: unknown): string | undefined => {
@@ -108,6 +154,23 @@ export function secureFetch(
 					const headers = new Headers();
 					for (let i = 0; i < incoming.rawHeaders.length; i += 2)
 						headers.append(incoming.rawHeaders[i], incoming.rawHeaders[i + 1]);
+					if (status >= 400 && req.method !== "HEAD") {
+						// Error bodies are small: buffer a bounded prefix so the user sees
+						// why the gateway or upstream refused. The SDK gets the same bytes.
+						const chunks: Buffer[] = [];
+						let size = 0;
+						incoming.on("data", (chunk: Buffer) => {
+							if (size < MAX_ERROR_BODY_BYTES) chunks.push(chunk.subarray(0, MAX_ERROR_BODY_BYTES - size));
+							size += chunk.length;
+						});
+						incoming.once("end", () => {
+							const body = Buffer.concat(chunks);
+							onState?.({ stage: "response", status, detail: upstreamDetail(body.toString("utf8")) });
+							resolve(new Response(body, { status, headers }));
+						});
+						incoming.once("error", fail);
+						return;
+					}
 					const stream = Readable.toWeb(incoming) as ReadableStream<Uint8Array>;
 					resolve(new Response([204, 205, 304].includes(status) || req.method === "HEAD" ? null : stream, { status, headers }));
 				}
