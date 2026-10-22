@@ -1,4 +1,5 @@
-import { Agent, request } from "node:https";
+import { Agent as HttpAgent, request as httpRequest } from "node:http";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { Readable } from "node:stream";
 import { scopedKey, serverOrigin } from "./catalog.js";
 
@@ -14,24 +15,41 @@ export class CatalogError extends Error {
 		);
 	}
 }
-export type CatalogFetch = (origin: string, key: string, signal: AbortSignal) => Promise<unknown>;
+export type CatalogFetch = (
+	origin: string,
+	key: string,
+	signal: AbortSignal,
+	allowHttpOrigins?: readonly string[]
+) => Promise<unknown>;
 
 /** Private standard-library transport: verifies TLS even if ambient TLS checks
  * are disabled; no environment proxy, cookie jar, redirects or credentials files.
  * Used for native SDK inference too, to prevent redirect credential forwarding.
  */
-export function secureFetch(origin: string): typeof fetch {
-	serverOrigin(origin);
+export function secureFetch(
+	origin: string,
+	httpOrigins: () => readonly string[] = () => [],
+	onStatus?: (status: number | undefined) => void
+): typeof fetch {
+	serverOrigin(origin, httpOrigins());
 	return async (input, init) => {
+		onStatus?.(undefined);
 		if ((globalThis as { Bun?: unknown }).Bun) throw new Error("EAVS secure transport requires Node.js.");
 		const req = new Request(input, init);
 		const url = new URL(req.url);
-		if (url.origin !== origin || url.username || url.password || url.hash || url.protocol !== "https:")
+		if (url.origin !== origin || url.username || url.password || url.hash || serverOrigin(origin, httpOrigins()) !== origin)
 			throw new Error("EAVS request destination refused.");
 		req.signal.throwIfAborted();
 		const body = req.body ? Buffer.from(await req.arrayBuffer()) : undefined;
+		// Buffering a request can yield; honor revocation/cancellation before sending.
+		serverOrigin(origin, httpOrigins());
+		req.signal.throwIfAborted();
 		return new Promise<Response>((resolve, reject) => {
-			const agent = new Agent({ keepAlive: false, rejectUnauthorized: true, ...{ proxyEnv: {} } });
+			const tls = url.protocol === "https:";
+			const agent = tls
+				? new HttpsAgent({ keepAlive: false, rejectUnauthorized: true, ...{ proxyEnv: {} } })
+				: new HttpAgent({ keepAlive: false, ...{ proxyEnv: {} } });
+			const request = tls ? httpsRequest : httpRequest;
 			const fail = () => reject(new Error("EAVS secure request failed."));
 			const outgoing = request(
 				url,
@@ -44,6 +62,7 @@ export function secureFetch(origin: string): typeof fetch {
 				},
 				(incoming) => {
 					const status = incoming.statusCode ?? 500;
+					onStatus?.(status);
 					if (status >= 300 && status < 400) {
 						incoming.destroy();
 						fail();
@@ -70,8 +89,8 @@ export function secureFetch(origin: string): typeof fetch {
 	};
 }
 
-export const fetchCatalog: CatalogFetch = async (origin, key, signal) => {
-	serverOrigin(origin);
+export const fetchCatalog: CatalogFetch = async (origin, key, signal, allowHttpOrigins = []) => {
+	serverOrigin(origin, allowHttpOrigins);
 	scopedKey(key);
 	const controller = new AbortController();
 	const abort = () => controller.abort();
@@ -80,7 +99,7 @@ export const fetchCatalog: CatalogFetch = async (origin, key, signal) => {
 	let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 	try {
 		signal.throwIfAborted();
-		const response = await secureFetch(origin)(`${origin}/v1/eavs/catalog`, {
+		const response = await secureFetch(origin, () => allowHttpOrigins)(`${origin}/v1/eavs/catalog`, {
 			method: "GET",
 			headers: { Authorization: `Bearer ${key}`, Accept: "application/json" },
 			signal: controller.signal,

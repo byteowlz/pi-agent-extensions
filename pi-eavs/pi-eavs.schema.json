@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pi EAVS user HTTP exceptions",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "allowHttpOrigins": {
+      "type": "array",
+      "default": [],
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "maxLength": 2048,
+        "pattern": "^http://[^/?#@*\\s]+$",
+        "description": "Canonical exact HTTP origin, including non-default port; no trailing slash, paths, credentials or wildcards. Runtime also validates using URL parsing."
+      }
+    }
+  }
+}

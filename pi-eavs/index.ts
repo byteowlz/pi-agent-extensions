@@ -1,4 +1,6 @@
-import { type ExtensionAPI, type ExtensionContext, readStoredCredential } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
+import { type ExtensionAPI, type ExtensionContext, getAgentDir, readStoredCredential } from "@earendil-works/pi-coding-agent";
+import { HttpPolicy } from "./http-policy.js";
 import { type CatalogSummary, type EavsOptions, eavsProvider } from "./provider.js";
 import { RefreshLoop } from "./refresh-loop.js";
 import { CatalogError } from "./transport.js";
@@ -22,6 +24,7 @@ export async function initializeEavs(
 	options: EavsOptions = {},
 	readCredential: typeof readStoredCredential = readStoredCredential
 ) {
+	const httpPolicy = options.httpPolicy ?? new HttpPolicy(join(getAgentDir(), "pi-eavs.json"));
 	let context: ExtensionContext | undefined;
 	const catalogState: { summary?: CatalogSummary } = {};
 	const offline = () => process.env.PI_OFFLINE !== undefined;
@@ -45,6 +48,7 @@ export async function initializeEavs(
 	});
 	const provider = eavsProvider({
 		...options,
+		httpPolicy,
 		onCatalogSummary(value) {
 			catalogState.summary = value;
 			options.onCatalogSummary?.(value);
@@ -81,6 +85,7 @@ export async function initializeEavs(
 	});
 	pi.on("session_shutdown", async () => {
 		context = undefined;
+		httpPolicy.clear();
 		loop.stop();
 	});
 	pi.registerCommand("eavs-refresh", {

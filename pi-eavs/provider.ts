@@ -15,9 +15,11 @@ import {
 	projectCatalog,
 	restoreCatalog,
 	scopedKey,
+	serverAddress,
 	serverOrigin,
 	unavailable,
 } from "./catalog.js";
+import { HttpPolicy } from "./http-policy.js";
 import { CatalogError, type CatalogFetch, fetchCatalog, secureFetch } from "./transport.js";
 
 const implementations: Record<NativeApi, ProviderStreams> = {
@@ -26,10 +28,10 @@ const implementations: Record<NativeApi, ProviderStreams> = {
 	"anthropic-messages": lazyApi(() => import("@earendil-works/pi-ai/api/anthropic-messages")),
 };
 
-function connection(credential?: Credential) {
+function storedConnection(credential: Credential | undefined, allowHttpOrigins: readonly string[]) {
 	if (credential?.type !== "api_key" || !credential.env?.EAVS_SERVER) return;
 	try {
-		const origin = serverOrigin(credential.env.EAVS_SERVER);
+		const origin = serverOrigin(credential.env.EAVS_SERVER, allowHttpOrigins);
 		const key = scopedKey(credential.key);
 		const binding = `eavs-scope-v1:${createHash("sha256")
 			.update(JSON.stringify([origin, key]))
@@ -47,6 +49,7 @@ export interface CatalogSummary {
 }
 
 export interface EavsOptions {
+	httpPolicy?: HttpPolicy;
 	onCatalogSummary?: (summary: CatalogSummary) => void;
 	onAuthChange?: (configured: boolean) => void;
 	fetchCatalog?: CatalogFetch;
@@ -54,19 +57,30 @@ export interface EavsOptions {
 	apis?: Record<NativeApi, ProviderStreams>;
 }
 
-function project(origin: string, value: unknown): Projection {
+function project(origin: string, value: unknown, allowHttpOrigins: readonly string[]): Projection {
 	try {
-		return projectCatalog(origin, value);
+		return projectCatalog(origin, value, allowHttpOrigins);
 	} catch {
 		throw new CatalogError("invalid");
 	}
 }
 
 export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
-	const fetchMetadata = options.fetchCatalog ?? fetchCatalog;
+	const policy = options.httpPolicy ?? new HttpPolicy();
+	const httpOrigins = (origin: string) => (origin.startsWith("http:") ? policy.origins() : []);
+	const fetchMetadata: CatalogFetch = (origin, key, signal) =>
+		(options.fetchCatalog ?? fetchCatalog)(origin, key, signal, httpOrigins(origin));
+	const connection = (credential?: Credential) => {
+		try {
+			const origin = credential?.type === "api_key" && credential.env?.EAVS_SERVER;
+			return storedConnection(credential, origin ? httpOrigins(serverAddress(origin)) : []);
+		} catch {
+			return;
+		}
+	};
 	const apis = options.apis ?? implementations;
 	const projectMetadata = (origin: string, value: unknown) => {
-		const projection = project(origin, value);
+		const projection = project(origin, value, httpOrigins(origin));
 		options.onCatalogSummary?.({
 			models: projection.models.length,
 			skipped: projection.skipped,
@@ -84,22 +98,42 @@ export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 				interaction: Parameters<NonNullable<NonNullable<Provider["auth"]["apiKey"]>["login"]>>[0]
 			): Promise<ApiKeyCredential> {
 				if (process.env.PI_OFFLINE !== undefined) throw new Error("EAVS login metadata validation is disabled by PI_OFFLINE.");
+				let onceOrigin: string | undefined;
 				try {
 					interaction.notify({
 						type: "info",
 						message:
 							"Use an EAVS scoped virtual key, never an operator/master key. Pi stores this key unencrypted in auth.json. One EAVS connection is saved; signing in replaces it.",
 					});
-					const origin = serverOrigin(
+					const origin = serverAddress(
 						(
 							await interaction.prompt({
 								type: "text",
-								message: "EAVS server HTTPS URL (origin or /v1 API base)",
+								message: "EAVS server URL (HTTPS, or HTTP with an explicit exception)",
 								signal: interaction.signal,
 							})
 						).trim()
 					);
 					interaction.signal.throwIfAborted();
+					if (origin.startsWith("http:") && !policy.origins().includes(origin)) {
+						const choice = await interaction.prompt({
+							type: "select",
+							message: `Allow unencrypted HTTP to ${origin}? Your scoped key and requests will use this connection. Only allow it on a trusted network.`,
+							options: [
+								{ id: "cancel", label: "Cancel" },
+								{ id: "once", label: "Allow once (until reload/session shutdown)" },
+								{ id: "save", label: "Save exact-origin exception" },
+							],
+							signal: interaction.signal,
+						});
+						interaction.signal.throwIfAborted();
+						if (choice === "once") {
+							policy.allowOnce(origin);
+							onceOrigin = origin;
+						} else if (choice === "save") policy.save(origin, interaction.signal);
+						else throw unavailable();
+					}
+					serverOrigin(origin, httpOrigins(origin));
 					const key = scopedKey(
 						await interaction.prompt({ type: "secret", message: "EAVS scoped virtual key", signal: interaction.signal })
 					);
@@ -120,6 +154,7 @@ export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 					});
 					return credential;
 				} catch (error) {
+					if (onceOrigin) policy.revokeOnce(onceOrigin);
 					throw error instanceof CatalogError ? error : unavailable();
 				}
 			},
@@ -170,7 +205,8 @@ export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 				else if (context.allowNetwork && process.env.PI_OFFLINE === undefined)
 					next = projectMetadata(c.origin, await fetchMetadata(c.origin, c.key, context.signal)).models;
 				else if (binding === c.binding) return;
-				else if (context.stored?.etag === c.binding) next = restoreCatalog(c.origin, context.stored.models);
+				else if (context.stored?.etag === c.binding)
+					next = restoreCatalog(c.origin, context.stored.models, httpOrigins(c.origin));
 				if (!next) next = [];
 				context.signal.throwIfAborted();
 				const snapshot = next;
@@ -232,11 +268,25 @@ export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 				id: known.id.slice(known.id.indexOf("/") + 1),
 				baseUrl: known.api === "anthropic-messages" ? known.baseUrl.slice(0, -3) : known.baseUrl,
 			};
+			let responseStatus: number | undefined;
+			const failure = () =>
+				responseStatus
+					? `EAVS request failed or cancelled (HTTP ${responseStatus}; ${responseStatus < 300 ? "response stream/protocol failure" : "gateway/upstream rejected the request"}).`
+					: "EAVS request failed or cancelled before an HTTP response (transport or SDK setup failure).";
 			let stream: ReturnType<Provider["streamSimple"]>;
 			try {
-				stream = run(native, secureFetch(origin));
+				stream = run(
+					native,
+					secureFetch(
+						origin,
+						() => httpOrigins(origin),
+						(status) => {
+							responseStatus = status;
+						}
+					)
+				);
 			} catch {
-				throw new Error("EAVS request setup failed.");
+				throw new Error(failure());
 			}
 			return (async function* () {
 				try {
@@ -245,12 +295,12 @@ export function eavsProvider(options: EavsOptions = {}): Provider<NativeApi> {
 						if ("message" in event) event.message.model = model.id;
 						if ("error" in event) {
 							event.error.model = model.id;
-							event.error.errorMessage = "EAVS request failed or cancelled.";
+							event.error.errorMessage = failure();
 						}
 						yield event;
 					}
 				} catch {
-					throw new Error("EAVS request failed or cancelled.");
+					throw new Error(failure());
 				}
 			})();
 		});
