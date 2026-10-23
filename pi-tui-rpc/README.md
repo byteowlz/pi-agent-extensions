@@ -30,9 +30,9 @@ herdr pane                     oqto runner                  oqto frontend
 - **Inbound**: a small command set (below). Prompts are injected with
   `pi.sendUserMessage`, so they appear in the TUI as user messages and vice versa — both
   surfaces always show the same conversation.
-- **Input lease**: the TUI owns input by default. A remote client takes over only after the
-  TUI user confirms a dialog; the TUI can seize input back instantly by just typing. Lease
-  changes are broadcast and shown in the TUI status bar.
+- **Input lease**: the TUI owns input by default. A connected client that asks gets input at
+  once (`PI_TUI_RPC_LEASE_CONFIRM=1` asks the terminal first); the TUI takes it back instantly
+  by just typing. Lease changes are broadcast and shown in the TUI status bar.
 
 ## Quick start
 
@@ -63,7 +63,7 @@ answer `success: false` with an `unsupported:` error.
 
 ### Lease
 
-Remote lease requests are granted immediately; the terminal revokes on any interactive keystroke. Set `PI_TUI_RPC_LEASE_CONFIRM=1` to require a TUI confirmation.
+Remote lease requests are granted immediately; the terminal revokes on any interactive keystroke. A lease belongs to one socket connection and lasts until that connection releases it, disconnects, the terminal types or the session changes; there is no time limit. Set `PI_TUI_RPC_LEASE_CONFIRM=1` to require a TUI confirmation (shared terminals); without a terminal to ask, that setting refuses.
 
 ### Socket path
 
@@ -84,7 +84,7 @@ Strict JSONL: LF (`\n`) is the only record delimiter; a single trailing `\r` is 
 | `abort` | — | Requires the lease |
 | `get_state` | — | Mode, cwd, session ids/name, routing description, model, thinking level, streaming, lease |
 | `get_messages` | — | Current branch entries |
-| `lease` | `action: request\|release` | Request triggers the TUI confirm dialog |
+| `lease` | `action: request\|release` | Granted at once; confirm dialog only with `PI_TUI_RPC_LEASE_CONFIRM=1` |
 
 Responses: `{"type":"response","id":…,"command":…,"success":…,"data"|"error":…}`.
 
@@ -99,8 +99,9 @@ Responses: `{"type":"response","id":…,"command":…,"success":…,"data"|"erro
 - `tui` is the default owner; observation commands (`get_state`, `get_messages`) never need it.
 - Input commands (`prompt`, `steer`, `follow_up`, `abort`) require `owner === "remote"`,
   otherwise they fail with `lease_denied:tui_owns_input`.
-- Remote takeover while the TUI owns input asks the TUI user via a confirm dialog
-  (auto-granted only when no TUI is present, e.g. RPC mode).
+- Remote takeover is granted at once. The socket is private to this OS user, so a prompt
+  would not stop that user's own processes; it only interrupts. `PI_TUI_RPC_LEASE_CONFIRM=1`
+  asks the TUI user first.
 - Any TUI-typed input instantly reverts ownership (`reason: "tui_input"`).
 
 ## Limitations (spike)

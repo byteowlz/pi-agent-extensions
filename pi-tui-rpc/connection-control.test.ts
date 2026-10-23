@@ -43,11 +43,13 @@ function client(socketPath: string) {
 	};
 }
 
-test("real extension sockets fence controllers, disconnect, terminal reclaim and no-UI denial", async () => {
+test("opt-in confirmation: real sockets fence controllers, disconnect, terminal reclaim and no-UI denial", async () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-control-"));
 	const socketPath = path.join(root, "control.sock");
 	const previous = process.env.PI_TUI_RPC_SOCKET;
+	const previousConfirm = process.env.PI_TUI_RPC_LEASE_CONFIRM;
 	process.env.PI_TUI_RPC_SOCKET = socketPath;
+	process.env.PI_TUI_RPC_LEASE_CONFIRM = "1";
 	const handlers = new Map<string, Handler>();
 	const sent: string[] = [];
 	let confirmations = 0;
@@ -169,6 +171,8 @@ test("real extension sockets fence controllers, disconnect, terminal reclaim and
 		if (handlers.has("session_shutdown")) await emit("session_shutdown");
 		if (previous === undefined) Reflect.deleteProperty(process.env, "PI_TUI_RPC_SOCKET");
 		else process.env.PI_TUI_RPC_SOCKET = previous;
+		if (previousConfirm === undefined) Reflect.deleteProperty(process.env, "PI_TUI_RPC_LEASE_CONFIRM");
+		else process.env.PI_TUI_RPC_LEASE_CONFIRM = previousConfirm;
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 });
