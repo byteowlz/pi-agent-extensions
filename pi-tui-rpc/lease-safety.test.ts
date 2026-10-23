@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createLease } from "./lease";
+import { createLease, takeoverDecision } from "./lease";
 
 function pending() {
 	let approve: (approved: boolean) => void = () => {
@@ -68,4 +68,21 @@ test("input leases expire without a client message", async () => {
 	await Bun.sleep(20);
 	expect(lease.owner()).toBe("tui");
 	expect(lease.heldBy("a")).toBe(false);
+});
+
+test("a granted lease lasts while the connection does", async () => {
+	const lease = createLease({ confirmTakeover: async () => true, onChange: () => {} });
+	expect((await lease.requestRemote("a")).granted).toBe(true);
+	await Bun.sleep(20);
+	expect(lease.heldBy("a")).toBe(true);
+	lease.onTuiInput();
+	expect(lease.owner()).toBe("tui");
+});
+
+test("remote input is granted by default; confirmation is opt-in", () => {
+	expect(takeoverDecision({}, true)).toBe("grant");
+	expect(takeoverDecision({}, false)).toBe("grant");
+	expect(takeoverDecision({ PI_TUI_RPC_LEASE_CONFIRM: "1" }, true)).toBe("ask");
+	expect(takeoverDecision({ PI_TUI_RPC_LEASE_CONFIRM: " 1 " }, false)).toBe("refuse");
+	expect(takeoverDecision({ PI_TUI_RPC_LEASE_CONFIRM: "0" }, true)).toBe("grant");
 });

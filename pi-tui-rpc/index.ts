@@ -55,7 +55,7 @@ function toModelSummary(m: unknown): ModelSummary {
 }
 import { type ModelSummary, type RpcDeps, dispatchCommand } from "./dispatch.js";
 import { type Hub, createHub } from "./hub.js";
-import { createLease } from "./lease.js";
+import { createLease, takeoverDecision } from "./lease.js";
 import { COMMAND_TYPES, type ClientCommand, type LeaseOwner, eventFrame, responseFrame, validateCommand } from "./protocol.js";
 
 const STATUS_KEY = "pi_tui_rpc";
@@ -193,9 +193,8 @@ export default function (pi: ExtensionAPI) {
 	const lease = createLease({
 		confirmTakeover: async () => {
 			const ctx = currentCtx;
-			// Socket reachability is observation, never permission to type.
-			// Headless/RPC invocations have no terminal authority to confirm.
-			if (!ctx || isRpcMode || !ctx.hasUI) return false;
+			const decision = takeoverDecision(process.env, Boolean(ctx && !isRpcMode && ctx.hasUI));
+			if (decision !== "ask" || !ctx) return decision === "grant";
 			return ctx.ui.confirm("Remote input request", "An RPC client requests input control. Allow?");
 		},
 		onChange: (owner, reason) => {

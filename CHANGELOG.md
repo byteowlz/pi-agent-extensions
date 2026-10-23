@@ -4,6 +4,14 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-tui-rpc: remote input without a terminal prompt again
+
+- **pi-tui-rpc**: restore the 2026-09-17 default that 2.13.0 reverted without a documented
+  decision (the README kept describing it): a remote lease request is granted at once and any
+  terminal keystroke takes input back. `PI_TUI_RPC_LEASE_CONFIRM=1` still asks the terminal.
+  Leases no longer expire after 60 seconds while their connection stays open; the
+  connection-scoped lease, disconnect fencing and terminal reclaim from 2.13.0 are kept.
+
 ### EAVS thinking levels from the catalog (2.23.5)
 
 - **pi-eavs 0.2.4**: offer only the thinking levels the upstream accepts, from the EAVS catalog's `reasoning_efforts`.
