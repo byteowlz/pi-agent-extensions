@@ -17,8 +17,6 @@
  * the pi process (same user); place it in a session-scoped directory.
  */
 
-import os from "node:os";
-import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 type SessionActionResult = Promise<{ cancelled: boolean }>;
@@ -57,6 +55,7 @@ import { type ModelSummary, type RpcDeps, dispatchCommand } from "./dispatch.js"
 import { type Hub, createHub } from "./hub.js";
 import { createLease, takeoverDecision } from "./lease.js";
 import { COMMAND_TYPES, type ClientCommand, type LeaseOwner, eventFrame, responseFrame, validateCommand } from "./protocol.js";
+import { defaultSocketPath } from "./socket-path.js";
 
 const STATUS_KEY = "pi_tui_rpc";
 
@@ -107,10 +106,6 @@ function toolCallCount(content: unknown): number {
 function detectRpcMode(): boolean {
 	const argv = process.argv.join(" ");
 	return argv.includes("--mode rpc") || argv.includes("--mode=rpc");
-}
-
-function defaultSocketPath(): string {
-	return path.join(os.tmpdir(), `pi-tui-rpc-${process.pid}.sock`);
 }
 
 /**
