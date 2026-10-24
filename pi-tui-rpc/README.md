@@ -68,7 +68,10 @@ Remote lease requests are granted immediately; the terminal revokes on any inter
 ### Socket path
 
 - `PI_TUI_RPC_SOCKET` env var (set by the oqto runner per session), else
-- `${TMPDIR}/pi-tui-rpc-<pid>.sock`.
+- `${TMPDIR}/pi-tui-rpc-<pid>.sock` on macOS (a private per-user directory).
+- `${XDG_RUNTIME_DIR}/pi-tui-rpc-<pid>.sock` on Linux when that directory is owned by
+  the user with mode 0700 (systemd: `/run/user/<uid>`); otherwise `${TMPDIR:-/tmp}`.
+  The shared `/tmp` is refused by an Oqto Runner as a socket root.
 
 ## Protocol (v0)
 
