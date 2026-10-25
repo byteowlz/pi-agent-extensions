@@ -15,7 +15,8 @@
  *     "maxSubagents": 3             // default max concurrent subagents per session; 0 = unlimited
  *     "allowMode": "confirm",       // per-session default: "confirm" | "auto" | "timeout"
  *     "autoDecision": "deny",       // when allowMode=timeout and nobody answers: "allow" | "deny"
- *     "confirmTimeoutMs": 60000,    // how long the timed prompt waits before auto-deciding
+ *     "confirmTimeoutMs": 60000,    // bounded wait for confirm/timeout prompts (0 = indefinitely);
+ *                                    //   confirm mode auto-denies on expiry — never auto-approves
  *     "loadouts": {}                // named presets: array of patterns OR { models, mode?, max?, kinds? }
  *     //   { "local": ["rtx6000/deepseek"],
  *     //     "smart": { models: ["openai-codex/gpt-6.1-sol"], mode: "auto", max: 3, kinds: ["pi"] } }
@@ -250,7 +251,9 @@ function loadConfig(): SubagentConfig {
 				maxSubagents: typeof raw.maxSubagents === "number" ? raw.maxSubagents : DEFAULT_CONFIG.maxSubagents,
 				allowMode,
 				autoDecision: asAutoDecision(raw.autoDecision) ?? DEFAULT_CONFIG.autoDecision,
-				confirmTimeoutMs: typeof raw.confirmTimeoutMs === "number" ? raw.confirmTimeoutMs : DEFAULT_CONFIG.confirmTimeoutMs,
+				confirmTimeoutMs: normalizeConfirmTimeoutMs(
+					typeof raw.confirmTimeoutMs === "number" ? raw.confirmTimeoutMs : DEFAULT_CONFIG.confirmTimeoutMs
+				),
 				loadouts,
 				catalogPath: typeof raw.catalogPath === "string" ? raw.catalogPath : DEFAULT_CONFIG.catalogPath,
 			};
@@ -544,6 +547,14 @@ function trackSubagent(ctx: ExtensionContext, t: TrackedSubagent): void {
 	persistState();
 }
 
+/** Hard upper bound for how long any spawn confirmation may wait. */
+const CONFIRM_WAIT_CEILING_MS = 3_600_000;
+
+function normalizeConfirmTimeoutMs(value: number): number {
+	if (!Number.isFinite(value) || value < 0) return DEFAULT_CONFIG.confirmTimeoutMs;
+	return Math.min(Math.floor(value), CONFIRM_WAIT_CEILING_MS);
+}
+
 function sessionAllowMode(config: SubagentConfig): AllowMode {
 	return currentState?.allowMode ?? config.allowMode;
 }
@@ -551,7 +562,7 @@ function sessionAutoDecision(config: SubagentConfig): AutoDecision {
 	return currentState?.autoDecision ?? config.autoDecision;
 }
 function sessionConfirmTimeout(config: SubagentConfig): number {
-	return currentState?.confirmTimeoutMs ?? config.confirmTimeoutMs;
+	return normalizeConfirmTimeoutMs(currentState?.confirmTimeoutMs ?? config.confirmTimeoutMs);
 }
 function sessionMaxSubagents(config: SubagentConfig): number {
 	return currentState?.maxSubagents ?? config.maxSubagents;
@@ -1172,24 +1183,29 @@ type SpawnDecision = { ok: boolean; model?: string };
 
 /**
  * Confirmation modal for subagent spawns (non-auto allow modes): shows the
- * spawn detail, a live countdown (timeout mode only), and three actions —
- * allow, deny, or change the subagent model via a fuzzy picker (when
- * `modelEditable`; only the pi kind actually consumes the model).
+ * spawn detail, a live countdown (whenever a deadline is armed), and three
+ * actions — allow, deny, or change the subagent model via a fuzzy picker
+ * (when `modelEditable`; only the pi kind actually consumes the model).
  * Pressing m opens the picker; Esc there returns to the confirmation with a
  * fresh countdown. Auto-decide is suspended while the picker is open.
+ * A confirmation never waits indefinitely: `timeoutMs` bounds the dialog
+ * (config `confirmTimeoutMs` 0 disables the bound) and expiry auto-denies
+ * unless `onTimeoutAllow` — an approval always requires a live human answer.
+ * The tool call's abort signal denies immediately.
  */
 function spawnConfirm(
 	ctx: ExtensionContext,
 	detail: string,
 	timeoutMs: number | null,
 	onTimeoutAllow: boolean,
-	modelEditable: boolean
+	modelEditable: boolean,
+	signal?: AbortSignal
 ): Promise<SpawnDecision> {
 	return ctx.ui.custom<SpawnDecision>((tui, theme, _kb, done) => {
 		// Waiting on the human to approve spawn — show as blocked in herdr.
 		herdrReport("blocked", "subagent spawn confirmation");
 		let settled = false;
-		let deadline = timeoutMs !== null ? Date.now() + timeoutMs : null;
+		let deadline = timeoutMs !== null && timeoutMs > 0 ? Date.now() + timeoutMs : null;
 		let cachedLines: string[] | undefined;
 		let timer: ReturnType<typeof setInterval> | null = null;
 		let picking = false;
@@ -1214,9 +1230,19 @@ function spawnConfirm(
 			if (settled) return;
 			settled = true;
 			if (timer) clearInterval(timer);
+			signal?.removeEventListener("abort", onAbort);
 			herdrReport("working");
 			herdrRelease();
 			done(v);
+		}
+
+		function onAbort(): void {
+			finish({ ok: false });
+		}
+		signal?.addEventListener("abort", onAbort, { once: true });
+		if (signal?.aborted) {
+			// Defer so the factory returns its handlers before done() fires.
+			queueMicrotask(onAbort);
 		}
 
 		function refresh(): void {
@@ -1266,7 +1292,7 @@ function spawnConfirm(
 		function closePicker(): void {
 			picking = false;
 			// fresh countdown: browsing the picker counts as input
-			deadline = timeoutMs !== null ? Date.now() + timeoutMs : null;
+			deadline = timeoutMs !== null && timeoutMs > 0 ? Date.now() + timeoutMs : null;
 			armTimer();
 			refresh();
 		}
@@ -1400,18 +1426,24 @@ export async function approveSpawn(
 	// RPC has dialogs but no custom terminal components. Never convert a
 	// missing approval surface into permission; only explicit auto mode skips it.
 	if (!ctx.hasUI) return { ok: false };
+	// Every non-auto confirmation is a bounded wait (config `confirmTimeoutMs`;
+	// 0 is the explicit unbounded opt-out). Expiry denies in confirm mode and
+	// follows autoDecision in timeout mode — never the other way round.
+	const confirmWait = sessionConfirmTimeout(config);
+	const boundedWait = confirmWait > 0 ? confirmWait : null;
 	if (ctx.mode === "rpc") {
 		const confirmed = await ctx.ui.confirm("Spawn subagent?", detail, {
 			signal: ctx.signal,
-			...(mode === "timeout" ? { timeout: sessionConfirmTimeout(config) } : {}),
+			...(boundedWait !== null ? { timeout: boundedWait } : {}),
 		});
+		// RPC dialogs resolve false on expiry, so a timed-out confirm mode —
+		// even with autoDecision allow — fails closed there.
 		return { ok: confirmed === true };
 	}
 	if (ctx.mode !== "tui") return { ok: false };
-	if (mode === "confirm") return spawnConfirm(ctx, detail, null, false, modelEditable);
-	const timeout = sessionConfirmTimeout(config);
+	if (mode === "confirm") return spawnConfirm(ctx, detail, boundedWait, false, modelEditable, ctx.signal);
 	const decision = sessionAutoDecision(config);
-	return spawnConfirm(ctx, detail, timeout, decision === "allow", modelEditable);
+	return spawnConfirm(ctx, detail, boundedWait, decision === "allow", modelEditable, ctx.signal);
 }
 
 // --- Model / provider picker with loadouts ----------------------------
@@ -2911,13 +2943,20 @@ export default function sessionTools(pi: ExtensionAPI) {
 				}
 				if (argv[0] === "timeout") {
 					const ms = Number.parseInt(argv[1] ?? "", 10);
-					if (!Number.isFinite(ms) || ms <= 0) {
-						ctx.ui.notify("Usage: /subagent timeout <ms> (e.g. 30000)", "error");
+					if (!Number.isFinite(ms) || ms < 0) {
+						ctx.ui.notify("Usage: /subagent timeout <ms> (e.g. 30000; 0 = wait indefinitely)", "error");
+						return;
+					}
+					if (ms > CONFIRM_WAIT_CEILING_MS) {
+						ctx.ui.notify(`Timeout capped at ${CONFIRM_WAIT_CEILING_MS}ms.`, "error");
 						return;
 					}
 					if (currentState) currentState.confirmTimeoutMs = ms;
 					persistState();
-					ctx.ui.notify(`Timed confirm waits ${ms}ms before auto-deciding.`, "info");
+					ctx.ui.notify(
+						`Spawn confirms wait at most ${ms === 0 ? "indefinitely (0)" : `${ms}ms`}; confirm mode auto-denies on expiry.`,
+						"info"
+					);
 					return;
 				}
 				if (argv[0] === "max") {
@@ -2978,10 +3017,13 @@ export default function sessionTools(pi: ExtensionAPI) {
 				const maxN = sessionMaxSubagents(config);
 				const tracked = currentState ? Object.keys(currentState.subagents).length : 0;
 				const eff = effectiveAllowlist(config);
+				const waitLabel = timeout === 0 ? "unbounded (0)" : `${timeout}ms`;
+				const modeLabel =
+					mode === "timeout" ? `auto-${decision} after ${waitLabel}` : mode === "confirm" ? `auto-deny after ${waitLabel}` : "";
 				ctx.ui.notify(
 					[
 						`Subagent config: enabled=${config.enabled}`,
-						`allowMode=${mode}${mode === "timeout" ? ` (auto-${decision} after ${timeout}ms)` : ""}`,
+						`allowMode=${mode}${modeLabel ? ` (${modeLabel})` : ""}`,
 						`max=${maxN}${maxN === 0 ? " (unlimited)" : ""}`,
 						`kinds=${sessionAllowedKinds(config).join(",")}`,
 						`active=${active}`,

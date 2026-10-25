@@ -63,7 +63,7 @@ answer `success: false` with an `unsupported:` error.
 
 ### Lease
 
-Remote lease requests are granted immediately; the terminal revokes on any interactive keystroke. Set `PI_TUI_RPC_LEASE_CONFIRM=1` to require a TUI confirmation.
+Remote lease requests are granted immediately; the terminal revokes on any interactive keystroke. When the takeover needs a TUI confirmation, the dialog auto-denies after 120 seconds so an unattended session cannot wedge on it. Set `PI_TUI_RPC_TAKEOVER_TIMEOUT_S` (seconds; `0` = wait indefinitely) to tune it.
 
 ### Socket path
 
