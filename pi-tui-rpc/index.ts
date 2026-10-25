@@ -17,8 +17,6 @@
  * the pi process (same user); place it in a session-scoped directory.
  */
 
-import os from "node:os";
-import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 type SessionActionResult = Promise<{ cancelled: boolean }>;
@@ -55,8 +53,9 @@ function toModelSummary(m: unknown): ModelSummary {
 }
 import { type ModelSummary, type RpcDeps, dispatchCommand } from "./dispatch.js";
 import { type Hub, createHub } from "./hub.js";
-import { createLease } from "./lease.js";
+import { createLease, takeoverDecision } from "./lease.js";
 import { COMMAND_TYPES, type ClientCommand, type LeaseOwner, eventFrame, responseFrame, validateCommand } from "./protocol.js";
+import { defaultSocketPath } from "./socket-path.js";
 
 const STATUS_KEY = "pi_tui_rpc";
 
@@ -107,10 +106,6 @@ function toolCallCount(content: unknown): number {
 function detectRpcMode(): boolean {
 	const argv = process.argv.join(" ");
 	return argv.includes("--mode rpc") || argv.includes("--mode=rpc");
-}
-
-function defaultSocketPath(): string {
-	return path.join(os.tmpdir(), `pi-tui-rpc-${process.pid}.sock`);
 }
 
 /**
@@ -200,9 +195,8 @@ export default function (pi: ExtensionAPI) {
 	const lease = createLease({
 		confirmTakeover: async () => {
 			const ctx = currentCtx;
-			// Socket reachability is observation, never permission to type.
-			// Headless/RPC invocations have no terminal authority to confirm.
-			if (!ctx || isRpcMode || !ctx.hasUI) return false;
+			const decision = takeoverDecision(process.env, Boolean(ctx && !isRpcMode && ctx.hasUI));
+			if (decision !== "ask" || !ctx) return decision === "grant";
 			// Remote-triggered, human-answered: bound the wait so an unanswered
 			// takeover prompt cannot wedge the TUI dialog indefinitely. Expiry
 			// denies — takeover is a privilege, fail-closed (same as tui_denied).

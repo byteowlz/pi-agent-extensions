@@ -4,7 +4,7 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
-### Bounded blocking dialogs (2.26.0)
+### Bounded blocking dialogs (2.27.0)
 
 - **pi-session-tools**: subagent spawn confirmations no longer wait forever in
   `allowMode: "confirm"`. `confirmTimeoutMs` (default 60000, env-styled ceiling
@@ -21,7 +21,7 @@ All notable changes to pi-agent-extensions will be documented in this file.
   extension ctx goes stale before the 50 ms watchdog fires (surfaced by the
   print-exit e2e full-set load).
 
-### Context limit per session (2.25.0)
+### Context limit per session (2.26.0)
 
 - **pi-ctx-limit 0.1.0**: new extension — `/ctx` (alias `/context`) sets a
   per-session compaction threshold. Direct size args (`/ctx 262k`) or a fuzzy
@@ -30,16 +30,24 @@ All notable changes to pi-agent-extensions will be documented in this file.
   context window minus `reserveTokens` (so it never disables pi's native
   compaction trigger).
 
-### Auto-rename model picker and name history (2.24.1)
+### Auto-rename model picker and name history (2.25.1)
 
 - **pi-auto-rename 1.6.0**: `/auto-rename model` fuzzy picker with context-window
   badges; `sync|inbound|outbound on|off` explicit toggles; name history with
   provenance via `recordName` sidecar entries and `/auto-rename history`;
   configurable `maxNameLength`.
 
-### EAVS adaptive thinking (2.23.6)
+### pi-tui-rpc: remote input without a terminal prompt again (2.24.0)
 
-- **pi-eavs 0.2.5**: honor the catalog's `forceAdaptiveThinking` for Anthropic models.
+- **pi-tui-rpc**: restore the 2026-09-17 default that 2.13.0 reverted without a documented
+  decision (the README kept describing it): a remote lease request is granted at once and any
+  terminal keystroke takes input back. `PI_TUI_RPC_LEASE_CONFIRM=1` still asks the terminal.
+  Leases no longer expire after 60 seconds while their connection stays open; the
+  connection-scoped lease, disconnect fencing and terminal reclaim from 2.13.0 are kept.
+
+### EAVS off-level mapping and session affinity (2.23.7)
+
+- **pi-eavs 0.2.7**: unites both 0.2.5 lineages and 0.2.6 — per-model native APIs with `max` thinking level, `x-session-affinity` header, catalog `forceAdaptiveThinking` for Anthropic models, and Pi's off level mapped to a declared `none`/`off` effort.
 
 ### EAVS thinking levels from the catalog (2.23.5)
 
