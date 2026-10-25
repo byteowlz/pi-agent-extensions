@@ -161,7 +161,7 @@
 		},
 		"maxNameLength": {
 			"type": "integer",
-			"description": "Maximum number of characters allowed for the generated session name (before prefix/suffix). LLM responses exceeding this limit are truncated at a word boundary with an ellipsis.",
+			"description": "Maximum number of characters allowed for the generated session name (before prefix/suffix). LLM responses exceeding this limit are truncated at a word boundary with an ellipsis. The rename_session tool description and prompt snippet show this limit to the model (read at extension load).",
 			"default": 80,
 			"minimum": 10,
 			"maximum": 500

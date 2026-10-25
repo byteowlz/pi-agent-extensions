@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.6.1
+
+- Fix: the deferred `session_info_changed` history record no longer throws an
+  uncaught stale-context error when the session ends before the 50 ms watchdog
+  fires (fast `pi -p` runs crashed with exit 1 in the full-extension-set e2e).
+
+## 1.6.0
+
+- `/auto-rename model`: interactive registry model picker (TUI), plus
+  `list` and `off` subcommands; the chosen model persists to the effective
+  `auto-rename.json` and is used as the primary renaming model.
+- Model picker rows and `model list` show each model's context window as a
+  compact badge (`ctx 200k`, `ctx 1M`, `ctx —` when unknown); the badge is
+  part of the fuzzy-match text, so `128k` filters by window size.
+- `/auto-rename sync|inbound|outbound` accept explicit `on`/`off` in addition
+  to the bare toggle.
+- Name history: every rename through this extension records an append-only
+  `pi-auto-rename:name-history/v1` entry with provenance (who: user/agent/
+  extension, via: manual/auto-llm/agent-tool/…, and the generating model for
+  LLM titles). `/auto-rename history` merges these with raw `session_info`
+  entries so older renames still show (as unknown user renames).
+- `rename_session` tool now shows the configured `maxNameLength` limit in its
+  description, prompt snippet and `name` parameter so the model knows the
+  bound before submitting; enforcement is unchanged (word-boundary
+  truncation + ellipsis).
+- Config guard rails: `maxNameLength`/`maxQueryLength` fall back to defaults
+  on non-finite values; `maxNameLength` minimum 8, `maxQueryLength` minimum 100.
+
 ## 1.5.0
 
 - Add a routing description alongside the session name, stored as an
