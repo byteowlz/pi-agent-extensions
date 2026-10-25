@@ -146,6 +146,10 @@ When the gateway reports which reasoning efforts a model accepts (catalog
 `reasoning_efforts`, declared in EAVS or learned from upstream errors), Pi only
 offers those thinking levels for it; `xhigh` appears when accepted. A hidden
 level selected elsewhere clamps upward, matching the gateway's own rewrite.
+If the declared efforts include `none` or `off`, Pi's off level sends that value,
+so `/thinking off` actually disables reasoning on an upstream that thinks by
+default (for example DeepSeek V4.1 on vLLM, which accepts none/low/high/xhigh).
+Without such a value Pi sends nothing for off and the upstream default applies.
 
 ## Troubleshooting login and refresh
 

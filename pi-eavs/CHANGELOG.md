@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.5
+
+- When the catalog declares a reasoning effort that disables thinking (none or off), map Pi's off level to it. Pi only sends a reasoning_effort for off when the model's thinkingLevelMap names a value, so /thinking off previously sent nothing and a reasoning model kept thinking at its default effort. Models without such a declared value are unchanged. Example: DeepSeek V4.1 on vLLM accepts none/low/high/xhigh; off now sends none.
+
 ## 0.2.4
 
 - Map the catalog's per-model `reasoning_efforts` to Pi's `thinkingLevelMap`: levels the upstream rejects are hidden and `xhigh` is offered when accepted (e.g. a vLLM accepting low/medium/xhigh offers off, low, medium, xhigh). Malformed values are ignored; models without the field keep Pi's defaults. Preserved across cache restoration.

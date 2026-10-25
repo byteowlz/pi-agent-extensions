@@ -94,6 +94,11 @@ function thinkingLevelMap(efforts: string[]): NonNullable<Model<NativeApi>["thin
 	const map: NonNullable<Model<NativeApi>["thinkingLevelMap"]> = { max: null };
 	for (const level of ["minimal", "low", "medium", "high"] as const) if (!efforts.includes(level)) map[level] = null;
 	map.xhigh = efforts.includes("xhigh") ? "xhigh" : null;
+	// Pi sends nothing for the "off" level unless the map names a value, so a
+	// reasoning model keeps thinking at its default effort. When the upstream
+	// declares none/off, send it: /thinking off then really disables reasoning.
+	if (efforts.includes("none")) map.off = "none";
+	else if (efforts.includes("off")) map.off = "off";
 	return map;
 }
 const UNKNOWN_PRICE_SUFFIX = " [price unknown]";
