@@ -60,6 +60,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Api, JsonValue, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Key, fuzzyFilter, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
 	DESCRIPTION_ENTRY_TYPE,
@@ -70,6 +71,13 @@ import {
 	normalizeTopics,
 	readSessionDescription,
 } from "./description.js";
+import {
+	NAME_HISTORY_ENTRY_TYPE,
+	type NameRecord,
+	formatNameHistoryRow,
+	mergeNameHistory,
+	readNameHistory,
+} from "./name-history.js";
 import { type InboundTarget, createInboundTarget } from "./tab-title-inbound.js";
 import { TabTitleSync, tabTitle } from "./tab-title.js";
 
@@ -154,6 +162,8 @@ interface NameGenerationResult {
 	name: string | null;
 	source: "llm-primary" | "llm-fallback" | "deterministic" | null;
 	error: string | null;
+	/** Model that produced the name, "provider/modelId" (LLM paths only). */
+	model?: string;
 }
 
 // ============================================================================
@@ -177,6 +187,8 @@ Reply with ONLY the title, nothing else.`;
 
 /** Names that should be treated as "not yet renamed" so the extension still runs. */
 const DEFAULT_NAMES = new Set(["chat", "new session", "untitled", "session", ""]);
+const MIN_QUERY_LENGTH = 100;
+const MIN_NAME_LENGTH = 8;
 
 const DEFAULT_CONFIG: ResolvedConfig = {
 	model: null,
@@ -213,6 +225,33 @@ function effectiveConfigPath(cwd: string): string {
 		if (existsSync(path)) return path;
 	}
 	return candidates[2] as string;
+}
+
+/**
+ * Persist any JSON-serializable setting key to the effective config file,
+ * preserving existing keys. Fails closed (returns error) on unreadable/invalid
+ * JSON so a write never clobbers an operator's file.
+ */
+function persistSetting(cwd: string, key: string, value: unknown): { ok: true; path: string } | { ok: false; error: string } {
+	const path = effectiveConfigPath(cwd);
+	let current: Record<string, unknown> = {};
+	if (existsSync(path)) {
+		try {
+			const parsed = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+				return { ok: false, error: "config is not a JSON object" };
+			current = parsed as Record<string, unknown>;
+		} catch {
+			return { ok: false, error: "config is not valid JSON" };
+		}
+	}
+	const next = { ...current, [key]: value };
+	try {
+		writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
+	} catch (error) {
+		return { ok: false, error: error instanceof Error ? error.message : String(error) };
+	}
+	return { ok: true, path };
 }
 
 /**
@@ -301,7 +340,17 @@ function loadConfig(cwd: string): ResolvedConfig {
 			try {
 				const content = readFileSync(path, "utf-8");
 				const userConfig: AutoRenameConfig = JSON.parse(content);
-				return { ...DEFAULT_CONFIG, ...userConfig } as ResolvedConfig;
+				const merged = { ...DEFAULT_CONFIG, ...userConfig } as Partial<ResolvedConfig>;
+				// Guard rails for config-provided limits.
+				merged.maxQueryLength =
+					typeof merged.maxQueryLength === "number" && Number.isFinite(merged.maxQueryLength)
+						? Math.max(MIN_QUERY_LENGTH, Math.floor(merged.maxQueryLength))
+						: DEFAULT_CONFIG.maxQueryLength;
+				merged.maxNameLength =
+					typeof merged.maxNameLength === "number" && Number.isFinite(merged.maxNameLength)
+						? Math.max(MIN_NAME_LENGTH, Math.floor(merged.maxNameLength))
+						: DEFAULT_CONFIG.maxNameLength;
+				return merged as ResolvedConfig;
 			} catch {
 				// Invalid JSON, continue to next path
 			}
@@ -855,7 +904,7 @@ async function tryEndpointGeneration(
 			debugNotify(ctx, config, "[auto-rename] Endpoint returned unparseable text, falling back", "warning");
 			return null;
 		}
-		return { name, source: "llm-primary", error: null };
+		return { name, source: "llm-primary", error: null, model: `endpoint/${endpoint.model}` };
 	} catch (error) {
 		const msg = error instanceof Error ? error.message : String(error);
 		debugNotify(ctx, config, `[auto-rename] Endpoint request failed: ${msg}`, "warning");
@@ -932,6 +981,7 @@ async function tryLlmGeneration(
 				name,
 				source: resolution.source === "primary" ? "llm-primary" : "llm-fallback",
 				error: null,
+				model: `${resolution.model!.provider}/${resolution.model!.id}`,
 			};
 		}
 
@@ -1115,6 +1165,17 @@ function formatManualNamePreservingReadableId(
 // Command Handlers
 // ============================================================================
 
+/** Append-only provenance entry (internal; prefers recordName inside the extension closure). */
+function appendNameRecord(pi: ExtensionAPI, ctx: ExtensionContext, record: Omit<NameRecord, "version" | "timestamp">): void {
+	const entry: NameRecord = { version: 1, timestamp: new Date().toISOString(), ...record };
+	const sessionId = getSessionId(ctx);
+	if (sessionId) entry.sessionId = sessionId;
+	try {
+		pi.appendEntry(NAME_HISTORY_ENTRY_TYPE, entry);
+	} catch {
+		// best-effort
+	}
+}
 async function handleRegen(
 	ctx: ExtensionCommandContext,
 	config: ResolvedConfig,
@@ -1128,6 +1189,7 @@ async function handleRegen(
 			return;
 		}
 		pi.setSessionName(prefix);
+		appendNameRecord(pi, ctx, { name: prefix, by: "extension", via: "prefix" });
 		setRenamed();
 		ctx.ui.notify(`Session renamed (prefix only): ${prefix}`, "info");
 		return;
@@ -1150,6 +1212,12 @@ async function handleRegen(
 		const fullName = formatFullName(prefix, result.name, suffix);
 		try {
 			pi.setSessionName(fullName);
+			appendNameRecord(pi, ctx, {
+				name: fullName,
+				by: "extension",
+				via: result.source === "deterministic" ? "deterministic" : "regen-llm",
+				model: result.model,
+			});
 			setRenamed();
 			ctx.ui.notify(`Session renamed (${result.source}): ${fullName}`, "info");
 		} catch (err) {
@@ -1162,6 +1230,223 @@ async function handleRegen(
 			if (!isStaleContextError(err)) throw err;
 		}
 	}
+}
+
+// ============================================================================
+// Model picker (/auto-rename model)
+// ============================================================================
+
+interface RegistryModel {
+	provider: string;
+	id: string;
+	name: string;
+	/** Context window in tokens, when the registry reports it. */
+	contextWindow?: number;
+}
+
+/** Compact human-readable context window, e.g. 128k, 1M, —. */
+export function formatContextWindow(contextWindow: number | undefined): string {
+	if (typeof contextWindow !== "number" || !Number.isFinite(contextWindow) || contextWindow <= 0) return "ctx —";
+	if (contextWindow >= 1_000_000) {
+		const millions = contextWindow / 1_000_000;
+		return `ctx ${Number.isInteger(millions) ? millions : millions.toFixed(1)}M`;
+	}
+	const thousands = contextWindow / 1000;
+	return `ctx ${Number.isInteger(thousands) ? thousands : thousands.toFixed(1)}k`;
+}
+
+/** Models the session's registry can serve, sorted by provider then name. */
+function collectRegistryModels(ctx: ExtensionContext): RegistryModel[] {
+	const available = ctx.modelRegistry.getAvailable?.() ?? [];
+	const out: RegistryModel[] = [];
+	for (const m of available) {
+		const provider = String(m?.provider ?? "");
+		const id = String(m?.id ?? "");
+		if (!provider || !id) continue;
+		const rawWindow = (m as { contextWindow?: unknown }).contextWindow;
+		const contextWindow = typeof rawWindow === "number" && Number.isFinite(rawWindow) && rawWindow > 0 ? rawWindow : undefined;
+		out.push({ provider, id, name: String(m?.name ?? id), contextWindow });
+	}
+	out.sort((a, b) => (a.provider < b.provider ? -1 : a.provider > b.provider ? 1 : a.name < b.name ? -1 : 1));
+	return out;
+}
+
+/**
+ * Fuzzy single-select palette over the shared model registry, mirroring the
+ * /subagent models palette. Returns the chosen "provider/id" or undefined.
+ */
+async function pickModel(
+	ctx: ExtensionContext,
+	models: RegistryModel[],
+	current: string | null
+): Promise<RegistryModel | undefined> {
+	return await ctx.ui.custom<RegistryModel | undefined>((tui, theme, _kb, done) => {
+		let query = "";
+		let selected = 0;
+		const maxVisible = 10;
+		let cachedLines: string[] | undefined;
+
+		const rows = models.map((m) => {
+			const ctxText = formatContextWindow(m.contextWindow);
+			return {
+				model: m,
+				pattern: `${m.provider}/${m.id}`,
+				match: `${m.name} ${m.provider}/${m.id} ${ctxText}`,
+			};
+		});
+
+		const refresh = (): void => {
+			cachedLines = undefined;
+			tui.requestRender();
+		};
+
+		function recompute(): { visible: typeof rows; selected: number } {
+			const q = query.trim();
+			const visible = q ? fuzzyFilter(rows, q, (r: (typeof rows)[number]) => r.match) : rows;
+			if (selected >= visible.length) selected = Math.max(0, visible.length - 1);
+			return { visible, selected };
+		}
+
+		function handleInput(data: string): void {
+			if (matchesKey(data, Key.escape)) {
+				done(undefined);
+				return;
+			}
+			if (matchesKey(data, Key.enter)) {
+				const { visible, selected: idx } = recompute();
+				const row = visible[idx];
+				done(row ? row.model : undefined);
+				return;
+			}
+			if (matchesKey(data, Key.up)) {
+				const count = recompute().visible.length;
+				if (count > 0) selected = (selected - 1 + count) % count;
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.down)) {
+				const count = recompute().visible.length;
+				if (count > 0) selected = (selected + 1) % count;
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.backspace)) {
+				query = query.slice(0, -1);
+				recompute();
+				refresh();
+				return;
+			}
+			for (const ch of data) {
+				const code = ch.charCodeAt(0);
+				if (code >= 0x20 && code !== 0x7f) query += ch;
+			}
+			recompute();
+			refresh();
+		}
+
+		function render(width: number): string[] {
+			if (cachedLines) return cachedLines;
+			const rw = Math.max(1, width);
+			const { visible, selected: idx } = recompute();
+			const lines: string[] = [];
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			lines.push(` ${theme.fg("accent", "Auto-rename model")}${current ? theme.fg("muted", ` — current: ${current}`) : ""}`);
+			lines.push("");
+			lines.push(` ${theme.fg("muted", "filter:")} ${theme.fg("text", query)}${theme.fg("dim", "▏")}`);
+			lines.push("");
+			if (visible.length === 0) {
+				lines.push(theme.fg("warning", "  No matching models"));
+			} else {
+				const start = Math.max(0, Math.min(idx - Math.floor(maxVisible / 2), visible.length - maxVisible));
+				const end = Math.min(start + maxVisible, visible.length);
+				for (let i = start; i < end; i++) {
+					const row = visible[i];
+					const prefix = i === idx ? theme.fg("accent", "→ ") : "  ";
+					const tag = current === row.pattern ? theme.fg("success", "[current] ") : "";
+					const ctxBadge = theme.fg("muted", `  ${formatContextWindow(row.model.contextWindow)}`);
+					lines.push(truncateToWidth(`${prefix}${tag}${row.model.name}  ${theme.fg("dim", `(${row.pattern})`)}${ctxBadge}`, rw));
+				}
+				if (start > 0 || end < visible.length) lines.push(theme.fg("dim", `  (${idx + 1}/${visible.length})`));
+			}
+			lines.push("");
+			lines.push(theme.fg("dim", "Type to filter • ↑/↓ select • Enter confirm • Esc cancel"));
+			lines.push(theme.fg("accent", "─".repeat(rw)));
+			cachedLines = lines;
+			return lines;
+		}
+
+		return {
+			render,
+			invalidate: (): void => {
+				cachedLines = undefined;
+			},
+			handleInput,
+		};
+	});
+}
+
+/**
+ * `/auto-rename history`: every name this session had, with provenance.
+ * Merges this extension's provenance sidecar (who/via/model) with raw
+ * `session_info` entries; renames with no sidecar record show as plain
+ * user renames (unknown provenance, possibly predating this feature).
+ */
+function handleHistory(ctx: ExtensionCommandContext): void {
+	const branch = ctx.sessionManager.getBranch();
+	const records = readNameHistory(branch);
+	const sessionInfos: { timestamp: string; name: string | null }[] = [];
+	for (const entry of branch) {
+		if (typeof entry !== "object" || entry === null) continue;
+		const e = entry as { type?: string; name?: string; timestamp?: string };
+		if (e.type === "session_info" && typeof e.timestamp === "string") {
+			sessionInfos.push({ timestamp: e.timestamp, name: typeof e.name === "string" ? e.name : null });
+		}
+	}
+	const rows = mergeNameHistory(records, sessionInfos);
+	if (rows.length === 0) {
+		ctx.ui.notify("No session names recorded yet.", "info");
+		return;
+	}
+	const lines = rows.map((row) =>
+		formatNameHistoryRow({
+			timestamp: row.timestamp,
+			by: row.raw ? "user (?)" : row.by,
+			via: row.raw ? undefined : row.via,
+			model: row.raw ? undefined : row.model,
+			name: row.name,
+		})
+	);
+	const current = ctx.sessionManager.getSessionName?.() ?? "";
+	if (current) lines.push(`current: ${current}`);
+	ctx.ui.notify(lines.join("\n"), "info");
+}
+
+/** `/auto-rename model`: pick the renaming model from the registry and persist it. */
+async function handleModelPicker(ctx: ExtensionCommandContext, _config: ResolvedConfig): Promise<void> {
+	if (ctx.mode !== "tui") {
+		ctx.ui.notify('The model picker requires Pi TUI; set "model" in auto-rename.json here', "warning");
+		return;
+	}
+	const models = collectRegistryModels(ctx);
+	if (models.length === 0) {
+		ctx.ui.notify("No models found in the registry (ctx.modelRegistry.getAvailable()).", "warning");
+		return;
+	}
+	const config = loadConfig(ctx.cwd);
+	const current = config.model ? `${config.model.provider}/${config.model.id}` : null;
+	const chosen = await pickModel(ctx, models, current);
+	if (!chosen) {
+		ctx.ui.notify("Model selection cancelled", "info");
+		return;
+	}
+	const saved = persistSetting(ctx.cwd, "model", { provider: chosen.provider, id: chosen.id });
+	if (!saved.ok) {
+		ctx.ui.notify(`Could not update model: ${saved.error}. Edit the config file directly.`, "error");
+		return;
+	}
+	const fallbackSaved = persistSetting(ctx.cwd, "modelSelection", "current");
+	const fallbackNote = fallbackSaved.ok ? "" : ` (modelSelection not updated: ${fallbackSaved.error})`;
+	ctx.ui.notify(`Auto-rename model set to ${chosen.provider}/${chosen.id} (saved to ${saved.path})${fallbackNote}`, "info");
 }
 
 function handleConfig(ctx: ExtensionCommandContext, config: ResolvedConfig): void {
@@ -1188,6 +1473,7 @@ function handleConfig(ctx: ExtensionCommandContext, config: ResolvedConfig): voi
 		`syncTabTitleInbound=${config.syncTabTitleInbound}`,
 		`maxQuery=${config.maxQueryLength}`,
 		`maxName=${config.maxNameLength}`,
+
 		`enabled=${config.enabled}`,
 	].filter(Boolean);
 
@@ -1433,7 +1719,7 @@ export default function (pi: ExtensionAPI) {
 					const suffix = resolveReadableIdSuffix(config, sessionId, words, base, ctx);
 					const full = formatFullName("", base, suffix);
 					if (full === pi.getSessionName()) return;
-					setNameAndNotify(full, ctx);
+					setNameAndNotify(full, ctx, { name: full, by: "extension", via: "prefix" });
 					sessionRenamed = true;
 					// Suppress the outbound echo this rename will trigger.
 					inbound?.notePushed(tabTitle(full, resolveReadableIdOverride(config) ?? canonicalId));
@@ -1461,6 +1747,26 @@ export default function (pi: ExtensionAPI) {
 		return tabSync.update({ name, readableId, sessionFile: ctx.sessionManager.getSessionFile?.(), env: process.env });
 	};
 	pi.on("session_info_changed", (event, ctx) => {
+		// Renames that did not funnel through setNameAndNotify (user /name, other
+		// extensions) still get a history record. Defer 50ms so our own renames
+		// (recorded via the sidecar first) commit and can be deduplicated.
+		const changedName = event.name;
+		if (changedName !== undefined) {
+			setTimeout(() => {
+				// The ctx can go stale before the timer fires (fast print-mode runs,
+				// session replacement). The getter throws in that case; a deferred
+				// history sidecar write is never worth crashing the process.
+				try {
+					const records = readNameHistory(ctx.sessionManager.getBranch());
+					const last = records.at(-1);
+					const alreadyRecorded =
+						last !== undefined && last.name === changedName && Date.now() - Date.parse(last.timestamp) < 10_000;
+					if (!alreadyRecorded) recordName(ctx, { name: changedName, by: "user" });
+				} catch {
+					// Stale ctx or a failed appendix: history stays as last committed.
+				}
+			}, 50);
+		}
 		void syncTitle(ctx, event.name ?? "New Session");
 	});
 	pi.on("session_shutdown", () => {
@@ -1480,15 +1786,31 @@ export default function (pi: ExtensionAPI) {
 	 * Swallows stale-context errors so async rename work that completes
 	 * after a fast session does not crash the process.
 	 */
-	const setNameAndNotify = (name: string, ctx: ExtensionContext) => {
+	const recordName = (ctx: ExtensionContext, record: Omit<NameRecord, "version" | "timestamp">): void => {
+		const entry: NameRecord = { version: 1, timestamp: new Date().toISOString(), ...record };
+		const sessionId = getSessionId(ctx);
+		if (sessionId) entry.sessionId = sessionId;
+		try {
+			pi.appendEntry(NAME_HISTORY_ENTRY_TYPE, entry);
+		} catch {
+			// History is best-effort; a failed sidecar write must not break the rename.
+		}
+	};
+
+	const setNameAndNotify = (
+		name: string,
+		ctx: ExtensionContext,
+		provenance?: Omit<NameRecord, "version" | "timestamp">
+	): boolean => {
 		try {
 			pi.setSessionName(name);
 		} catch (err) {
 			if (isStaleContextError(err)) {
-				return;
+				return false;
 			}
 			throw err;
 		}
+		if (provenance) recordName(ctx, provenance);
 		// Keep interactive TUI status line clean; emit status only for non-TUI/rpc consumers.
 		if (!ctx.hasUI) {
 			try {
@@ -1497,6 +1819,7 @@ export default function (pi: ExtensionAPI) {
 				if (!isStaleContextError(err)) throw err;
 			}
 		}
+		return true;
 	};
 
 	const checkExistingName = () => {
@@ -1540,7 +1863,7 @@ export default function (pi: ExtensionAPI) {
 		const newName = `${base} [${newSuffix}]`;
 		if (newName === currentName) return;
 
-		setNameAndNotify(newName, ctx);
+		setNameAndNotify(newName, ctx, { name: newName, by: "extension", via: "fork" });
 		debugNotify(ctx, config, `[auto-rename] Fork: regenerated readable id "${existingSuffix}" -> "${newSuffix}"`, "info");
 	};
 
@@ -1579,7 +1902,7 @@ export default function (pi: ExtensionAPI) {
 				debugNotify(ctx, config, "[auto-rename] prefixOnly set but no prefix available", "warning");
 				return;
 			}
-			setNameAndNotify(prefix, ctx);
+			setNameAndNotify(prefix, ctx, { name: prefix, by: "extension", via: "prefix" });
 			sessionRenamed = true;
 			debugNotify(ctx, config, `[auto-rename] Named (prefix only): ${prefix}`, "info");
 			return;
@@ -1596,7 +1919,12 @@ export default function (pi: ExtensionAPI) {
 
 		const suffix = resolveReadableIdSuffix(config, sessionId, wordlist, result.name, ctx);
 		const fullName = formatFullName(prefix, result.name, suffix);
-		setNameAndNotify(fullName, ctx);
+		setNameAndNotify(fullName, ctx, {
+			name: fullName,
+			by: "extension",
+			via: result.source === "deterministic" ? "deterministic" : "auto-llm",
+			model: result.model,
+		});
 		sessionRenamed = true;
 		debugNotify(ctx, config, `[auto-rename] Named (${result.source}): ${fullName}`, "info");
 	};
@@ -1637,7 +1965,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerCommand("auto-rename", {
 		description:
-			"Auto-rename: show name, force regenerate, or set manually. Subcommands: config, regen, init, test, describe [text|--clear] (routing hint), sync (inbound host→Pi tab sync), outbound (Pi→host tab sync)",
+			"Auto-rename: show name, force regenerate, or set manually. Subcommands: config, regen, init, test, history (past names + who set them), model [picker|list|off] (model selection), describe [text|--clear] (routing hint), sync|inbound|outbound [on|off] (tab sync),",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim();
 			const config = loadConfig(ctx.cwd);
@@ -1654,10 +1982,59 @@ export default function (pi: ExtensionAPI) {
 				handleDescribe(ctx, config, trimmed.replace(/^(?:describe|description)\s*/, "").trim());
 			} else if (trimmed === "config") {
 				handleConfig(ctx, config);
-			} else if (trimmed === "sync" || trimmed === "inbound" || trimmed === "outbound") {
-				const key = trimmed === "outbound" ? "syncTabTitle" : "syncTabTitleInbound";
-				const current = trimmed === "outbound" ? config.syncTabTitle : config.syncTabTitleInbound;
-				const next = !current;
+			} else if (trimmed === "model" || trimmed.startsWith("model ")) {
+				const rest = trimmed.slice("model".length).trim();
+				if (rest === "off" || rest === "clear") {
+					const saved = persistSetting(ctx.cwd, "model", null);
+					if (!saved.ok) {
+						ctx.ui.notify(`Could not clear model: ${saved.error}. Edit the config file directly.`, "error");
+						return;
+					}
+					ctx.ui.notify(
+						`Auto-rename model cleared (saved to ${saved.path}); modelSelection=${config.modelSelection} applies`,
+						"info"
+					);
+					return;
+				}
+				if (rest === "list") {
+					const models = collectRegistryModels(ctx);
+					if (models.length === 0) {
+						ctx.ui.notify("No models found in the registry (ctx.modelRegistry.getAvailable()).", "warning");
+						return;
+					}
+					const current = config.model ? `${config.model.provider}/${config.model.id}` : null;
+					ctx.ui.notify(
+						models
+							.map(
+								(m) =>
+									`${m.provider}/${m.id}${current === `${m.provider}/${m.id}` ? " [current]" : ""} — ${m.name} (${formatContextWindow(m.contextWindow)})`
+							)
+							.join("\n"),
+						"info"
+					);
+					return;
+				}
+				if (rest) {
+					ctx.ui.notify("Usage: /auto-rename model [picker|list|off] — no arguments opens the picker", "error");
+					return;
+				}
+				await handleModelPicker(ctx, config);
+			} else if (
+				trimmed === "sync" ||
+				trimmed === "inbound" ||
+				trimmed === "outbound" ||
+				trimmed.startsWith("sync ") ||
+				trimmed.startsWith("inbound ") ||
+				trimmed.startsWith("outbound ")
+			) {
+				const kind = trimmed.split(/\s+/)[0] as "sync" | "inbound" | "outbound";
+				const explicit = trimmed.split(/\s+/)[1];
+				const key = kind === "outbound" ? "syncTabTitle" : "syncTabTitleInbound";
+				const current = kind === "outbound" ? config.syncTabTitle : config.syncTabTitleInbound;
+				let next: boolean;
+				if (explicit === "on") next = true;
+				else if (explicit === "off") next = false;
+				else next = !current; // bare toggle preserves the old behavior
 				const saved = persistBooleanSetting(ctx.cwd, key, next);
 				if (!saved.ok) {
 					ctx.ui.notify(`Could not update ${key}: ${saved.error}. Edit the config file directly.`, "error");
@@ -1669,13 +2046,15 @@ export default function (pi: ExtensionAPI) {
 					else stopInbound();
 				}
 				ctx.ui.notify(`${key} = ${next} (saved to ${saved.path})`, "info");
+			} else if (trimmed === "history" || trimmed === "names") {
+				handleHistory(ctx);
 			} else if (trimmed === "init") {
 				handleInit(ctx, ctx.cwd);
 			} else if (trimmed === "test") {
 				await handleTest(ctx, config);
 			} else if (trimmed) {
 				const fullName = formatManualNamePreservingReadableId(trimmed, pi.getSessionName(), config, ctx);
-				setNameAndNotify(fullName, ctx);
+				setNameAndNotify(fullName, ctx, { name: fullName, by: "user", via: "manual" });
 				sessionRenamed = true;
 				ctx.ui.notify(`Session renamed: ${fullName}`, "info");
 			} else {
@@ -1781,6 +2160,12 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	// The character limit for session names is the configured `maxNameLength`:
+	// it caps the model-supplied title here (readable-id suffix excluded), is
+	// enforced in buildAgentSessionName and enforced again on the LLM path via
+	// parseNameFromResponse. Tool text shows the configured value at load time;
+	// execute() re-reads config, so mid-session config edits stay accurate.
+	const toolConfig = loadConfig(process.cwd());
 	pi.registerTool({
 		name: "rename_session",
 		label: "Rename Session",
@@ -1792,17 +2177,11 @@ export default function (pi: ExtensionAPI) {
 				error: Type.Object({ code: Type.String(), message: Type.String() }),
 			}),
 		]),
-		description:
-			"Set the current session's display name to a concise, descriptive title. " +
-			"Use this when you accomplish something meaningful or the session's focus shifts, " +
-			"so the session is easy to find and resume later. Provide a short title; the " +
-			"readable-id suffix is generated automatically and must NOT be included.",
-		promptSnippet: "rename_session: give the current session a short, descriptive title (without the readable-id suffix).",
+		description: `Set the current session's display name to a concise, descriptive title. Use this when you accomplish something meaningful or the session's focus shifts, so the session is easy to find and resume later. Provide a short title; the readable-id suffix is generated automatically and must NOT be included. Keep the title within ${toolConfig.maxNameLength} characters.`,
+		promptSnippet: `rename_session: give the current session a short, descriptive title (<= ${toolConfig.maxNameLength} chars, without the readable-id suffix).`,
 		parameters: Type.Object({
 			name: Type.String({
-				description:
-					"New session title. One to a few words in title case, no trailing punctuation, no quotes. " +
-					"The readable-id suffix is appended automatically and should not be provided.",
+				description: `New session title. One to a few words in title case, no trailing punctuation, no quotes. Keep it within ${toolConfig.maxNameLength} characters. The readable-id suffix is appended automatically and should not be provided.`,
 			}),
 		}),
 		async execute(
@@ -1838,7 +2217,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const previous = pi.getSessionName() ?? "";
-			setNameAndNotify(name, ctx);
+			setNameAndNotify(name, ctx, { name, by: "agent", via: "agent-tool" });
 			sessionRenamed = true;
 			return {
 				content: [{ type: "text", text: `Session renamed to "${name}".` }],
