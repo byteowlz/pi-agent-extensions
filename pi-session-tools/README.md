@@ -149,9 +149,16 @@ Loadouts resolve to a set of allowed model ids + spawn kinds, which gates
 `/subagent mode` controls how a spawned subagent is approved:
 
 - **`auto`** — no prompt; spawn immediately.
-- **`confirm`** — always ask the user, wait indefinitely (the old behaviour).
-- **`timeout`** — ask the user, but if they don't answer within `confirmTimeoutMs`
-  the session **auto-decides** to `allow` or `deny` (set with `/subagent decide`).
+- **`confirm`** — ask the user; expiry auto-**denies**. The wait is bounded by
+  `confirmTimeoutMs` (default 60 s; `0` restores the old wait-indefinitely
+  behaviour). An unattended session can no longer wedge on a spawn prompt —
+  the agent gets a "Spawn cancelled by the user." tool result and can continue
+  or ask you to raise the allowance.
+- **`timeout`** — ask the user, and after `confirmTimeoutMs` the session
+  **auto-decides** to `allow` or `deny` (set with `/subagent decide`).
+
+Both modes also deny immediately if the tool call is aborted (Esc during a
+  run, `/subagent` retries after a session switch, etc.).
 
 In `confirm` and `timeout` modes the prompt offers three actions:
 **y/Enter** allow, **n/Esc** deny, and **m** change model — a fuzzy picker over
@@ -355,7 +362,10 @@ Your own pane is excluded from the target list (via `HERDR_PANE_ID`).
   A session overrides it with `/subagent max <n>` (stored in the session state file).
 - `allowMode` — default allow mode: `confirm` | `auto` | `timeout`.
 - `autoDecision` — when `allowMode` is `timeout` and nobody answers: `allow` | `deny`.
-- `confirmTimeoutMs` — how long the timed prompt waits before auto-deciding.
+- `confirmTimeoutMs` — upper bound for the spawn confirmation wait. `confirm`
+  mode auto-denies on expiry, `timeout` mode follows `autoDecision`. `0` waits
+  indefinitely (opt-out; capped at one hour otherwise, and `/subagent timeout <ms>`
+  sets it per session).
 - `loadouts` — named model-presets (globs), managed via `/subagent models loadout`.
 
 ## Per-session state

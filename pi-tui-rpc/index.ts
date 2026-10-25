@@ -168,6 +168,13 @@ interface SessionSnapshot {
 	lease: LeaseOwner;
 }
 
+/** Upper bound for the human takeover prompt (seconds; 0 = unbounded). */
+const TAKEOVER_PROMPT_TIMEOUT_S = 120;
+const takeoverPromptTimeoutMs = (): number => {
+	const raw = Number(process.env.PI_TUI_RPC_TAKEOVER_TIMEOUT_S ?? TAKEOVER_PROMPT_TIMEOUT_S);
+	return Number.isFinite(raw) && raw >= 0 ? raw * 1000 : TAKEOVER_PROMPT_TIMEOUT_S * 1000;
+};
+
 export default function (pi: ExtensionAPI) {
 	const socketPath = process.env.PI_TUI_RPC_SOCKET?.trim() || defaultSocketPath();
 	const isRpcMode = detectRpcMode();
@@ -196,7 +203,13 @@ export default function (pi: ExtensionAPI) {
 			// Socket reachability is observation, never permission to type.
 			// Headless/RPC invocations have no terminal authority to confirm.
 			if (!ctx || isRpcMode || !ctx.hasUI) return false;
-			return ctx.ui.confirm("Remote input request", "An RPC client requests input control. Allow?");
+			// Remote-triggered, human-answered: bound the wait so an unanswered
+			// takeover prompt cannot wedge the TUI dialog indefinitely. Expiry
+			// denies — takeover is a privilege, fail-closed (same as tui_denied).
+			const waitMs = takeoverPromptTimeoutMs();
+			return ctx.ui.confirm("Remote input request", "An RPC client requests input control. Allow?", {
+				...(waitMs > 0 ? { timeout: waitMs } : {}),
+			});
 		},
 		onChange: (owner, reason) => {
 			hub?.broadcast({ type: "lease", owner, reason });

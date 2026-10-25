@@ -4,6 +4,39 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Bounded blocking dialogs (2.26.0)
+
+- **pi-session-tools**: subagent spawn confirmations no longer wait forever in
+  `allowMode: "confirm"`. `confirmTimeoutMs` (default 60000, env-styled ceiling
+  1 h, `0` = unbounded opt-out) bounds the dialog; expiry auto-denies (safe to
+  automate) and never auto-allows. Abort signals deny immediately in both
+  confirm and timeout modes. RPC confirms also resolve closed (deny) on
+  expiry. `/subagent timeout <ms>` sets the bound; `/subagent` status shows the
+  countdown.
+- **pi-tui-rpc**: the remote-takeover TUI confirmation auto-denies after 120 s
+  (`PI_TUI_RPC_TAKEOVER_TIMEOUT_S`, `0` = unbounded), so an unattended session
+  cannot wedge on a remote-triggered dialog.
+- **pi-auto-rename 1.6.1**: deferring the name-history sidecar record on
+  `session_info_changed` no longer crashes fast print-mode sessions when the
+  extension ctx goes stale before the 50 ms watchdog fires (surfaced by the
+  print-exit e2e full-set load).
+
+### Context limit per session (2.25.0)
+
+- **pi-ctx-limit 0.1.0**: new extension — `/ctx` (alias `/context`) sets a
+  per-session compaction threshold. Direct size args (`/ctx 262k`) or a fuzzy
+  preset picker; compacts immediately when already over the limit. The stored
+  limit is branch-relative (survives forks) and soft-capped by the model
+  context window minus `reserveTokens` (so it never disables pi's native
+  compaction trigger).
+
+### Auto-rename model picker and name history (2.24.1)
+
+- **pi-auto-rename 1.6.0**: `/auto-rename model` fuzzy picker with context-window
+  badges; `sync|inbound|outbound on|off` explicit toggles; name history with
+  provenance via `recordName` sidecar entries and `/auto-rename history`;
+  configurable `maxNameLength`.
+
 ### EAVS adaptive thinking (2.23.6)
 
 - **pi-eavs 0.2.5**: honor the catalog's `forceAdaptiveThinking` for Anthropic models.
