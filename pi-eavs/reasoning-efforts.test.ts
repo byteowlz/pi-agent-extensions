@@ -126,3 +126,26 @@ test("per-model native API from the catalog: Anthropic and Responses models on a
 	for (const id of ["ocgo/bad-path", "ocgo/bad-api"]) assert.equal(byId[id], undefined, `${id} must be skipped`);
 	assert.deepEqual(restoreCatalog(origin, JSON.parse(JSON.stringify(models))), models);
 });
+
+test("a declared none/off effort maps Pi's off level to a value the upstream accepts", () => {
+	const { models } = projectCatalog(
+		origin,
+		catalog([
+			model("dsv41", { reasoning_efforts: ["none", "low", "high", "xhigh"] }),
+			model("sushi", { reasoning_efforts: ["off", "low", "medium", "xhigh"] }),
+			model("vllm", { reasoning_efforts: ["xhigh", "medium", "low"] }),
+		])
+	);
+	const [dsv41, sushi, vllm] = models;
+	// DeepSeek V4.1 (vLLM): none disables reasoning; minimal and medium are rejected upstream.
+	assert.equal(dsv41.thinkingLevelMap?.off, "none");
+	assert.deepEqual(getSupportedThinkingLevels(dsv41), ["off", "low", "high", "xhigh"]);
+	assert.equal(clampThinkingLevel(dsv41, "medium"), "high");
+	// Sushi spells it "off"; keep the upstream's own spelling.
+	assert.equal(sushi.thinkingLevelMap?.off, "off");
+	// Nothing declared for off: Pi keeps sending nothing (upstream default).
+	assert.equal(vllm.thinkingLevelMap?.off, undefined);
+	assert.deepEqual(getSupportedThinkingLevels(vllm), ["off", "low", "medium", "xhigh"]);
+	// Survives cache restoration.
+	assert.deepEqual(restoreCatalog(origin, JSON.parse(JSON.stringify(models))), models);
+});

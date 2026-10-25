@@ -7,7 +7,8 @@ import type { LeaseOwner } from "./protocol.js";
 export interface LeaseCallbacks {
 	confirmTakeover(): Promise<boolean>;
 	onChange(owner: LeaseOwner, reason: string): void;
-	/** Trusted embedding/test setting; never more than one minute. */
+	/** Optional expiry for trusted embedders/tests, at most one minute. By default a
+	 * lease lasts until release, disconnect, terminal typing or session change. */
 	leaseDurationMs?: number;
 }
 export type LeaseRequestResult = { granted: boolean; reason: string };
@@ -21,8 +22,9 @@ export interface Lease {
 	reset(reason?: string): boolean;
 }
 export function createLease(callbacks: LeaseCallbacks): Lease {
-	const duration = callbacks.leaseDurationMs ?? 60_000;
-	if (!Number.isInteger(duration) || duration < 1 || duration > 60_000) throw new Error("Invalid input lease duration");
+	const duration = callbacks.leaseDurationMs;
+	if (duration !== undefined && (!Number.isInteger(duration) || duration < 1 || duration > 60_000))
+		throw new Error("Invalid input lease duration");
 	let holder: string | undefined;
 	let pending: string | undefined;
 	let generation = 0;
@@ -58,8 +60,10 @@ export function createLease(callbacks: LeaseCallbacks): Lease {
 			pending = undefined;
 			if (!approved) return { granted: false, reason: "tui_denied" };
 			holder = clientId;
-			timer = setTimeout(() => reset("expired"), duration);
-			timer.unref();
+			if (duration !== undefined) {
+				timer = setTimeout(() => reset("expired"), duration);
+				timer.unref();
+			}
 			callbacks.onChange("remote", "tui_confirmed");
 			return { granted: true, reason: "tui_confirmed" };
 		},
@@ -73,4 +77,15 @@ export function createLease(callbacks: LeaseCallbacks): Lease {
 		onTuiInput: () => reset("tui_input"),
 		reset,
 	};
+}
+
+/**
+ * Whether a remote input request needs the terminal to confirm. The socket is
+ * private to this OS user, and any terminal keystroke takes input back at once,
+ * so requests are granted by default. PI_TUI_RPC_LEASE_CONFIRM=1 asks the terminal
+ * (for shared terminals); with no terminal to ask, that setting refuses.
+ */
+export function takeoverDecision(env: Record<string, string | undefined>, canAsk: boolean): "grant" | "ask" | "refuse" {
+	if (env.PI_TUI_RPC_LEASE_CONFIRM?.trim() !== "1") return "grant";
+	return canAsk ? "ask" : "refuse";
 }

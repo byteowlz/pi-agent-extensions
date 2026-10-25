@@ -1,7 +1,8 @@
 # Changelog
 
-## 0.2.6
+## 0.2.7
 
+- Merged release uniting both 0.2.5 lineages and 0.2.6:
 - Per-model native API: models whose catalog entry declares their own `api`
   (e.g. Anthropic Messages for Qwen/MiniMax, Responses for GPT on a
   chat-completions gateway like OpenCode Go) are served with their native API
@@ -9,10 +10,8 @@
   skipped. Pi thinking levels now include `max` when the upstream accepts it.
 - Pi's session id is sent to the gateway as `x-session-affinity` on every API
   format, so EAVS can keep upstream sessions per conversation.
-
-## 0.2.5
-
 - Pass the catalog's `forceAdaptiveThinking` model compat through for `anthropic-messages` models, so Pi sends adaptive thinking with a level-mapped effort to models that reject budget thinking (e.g. Claude Sonnet 5.5). Other compat flags stay OpenAI-completions only.
+- When the catalog declares a reasoning effort that disables thinking (none or off), map Pi's off level to it. Pi only sends a reasoning_effort for off when the model's thinkingLevelMap names a value, so /thinking off previously sent nothing and a reasoning model kept thinking at its default effort. Models without such a declared value are unchanged. Example: DeepSeek V4.1 on vLLM accepts none/low/high/xhigh; off now sends none.
 
 ## 0.2.4
 
