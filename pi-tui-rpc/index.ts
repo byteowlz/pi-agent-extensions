@@ -242,16 +242,54 @@ export default function (pi: ExtensionAPI) {
 			model: ctx.model ? toModelSummary(ctx.model) : null,
 			thinkingLevel: pi.getThinkingLevel(),
 			isStreaming: !ctx.isIdle(),
-			isCompacting: false,
+			isCompacting: compacting,
 			messageCount: ctx.sessionManager.getBranch().length,
 			lease: lease.owner(),
 		};
+	};
+
+	// pi core refuses prompts while compacting (session.prompt() throws
+	// "Cannot submit a prompt while compaction is in progress"), so remote
+	// prompts in that window are parked and flushed when compaction ends.
+	// session_compact and session_compact_failed both fire even for aborted
+	// compactions, so the flush always has a trigger.
+	let compacting = false;
+	const parkedPrompts: Array<{ kind: "immediate" | "steer" | "followUp"; message: string }> = [];
+	const PARK_LIMIT = 50;
+
+	const deliverParked = (): void => {
+		const queue = parkedPrompts.splice(0);
+		for (const item of queue) {
+			try {
+				if (item.kind === "immediate") {
+					pi.sendUserMessage(item.message);
+				} else {
+					pi.sendUserMessage(item.message, { deliverAs: item.kind });
+				}
+			} catch {
+				// A parked prompt that still fails (session replaced mid-flush,
+				// input handler refusal) is dropped rather than retried forever;
+				// the client pickup path (get_entries) stays authoritative.
+			}
+		}
+	};
+
+	const settleCompaction = (): void => {
+		if (!compacting) return;
+		compacting = false;
+		deliverParked();
 	};
 
 	const deps = (clientId: string): RpcDeps => {
 		const ctx = currentCtx;
 		return {
 			isStreaming: () => (ctx ? !ctx.isIdle() : false),
+			isCompacting: () => compacting,
+			parkPrompt: (kind, message) => {
+				if (parkedPrompts.length >= PARK_LIMIT) return false;
+				parkedPrompts.push({ kind, message });
+				return true;
+			},
 			sendUserMessage: (message, options) => {
 				if (options?.deliverAs) {
 					return pi.sendUserMessage(message, { deliverAs: options.deliverAs });
@@ -563,6 +601,8 @@ export default function (pi: ExtensionAPI) {
 	const forward = (name: ForwardableEvent): void => {
 		pi.on(name as "agent_start", async (event, ctx) => {
 			currentCtx = ctx;
+			if (name === "session_before_compact") compacting = true;
+			if (name === "session_compact" || name === "session_compact_failed") settleCompaction();
 			hub?.broadcast(eventFrame(name, event));
 			return undefined;
 		});

@@ -16,10 +16,11 @@
  *   Because the manifest bytes are stable, the revision digest is stable, so a
  *   slot is approved and granted once and reused by any session afterwards.
  *
- * Delivery
- *   Idle  -> pi.sendUserMessage(text) delivers immediately and triggers a turn.
- *   Busy  -> deliverAs "followUp" queues until the current turn's tools finish.
- *   (sendUserMessage throws if the agent is streaming and deliverAs is absent.)
+ * Compaction window: pi core refuses prompts while compacting and throws
+ * "Cannot submit a prompt while compaction is in progress." Rather than
+ * bouncing the share, deliveries are parked (bounded FIFO) and flushed on
+ * session_compact / session_compact_failed (both fire, even for aborted
+ * compactions). The phone still gets an immediate ok + "parked" ack.
  */
 
 import { execFile } from "node:child_process";
@@ -49,6 +50,17 @@ const ICON = fileURLToPath(new URL("./assets/pi-coding-agent.svg", import.meta.u
 const ICON_DARK = fileURLToPath(new URL("./assets/pi-coding-agent-dark.svg", import.meta.url));
 const STATE_ENTRY = "xlatch-session-slot";
 const SLOT_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+/** Cap for messages parked while compaction runs; beyond this we bounce. */
+const PARK_LIMIT = 50;
+/** How often parked messages re-attempt delivery after a compaction end event. */
+const PARK_RETRY_MS = 3_000;
+/** Give up actively retrying parked deliveries after this many attempts. */
+const PARK_RETRY_MAX = 200;
+/** A share parked while pi compacts its context. */
+interface ParkedDelivery {
+	body: string;
+	label: string;
+}
 
 /** What the adapter forwards over the socket. */
 interface SharePayload {
@@ -74,6 +86,11 @@ interface CapabilityRecord {
 
 function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
+}
+
+/** pi core's throw when a prompt lands mid-compaction (from session.prompt()). */
+function isCompactionRefusal(err: unknown): boolean {
+	return /compaction is in progress/i.test(errorMessage(err));
 }
 
 interface Claim {
@@ -329,29 +346,104 @@ export default function xlatchSession(pi: ExtensionAPI) {
 		}
 	}
 
-	function deliver(payload: SharePayload): { ok: boolean; text?: string; error?: string; delivery?: string } {
-		let label: string;
-		let body: string;
+	/** Drain parked deliveries; retries with backoff while pi still refuses. */
+	async function flushParked(parked: ParkedDelivery[], attempt = 0): Promise<void> {
+		if (parked.length === 0) return;
+		const kept: ParkedDelivery[] = [];
+		for (const item of parked) {
+			try {
+				pi.sendUserMessage(item.body, { deliverAs: "followUp" });
+			} catch (err) {
+				if (isCompactionRefusal(err)) {
+					kept.push(item);
+				} else {
+					ctxRef?.ui.notify(`xlatch: dropped parked ${item.label}: ${errorMessage(err)}`, "error");
+				}
+			}
+		}
+		parked.length = 0;
+		parked.push(...kept);
+		if (parked.length === 0) return;
+		if (attempt >= PARK_RETRY_MAX) {
+			ctxRef?.ui.notify(
+				`xlatch: ${parked.length} parked message(s) still blocked by compaction; giving up automatic retries.`,
+				"warning"
+			);
+			return;
+		}
+		setTimeout(() => void flushParked(parked, attempt + 1), PARK_RETRY_MS).unref?.();
+	}
 
+	let compacting = false;
+	const parkedDeliveries: ParkedDelivery[] = [];
+
+	/** session_compact / session_compact_failed both land here; always a trigger. */
+	const settleCompaction = (): void => {
+		if (!compacting) return;
+		compacting = false;
+		void flushParked(parkedDeliveries);
+	};
+
+	/** Normalize a phone payload into a delivery body, or a reject reason. */
+	function parseShare(payload: SharePayload): { label: string; body: string } | { error: string } {
 		if (payload?.kind === "file" && typeof payload.path === "string") {
 			const kb = Math.max(1, Math.round((payload.bytes ?? 0) / 1024));
 			const note = typeof payload.note === "string" ? payload.note.trim() : "";
-			label = note ? "file + note" : "file";
-			body = [...(note ? [note, ""] : []), payload.path, `(${payload.file_mime_type ?? "unknown type"}, ~${kb} KB)`].join("\n");
-		} else if (payload?.kind === "text" && typeof payload.text === "string" && payload.text.trim()) {
-			label = payload.mime_type === "text/uri-list" ? "link" : "text";
-			body = `Shared from phone via xlatch (${label}):\n\n${payload.text.trim()}`;
-		} else {
-			return { ok: false, error: "Nothing shareable was received." };
+			const label = note ? "file + note" : "file";
+			const body = [...(note ? [note, ""] : []), payload.path, `(${payload.file_mime_type ?? "unknown type"}, ~${kb} KB)`].join(
+				"\n"
+			);
+			return { label, body };
 		}
+		if (payload?.kind === "text" && typeof payload.text === "string" && payload.text.trim()) {
+			const label = payload.mime_type === "text/uri-list" ? "link" : "text";
+			const body = `Shared from phone via xlatch (${label}):\n\n${payload.text.trim()}`;
+			return { label, body };
+		}
+		return { error: "Nothing shareable was received." };
+	}
 
+	/** Ack a share parked for the compaction window; keep the phone informed. */
+	function parkAck(
+		body: string,
+		label: string,
+		reason: string
+	): { ok: boolean; error?: string; delivery?: string; text?: string } {
+		if (parkedDeliveries.length >= PARK_LIMIT) {
+			return { ok: false, error: `Too many messages (${PARK_LIMIT}) are already waiting for compaction to finish.` };
+		}
+		parkedDeliveries.push({ body, label });
+		ctxRef?.ui.notify(`xlatch: ${label} parked until compaction finishes.`, "info");
+		return {
+			ok: true,
+			delivery: "parked",
+			text: `${reason}; ${label} will be delivered right after (${boundSlot}).`,
+		};
+	}
+
+	function deliver(payload: SharePayload): { ok: boolean; text?: string; error?: string; delivery?: string } {
+		const parsed = parseShare(payload);
+		if ("error" in parsed) return { ok: false, error: parsed.error };
+
+		const { label, body } = parsed;
 		const idle = ctxRef?.isIdle() !== false;
+
+		if (compacting) {
+			return parkAck(body, label, "pi is compacting its context");
+		}
 
 		try {
 			// followUp queues safely while streaming; when idle this delivers now
 			// and triggers a turn. Omitting deliverAs while streaming throws.
 			pi.sendUserMessage(body, { deliverAs: "followUp" });
 		} catch (err) {
+			if (isCompactionRefusal(err)) {
+				// Compaction began after our flag cleared (or its end event raced
+				// ahead of the refusal). The refusal itself proves compaction is
+				// running, so set the flag: the end event will flush the queue.
+				compacting = true;
+				return parkAck(body, label, "pi began compacting its context");
+			}
 			return { ok: false, error: `pi refused the message: ${errorMessage(err)}` };
 		}
 
@@ -524,7 +616,27 @@ export default function xlatchSession(pi: ExtensionAPI) {
 		})();
 	});
 
+	// Park-then-flush across the compaction window: pi core refuses prompts
+	// while compacting (session.prompt() throws "Cannot submit a prompt while
+	// compaction is in progress"), so shares that arrive mid-compaction would
+	// otherwise bounce and be lost. session_compact and session_compact_failed
+	// both fire even for cancelled compactions, so the flush always has a trigger.
+	pi.on("session_before_compact", () => {
+		compacting = true;
+		return undefined;
+	});
+	pi.on("session_compact", () => {
+		settleCompaction();
+		return undefined;
+	});
+	pi.on("session_compact_failed", () => {
+		settleCompaction();
+		return undefined;
+	});
+
 	pi.on("session_shutdown", () => {
+		parkedDeliveries.length = 0;
+		compacting = false;
 		release();
 	});
 

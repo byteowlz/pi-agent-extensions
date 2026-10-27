@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.0.5
+
+- Shares arriving while pi compacts its context are parked instead of lost: pi
+  core refuses prompts mid-compaction ("Cannot submit a prompt while compaction
+  is in progress"), and the share used to bounce as a runtime error. The phone
+  now gets an immediate `ok` with `delivery: "parked"`, and the message is
+  delivered as soon as `session_compact` / `session_compact_failed` fires.
+  Parked FIFO is capped at 50; overflow bounces with a clear error. Delivery
+  order is preserved, a refused share parks even if the compaction flag was
+  missed, and shutdown clears parked content instead of leaking it across
+  sessions.
+
 ## 2.0.4
 
 - Add confirmed `/xlatch recover <slot>` and a recovery menu for unreachable routes stranded by PID reuse or container restarts. Preserve reachable listeners and uncertain connections. Status now shows the recovery command.

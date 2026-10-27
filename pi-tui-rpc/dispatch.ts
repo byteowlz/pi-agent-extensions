@@ -43,6 +43,10 @@ export interface RpcDeps {
 	getThinkingLevel(): string;
 	setThinkingLevel(level: string): void;
 	getAvailableThinkingLevels(): string[];
+	/** True while pi core is compacting; prompts throw in that window. */
+	isCompacting(): boolean;
+	/** Park a prompt for delivery when compaction ends; false when full. */
+	parkPrompt(kind: "immediate" | "steer" | "followUp", message: string): boolean;
 	newSession(parentSession?: string): Promise<{ cancelled: boolean }> | { cancelled: boolean };
 	switchSession(sessionPath: string): Promise<{ cancelled: boolean }> | { cancelled: boolean };
 	fork(entryId: string): Promise<{ cancelled: boolean }> | { cancelled: boolean };
@@ -216,6 +220,15 @@ async function dispatchPrompt(
 	streamingBehavior: StreamingBehavior | undefined,
 	deps: RpcDeps
 ): Promise<DispatchResult> {
+	if (deps.isCompacting()) {
+		if (streamingBehavior) {
+			return { success: false, error: "compaction in progress; streamingBehavior is not applicable while parked" };
+		}
+		if (!deps.parkPrompt("immediate", message)) {
+			return { success: false, error: "compaction parking queue is full; retry when compaction finishes" };
+		}
+		return { success: true, data: { delivered: "parked_compacting" } };
+	}
 	if (deps.isStreaming()) {
 		if (!streamingBehavior) {
 			return { success: false, error: 'agent is streaming; provide streamingBehavior "steer" or "followUp"' };
@@ -226,11 +239,21 @@ async function dispatchPrompt(
 	if (streamingBehavior) {
 		return { success: false, error: "agent is idle; streamingBehavior is not applicable" };
 	}
-	await deps.sendUserMessage(message);
+	try {
+		await deps.sendUserMessage(message);
+	} catch (error) {
+		// Compaction can start between the isCompacting check and the submit;
+		// park instead of failing the client with pi's raw refusal.
+		if (isCompactionRefusal(error) && deps.parkPrompt("immediate", message)) {
+			return { success: true, data: { delivered: "parked_compacting" } };
+		}
+		throw error;
+	}
 	return { success: true, data: { delivered: "immediately" } };
 }
 
 async function dispatchSteer(message: string, deps: RpcDeps): Promise<DispatchResult> {
+	if (deps.isCompacting()) return { success: false, error: "compaction in progress; steer after compaction finishes" };
 	if (!deps.isStreaming()) {
 		return { success: false, error: "agent is idle; nothing to steer" };
 	}
@@ -239,9 +262,15 @@ async function dispatchSteer(message: string, deps: RpcDeps): Promise<DispatchRe
 }
 
 async function dispatchFollowUp(message: string, deps: RpcDeps): Promise<DispatchResult> {
+	if (deps.isCompacting()) return { success: false, error: "compaction in progress; follow_up after compaction finishes" };
 	if (!deps.isStreaming()) {
 		return { success: false, error: "agent is idle; use prompt instead of follow_up" };
 	}
 	await deps.sendUserMessage(message, { deliverAs: "followUp" });
 	return { success: true, data: { delivered: "followUp" } };
+}
+
+const COMPACTION_REFUSAL = /compaction is in progress/i;
+function isCompactionRefusal(error: unknown): boolean {
+	return COMPACTION_REFUSAL.test(error instanceof Error ? error.message : String(error));
 }

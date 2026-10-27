@@ -135,13 +135,18 @@ Uses the real pi API, `pi.sendUserMessage(content, { deliverAs })`:
 |---------------|----------|--------------|
 | idle | delivered immediately, triggers a turn | `delivery: "immediate"` |
 | streaming/busy | `deliverAs: "followUp"` queues until the current turn's tools finish | `delivery: "queued"` |
+| compacting | parked, flushed in order when compaction ends (max 50) | `delivery: "parked"` |
 | not connected | adapter cannot reach the socket | `"pi session is not connected. …run /xlatch…"` |
 
 A file is written to disk **only after** the session socket answers, so a
 disconnected session never litters `~/xlatch/incoming`.
 
 `sendUserMessage` **throws** if the agent is streaming and `deliverAs` is
-omitted, so `followUp` is always passed. Incoming content is prefixed
+omitted, so `followUp` is always passed. While pi compacts its context the
+core refuses new prompts entirely ("Cannot submit a prompt while compaction
+is in progress"); the share is parked during that window and delivered when
+`session_compact` / `session_compact_failed` fires, so nothing is lost.
+Incoming content is prefixed
 `Shared from phone via xlatch (text|link):` so its origin is explicit in the
 transcript.
 
