@@ -51,6 +51,13 @@ A crashed session leaves a stale socket, but the phone still gets the correct
 "pi session is not connected" message, because the adapter's connect is refused
 rather than silently succeeding.
 
+If a slot is unreachable but its recorded PID still exists (for example after a
+container restart), run `/xlatch recover <slot>` in the intended receiving
+session and confirm. Recovery only reclaims managed private socket routes with
+an explicit missing/refused connection; live listeners and uncertain probes are
+preserved. `/xlatch status` shows the exact command, and the `/xlatch` menu offers
+recovery when unreachable slots exist. No process needs to be killed.
+
 Reclaim polls briefly rather than checking once: on `/reload` the new extension
 instance can start while the previous one still holds the socket.
 

@@ -22,7 +22,7 @@ import assert from 'node:assert/strict';
 const events = new Map(); let command; let status; const notifications = []; const messages = [];
 const ctx = { cwd: process.env.HOME, isIdle: () => true,
  sessionManager: { getSessionId: () => 'fixture', getSessionName: () => 'fixture', getEntries: () => [] },
- ui: { setStatus: (_, value) => { status = value; }, notify: (value) => notifications.push(value) } };
+ ui: { setStatus: (_, value) => { status = value; }, notify: (value) => notifications.push(value), confirm: async () => true } };
 extension({ on: (event, handler) => events.set(event, handler), registerCommand: (_, value) => { command = value.handler; }, registerTool: () => {}, appendEntry: () => {}, sendUserMessage: (message) => messages.push(message) });
 assert.equal(fs.readFileSync(process.env.HOME + '/.pi/agent/xlatch-pi/adapter.py', 'utf8').includes('xlatch -> pi session adapter'), true);
 await events.get('session_start')({ reason: 'new' }, ctx);
@@ -55,6 +55,15 @@ const files = messages.slice(1).join('\\n');
 assert.equal(files.includes('Shared from phone via xlatch (file), saved to disk:'), false);
 assert.equal(files.split('Compare these photos').length - 1, 1);
 assert.ok(files.includes('/incoming/one.png')); assert.ok(files.includes('/incoming/two.png'));
+
+await command('off', ctx);
+const abandoned = fs.mkdtempSync('/tmp/xlp-');
+fs.symlinkSync(abandoned + '/' + process.pid + '.sock', socket);
+await command('recover test', ctx);
+assert.equal(status, 'test');
+assert.notEqual(fs.readlinkSync(socket), abandoned + '/' + process.pid + '.sock');
+assert.equal((await shareFile({kind:'text',text:'delivery after recovery'})).ok, true);
+fs.rmSync(abandoned, {recursive:true,force:true});
 
 fs.unlinkSync(socket); fs.symlinkSync('/tmp/not-the-owned-session.sock', socket);
 await command('status', ctx);

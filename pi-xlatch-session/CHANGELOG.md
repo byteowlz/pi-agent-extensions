@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.4
+
+- Add confirmed `/xlatch recover <slot>` and a recovery menu for unreachable routes stranded by PID reuse or container restarts. Preserve reachable listeners and uncertain connections. Status now shows the recovery command.
+
 ## 2.0.3
 
 - Keep file deliveries concise: show the sender note, local file path, MIME type and size without repeating the sharing boilerplate for every attachment.

@@ -12,18 +12,58 @@ export function processAlive(pid: number): boolean {
 	}
 }
 
-export function socketLive(socket: string): Promise<boolean> {
+type SocketState = "live" | "unreachable" | "unknown";
+
+function socketState(socket: string): Promise<SocketState> {
 	return new Promise((resolve) => {
 		const probe = net.connect(socket);
-		const timer = setTimeout(() => finish(false), 1000);
-		const finish = (live: boolean) => {
+		const timer = setTimeout(() => finish("unknown"), 1000);
+		const finish = (state: SocketState) => {
 			clearTimeout(timer);
 			probe.destroy();
-			resolve(live);
+			resolve(state);
 		};
-		probe.once("connect", () => finish(true));
-		probe.once("error", () => finish(false));
+		probe.once("connect", () => finish("live"));
+		probe.once("error", (error: NodeJS.ErrnoException) =>
+			finish(error.code === "ENOENT" || error.code === "ECONNREFUSED" ? "unreachable" : "unknown")
+		);
 	});
+}
+
+export async function socketLive(socket: string): Promise<boolean> {
+	return (await socketState(socket)) === "live";
+}
+
+/** Explicit human recovery of a missing/refused private route, independent of reused PIDs. */
+export async function recoverSocket(socket: string): Promise<void> {
+	const lock = `${socket}.reclaim`;
+	const fd = fs.openSync(lock, "wx", 0o600);
+	try {
+		fs.writeSync(fd, String(process.pid));
+		let original: fs.Stats;
+		try {
+			original = fs.lstatSync(socket);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+			throw error;
+		}
+		if (!original.isSymbolicLink() || !/^\/tmp\/xlp-[^/]+\/\d+\.sock$/.test(fs.readlinkSync(socket))) {
+			throw new Error("This is not a managed private slot route. Disconnect its owner or choose a new slot name.");
+		}
+		if ((await socketState(socket)) !== "unreachable") {
+			throw new Error(
+				"The slot is reachable or its state is uncertain. Its route was preserved; disconnect its owning session first."
+			);
+		}
+		const current = fs.lstatSync(socket);
+		if (current.ino !== original.ino || current.dev !== original.dev) {
+			throw new Error("The slot changed during recovery. Its new route was preserved; retry status.");
+		}
+		fs.unlinkSync(socket);
+	} finally {
+		fs.closeSync(fd);
+		fs.unlinkSync(lock);
+	}
 }
 
 /** Bind privately: Node's close() unlinks its bound path even after replacement. */
