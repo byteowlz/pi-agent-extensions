@@ -34,7 +34,7 @@ import { Type } from "typebox";
 
 import { type ParkedContent, type ParkedItem, formatParkedContent, formatParkedList } from "./src/later.js";
 import { checkedContent, checkedItems, laterOutputSchema, listOutput, readOutput } from "./src/output.js";
-import { SlotEndpoint, removeDeadSocket, socketLive } from "./src/slot.js";
+import { SlotEndpoint, recoverSocket, removeDeadSocket, socketLive } from "./src/slot.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -541,6 +541,52 @@ export default function xlatchSession(pi: ExtensionAPI) {
 		ctx.ui.notify(was ? `Disconnected from xlatch slot "${was}".` : "This session is not connected.", "info");
 	}
 
+	async function recover(slot: string, ctx: ExtensionCommandContext): Promise<void> {
+		if (!SLOT_RE.test(slot)) {
+			ctx.ui.notify("Use /xlatch recover <slot>, for example /xlatch recover oqto-links.", "error");
+			return;
+		}
+		if (boundSlot || connecting) {
+			ctx.ui.notify("Disconnect this session with /xlatch off before recovering another slot.", "error");
+			return;
+		}
+		const confirmed = await ctx.ui.confirm(
+			"Recover xlatch slot?",
+			`Reconnect “${slot}” to this session? Only a missing or refused private socket can be reclaimed. A reachable listener or uncertain connection will be left untouched.`
+		);
+		if (!confirmed) return;
+		try {
+			fs.mkdirSync(SLOT_DIR, { recursive: true, mode: 0o700 });
+			await recoverSocket(slotSocket(slot));
+			ctx.ui.notify(await claim(slot, ctx), "info");
+		} catch (error) {
+			ctx.ui.notify(`xlatch recovery failed: ${errorMessage(error)}`, "error");
+		}
+	}
+
+	async function recoverMenu(ctx: ExtensionCommandContext, unreachable: string[]): Promise<void> {
+		const slot = await ctx.ui.select("Recover an unreachable slot", [...unreachable, "Cancel"]);
+		if (slot && slot !== "Cancel") await recover(slot, ctx);
+	}
+
+	async function slotMenu(ctx: ExtensionCommandContext, pruned: string[]): Promise<void> {
+		const choice = await ctx.ui.select("xlatch", [
+			"Retrieve from Save for Later",
+			boundSlot ? `Disconnect  (currently "${boundSlot}")` : "Connect this session to a slot",
+			"Status",
+			...(!boundSlot && pruned.length ? ["Recover unreachable slot"] : []),
+			"Cancel",
+		]);
+		if (!choice || choice === "Cancel") return;
+		if (choice === "Retrieve from Save for Later") return openLater(ctx);
+		if (choice === "Status") return showStatus(ctx, pruned);
+		if (choice === "Recover unreachable slot") return recoverMenu(ctx, pruned);
+		if (choice.startsWith("Disconnect")) return disconnect(ctx);
+
+		const slot = await ctx.ui.input("Slot name", "e.g. govnr");
+		if (slot?.trim()) await connectTo(slot.trim(), ctx);
+	}
+
 	async function showStatus(ctx: ExtensionCommandContext, unavailable: string[]): Promise<void> {
 		await checkHealth();
 		const others = Object.entries(readClaims()).filter(([s]) => s !== boundSlot);
@@ -552,7 +598,9 @@ export default function xlatchSession(pi: ExtensionAPI) {
 			others.length
 				? `Other registered slots: ${others.map(([s, c]) => `${s} (pid ${c.pid})`).join(", ")}`
 				: "Other registered slots: none",
-			...(unavailable.length ? [`Unreachable slots: ${unavailable.join(", ")}`] : []),
+			...(unavailable.length
+				? [`Unreachable slots: ${unavailable.join(", ")}`, ...unavailable.map((slot) => `Recover here: /xlatch recover ${slot}`)]
+				: []),
 			...(stale.length
 				? [
 						"",
@@ -673,26 +721,16 @@ export default function xlatchSession(pi: ExtensionAPI) {
 				return openLater(ctx, requested);
 			}
 
+			if (arg.startsWith("recover ")) return recover(arg.slice(8).trim(), ctx);
+			if (arg === "recover") return recoverMenu(ctx, await unavailableSlots(boundSlot));
+
 			// Direct forms: /xlatch <slot> | /xlatch off
 			if (arg === "off" || arg === "disconnect") return disconnect(ctx);
 			if (arg && arg !== "status" && arg !== "connect") return connectTo(arg, ctx);
 
 			const pruned = await unavailableSlots(boundSlot);
 			if (arg === "status") return showStatus(ctx, pruned);
-
-			const choice = await ctx.ui.select("xlatch", [
-				"Retrieve from Save for Later",
-				boundSlot ? `Disconnect  (currently "${boundSlot}")` : "Connect this session to a slot",
-				"Status",
-				"Cancel",
-			]);
-			if (!choice || choice === "Cancel") return;
-			if (choice === "Retrieve from Save for Later") return openLater(ctx);
-			if (choice === "Status") return showStatus(ctx, pruned);
-			if (choice.startsWith("Disconnect")) return disconnect(ctx);
-
-			const slot = await ctx.ui.input("Slot name", "e.g. govnr");
-			if (slot?.trim()) await connectTo(slot.trim(), ctx);
+			return slotMenu(ctx, pruned);
 		},
 	});
 }
