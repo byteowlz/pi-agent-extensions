@@ -5,14 +5,25 @@ import type { ClientCommand } from "./protocol";
 interface DepsHarness extends RpcDeps {
 	sent: Array<{ message: string; deliverAs?: string }>;
 	aborts: number;
+	parked: Array<{ kind: string; message: string }>;
 }
 
-function createDeps(options: { streaming?: boolean; owner?: "tui" | "remote" } = {}): DepsHarness {
+function createDeps(
+	options: { streaming?: boolean; owner?: "tui" | "remote"; compacting?: boolean; parkFull?: boolean } = {}
+): DepsHarness {
 	const sent: Array<{ message: string; deliverAs?: string }> = [];
+	const parked: Array<{ kind: string; message: string }> = [];
 	return {
 		sent,
 		aborts: 0,
+		parked,
 		isStreaming: () => options.streaming ?? false,
+		isCompacting: () => options.compacting ?? false,
+		parkPrompt: (kind, message) => {
+			if (options.parkFull) return false;
+			parked.push({ kind, message });
+			return true;
+		},
 		sendUserMessage: (message, opts) => {
 			sent.push({ message, deliverAs: opts?.deliverAs });
 		},
@@ -120,6 +131,46 @@ describe("pi-tui-rpc dispatch", () => {
 			{ message: "s", deliverAs: "steer" },
 			{ message: "f", deliverAs: "followUp" },
 		]);
+	});
+
+	test("prompts during compaction park instead of failing", async () => {
+		const deps = createDeps({ owner: "remote", compacting: true });
+		const result = await dispatchCommand({ type: "prompt", message: "held text" }, deps);
+		expect(result.success).toBe(true);
+		expect(result.data).toEqual({ delivered: "parked_compacting" });
+		expect(deps.sent).toEqual([]);
+		expect(deps.parked).toEqual([{ kind: "immediate", message: "held text" }]);
+	});
+
+	test("parked prompts keep FIFO order and obey the cap", async () => {
+		const deps = createDeps({ owner: "remote", compacting: true, parkFull: true });
+		const result = await dispatchCommand({ type: "prompt", message: "over the cap" }, deps);
+		expect(result.success).toBe(false);
+		expect(result.error).toContain("full");
+	});
+
+	test("streamingBehavior during compaction is rejected (parked prompts deliver when idle)", async () => {
+		const deps = createDeps({ owner: "remote", compacting: true });
+		const steer = await dispatchCommand({ type: "prompt", message: "x", streamingBehavior: "steer" }, deps);
+		expect(steer.success).toBe(false);
+		expect(steer.error).toContain("compaction in progress");
+		const directSteer = await dispatchCommand({ type: "steer", message: "y" }, deps);
+		expect(directSteer.success).toBe(false);
+		expect(directSteer.error).toContain("compaction in progress");
+		const followUp = await dispatchCommand({ type: "follow_up", message: "z" }, deps);
+		expect(followUp.success).toBe(false);
+		expect(deps.sent).toEqual([]);
+	});
+
+	test("a compaction refusal that slips past the flag still parks", async () => {
+		const deps = createDeps({ owner: "remote", compacting: false });
+		deps.sendUserMessage = () => {
+			throw new Error("Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.");
+		};
+		const result = await dispatchCommand({ type: "prompt", message: "raced" }, deps);
+		expect(result.success).toBe(true);
+		expect(result.data).toEqual({ delivered: "parked_compacting" });
+		expect(deps.parked).toEqual([{ kind: "immediate", message: "raced" }]);
 	});
 
 	test("abort requires the lease and aborts exactly once", async () => {

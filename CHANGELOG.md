@@ -4,6 +4,22 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Remote input survives the compaction window (2.28.0)
+
+- **pi-xlatch-session 2.0.5**: shares arriving while pi compacts its context
+  are no longer lost to pi's "Cannot submit a prompt while compaction is in
+  progress" refusal. They are parked (bounded FIFO, 50), acked to the phone
+  with `delivery: "parked"` immediately, and flushed in order when
+  `session_compact`/`session_compact_failed` fires (both fire even for
+  aborted compactions). A refusal that slips past the compaction flag parks
+  anyway; shutdown never hands parked content to a different session.
+- **pi-tui-rpc**: remote `prompt`s during the same window now park and flush
+  on compaction end instead of surfacing the raw core error.
+  `get_state` reports the real `isCompacting`; parked prompts reply
+  `{ delivered: "parked_compacting" }` immediately; `steer`/`follow_up` fail
+  fast with a clear "compaction in progress" error (they are meaningless
+  while the model output is paused for compaction).
+
 ### Bounded blocking dialogs (2.27.0)
 
 - **pi-session-tools**: subagent spawn confirmations no longer wait forever in

@@ -81,11 +81,11 @@ Strict JSONL: LF (`\n`) is the only record delimiter; a single trailing `\r` is 
 
 | Command | Fields | Notes |
 | --- | --- | --- |
-| `prompt` | `message`, `streamingBehavior?` (`steer`\|`followUp`) | Error when streaming without `streamingBehavior` |
-| `steer` | `message` | Error when idle |
-| `follow_up` | `message` | Error when idle |
+| `prompt` | `message`, `streamingBehavior?` (`steer`\|`followUp`) | Error when streaming without `streamingBehavior`. While pi compacts: parked, replies `{delivered:"parked_compacting"}`, flushed in order when compaction ends (cap 50) |
+| `steer` | `message` | Error when idle; error while compacting |
+| `follow_up` | `message` | Error when idle; error while compacting |
 | `abort` | — | Requires the lease |
-| `get_state` | — | Mode, cwd, session ids/name, routing description, model, thinking level, streaming, lease |
+| `get_state` | — | Mode, cwd, session ids/name, routing description, model, thinking level, streaming, `isCompacting`, lease |
 | `get_messages` | — | Current branch entries |
 | `lease` | `action: request\|release` | Granted at once; confirm dialog only with `PI_TUI_RPC_LEASE_CONFIRM=1` |
 
