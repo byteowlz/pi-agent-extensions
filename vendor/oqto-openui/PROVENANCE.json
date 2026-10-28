@@ -1,0 +1,11 @@
+{
+  "package": "@byteowlz/oqto-openui",
+  "version": "0.2.1",
+  "source": "https://github.com/byteowlz/oqto-openui",
+  "tag": "v0.2.1",
+  "commit": "c80e95e01fa971f9928dda414bdfa3032398b73e",
+  "tarball": "byteowlz-oqto-openui-0.2.1.tgz",
+  "sha256": "bb398abdd7b29c32292c1760987dfd12142fce5aabfed34025a2888154928a1e",
+  "packed_with": "npm pack --ignore-scripts",
+  "why": "npm here refuses git/remote dependencies; vendored, checksum-pinned and reviewable. Refresh by packing a newer tag and updating this record."
+}
