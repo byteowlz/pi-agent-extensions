@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "pi-private config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "sessionRoot": { "type": "string", "description": "Absolute, owner-only root outside the normal Pi session store; runtime checks platform-specific absolute paths" },
+    "extensions": {
+      "type": "object",
+      "description": "Additional extensions for /private only; pi-history-search defaults to the sibling index.ts and can be overridden here. /private nohistory ignores this entire object.",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
+      "additionalProperties": { "type": "string" }
+    }
+  }
+}

@@ -4,6 +4,18 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-private: isolated fresh-session profiles (2.30.0)
+
+- **pi-private 0.1.0 (new):** `/private` starts a fresh session with an explicit
+  extension allowlist (including the sibling history-search entry point); `/private
+  nohistory` omits history-search and all other optional extensions entirely. Both
+  disable discovery, MCP, context files, skills, rolling capture and ordinary shell
+  history, use owner-only storage outside Pi's regular session root, and support
+  Herdr/tmux spawning or a standalone plain-terminal CLI with deliberate resume.
+  Added config schema, real Pi RPC boot and propagation tests, and an optional
+  manual age recipient archive helper. Password/YubiKey live-session encryption
+  remains unimplemented; sessions are plaintext and the README documents limits.
+
 ### pi-openui: terminal-native navigation, sharp corners (2.29.2)
 
 - **pi-openui 0.1.2**: fixed a wrong-answer bug: ↑/↓ inside an option list changed
