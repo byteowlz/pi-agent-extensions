@@ -4,6 +4,16 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-openui: terminal-native navigation, sharp corners (2.29.2)
+
+- **pi-openui 0.1.2**: fixed a wrong-answer bug: ↑/↓ inside an option list changed
+  the selected value, so navigating to "Go" could send a different choice than
+  the user meant (reported: picked "web renderer", agent received "kitty").
+  ↑/↓/tab now only move focus; every option is its own entry; Enter/space choose,
+  1-9 pick in the focused group, Enter on an option in a single-field form
+  chooses and submits. Regression test covers the reported case. Cards use sharp
+  corners (Oqto identity).
+
 ### pi-openui loads when installed (2.29.1)
 
 - **pi-openui 0.1.1**: installed copies failed with "Cannot find module

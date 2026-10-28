@@ -27,7 +27,19 @@ export type Control =
 	| { kind: "button"; id: string; label: string; action: unknown }
 	| { kind: "tabs"; id: string; count: number }
 	| { kind: "accordion"; id: string; count: number }
-	| { kind: "choice"; id: string; state: string; options: { value: string; label: string }[]; multiple: boolean }
+	| {
+			kind: "option";
+			id: string;
+			state: string;
+			value: string;
+			label: string;
+			multiple: boolean;
+			/** Group index (1-based) for number shortcuts. */
+			index: number;
+			group: string;
+			/** Submit action when this option is the form's only input: Enter chooses and submits. */
+			submit?: unknown;
+	  }
 	| { kind: "toggle"; id: string; state: string; key: string }
 	| { kind: "text"; id: string; state: string; placeholder: string }
 	| { kind: "slider"; id: string; state: string; min: number; max: number; step: number }
@@ -59,6 +71,7 @@ export interface Rendered {
 	controls: Control[];
 }
 
+const CHOICES = new Set(["Select", "RadioGroup", "OptionCards", "Chips", "CheckBoxGroup"]);
 const SPARK = "▁▂▃▄▅▆▇█";
 const BRAILLE_DOTS = [
 	[0x01, 0x08],
@@ -77,6 +90,7 @@ export function render(root: unknown, width: number, paint: Paint, state: ViewSt
 
 class Renderer {
 	private auto = 0;
+	private submit: unknown;
 	constructor(
 		private readonly p: Paint,
 		private readonly s: ViewState,
@@ -193,8 +207,16 @@ class Renderer {
 				return ["", this.buttons(arr(p.buttons), w)];
 			case "Button":
 				return [this.buttons([n], w)];
-			case "Form":
-				return [...this.node(arr(p.fields), w), ...this.node(p.buttons, w)];
+			case "Form": {
+				const fields = arr(p.fields);
+				const first = props(arr(props(p.buttons).buttons)[0]);
+				const single =
+					fields.length === 1 && isElement(props(fields[0]).input) && CHOICES.has((props(fields[0]).input as Element).typeName);
+				this.submit = single ? first.action : undefined;
+				const lines = this.node(fields, w);
+				this.submit = undefined;
+				return [...lines, ...this.node(p.buttons, w)];
+			}
 			case "FormControl":
 				return [
 					this.p.fg("muted", str(p.label)),
@@ -258,12 +280,12 @@ class Renderer {
 		);
 		const b = (s: string) => this.p.fg("border", s);
 		const head = title
-			? `${b("╭─ ")}${this.p.bold(truncateToWidth(title, inner - 2))}${b(` ${"─".repeat(Math.max(0, inner - 1 - visibleWidth(truncateToWidth(title, inner - 2))))}╮`)}`
-			: b(`╭${"─".repeat(w - 2)}╮`);
+			? `${b("┌─ ")}${this.p.bold(truncateToWidth(title, inner - 2))}${b(` ${"─".repeat(Math.max(0, inner - 1 - visibleWidth(truncateToWidth(title, inner - 2))))}┐`)}`
+			: b(`┌${"─".repeat(w - 2)}┐`);
 		return [
 			head,
 			...body.map((l) => `${b("│")} ${pad(truncateToWidth(l, inner), inner)} ${b("│")}`),
-			b(`╰${"─".repeat(w - 2)}╯`),
+			b(`└${"─".repeat(w - 2)}┘`),
 		];
 	}
 
@@ -499,7 +521,7 @@ class Renderer {
 			const role = q.type === "destructive" ? "error" : i === 0 && (q.variant ?? "primary") === "primary" ? "accent" : "muted";
 			return this.p.fg(role, `[${label}]`);
 		});
-		const hint = this.s.interactive ? this.p.fg("dim", "  tab · enter") : "";
+		const hint = this.s.interactive ? this.p.fg("dim", "  ↑↓ · enter") : "";
 		return truncateToWidth(parts.join("  ") + hint, w);
 	}
 
@@ -514,31 +536,42 @@ class Renderer {
 
 	private choice(kind: string, p: Record<string, unknown>, w: number): string[] {
 		const name = str(p.name);
-		const options = arr(p.items).map((it) => {
-			const q = props(it);
-			return { value: str(q.value), label: str(q.label ?? q.title), sub: str(q.subtitle ?? q.description) };
-		});
-		const multiple = p.type === "multiple" || kind === "CheckBoxGroup";
 		const key = `$${name}`;
+		const multiple = p.type === "multiple" || kind === "CheckBoxGroup";
 		if (this.s.values[key] == null && p.defaultValue != null) this.s.values[key] = p.defaultValue;
 		const current = this.s.values[key];
 		const isOn = (v: string) => (Array.isArray(current) ? current.includes(v) : current === v);
-		const { focused } = this.control({ kind: "choice", id: this.id("ch"), state: key, options, multiple });
-		const mark = (on: boolean) => (multiple ? (on ? "▣" : "□") : on ? "◉" : "○");
-		if (kind === "Chips") {
-			const line = options
-				.map((o) => (isOn(o.value) ? this.inv(` ${o.label} `) : `${this.p.fg("muted", "(")}${o.label}${this.p.fg("muted", ")")}`))
-				.join(" ");
-			return [truncateToWidth(line + (focused ? this.p.fg("accent", " ◂ ←/→") : ""), w)];
-		}
-		return options.flatMap((o) => {
-			const on = isOn(o.value);
-			const head = `${on ? this.p.fg("accent", mark(true)) : mark(false)} ${on ? this.p.bold(o.label) : o.label}`;
+		const group = this.id("grp");
+		return arr(p.items).flatMap((it, i) => {
+			const q = props(it);
+			const value = str(q.value);
+			const label = str(q.label ?? q.title);
+			const { focused } = this.control({
+				kind: "option",
+				id: `${group}:${i}`,
+				state: key,
+				value,
+				label,
+				multiple,
+				index: i + 1,
+				group,
+				submit: multiple ? undefined : this.submit,
+			});
+			const head = this.optionLine(label, isOn(value), multiple, focused, i);
+			const sub = str(q.subtitle ?? q.description);
 			return [
-				truncateToWidth(head + (focused && on ? this.p.fg("accent", " ◂ ↑/↓") : ""), w),
-				...(o.sub && kind === "OptionCards" ? [`  ${this.p.fg("muted", truncateToWidth(o.sub, w - 2))}`] : []),
+				truncateToWidth(head, w),
+				...(sub && kind !== "Chips" ? [`      ${this.p.fg("muted", truncateToWidth(sub, w - 6))}`] : []),
 			];
 		});
+	}
+
+	private optionLine(label: string, on: boolean, multiple: boolean, focused: boolean, i: number): string {
+		const marks = multiple ? ["□", "▣"] : ["○", "◉"];
+		const mark = on ? this.p.fg("accent", marks[1] ?? "") : (marks[0] ?? "");
+		const num = this.s.interactive && i < 9 ? this.p.fg("dim", `${i + 1} `) : "";
+		const text = on ? this.p.bold(label) : label;
+		return `${focused ? this.p.fg("accent", "❯") : " "} ${num}${mark} ${focused ? this.p.fg("accent", text) : text}`;
 	}
 
 	private switches(p: Record<string, unknown>): string[] {

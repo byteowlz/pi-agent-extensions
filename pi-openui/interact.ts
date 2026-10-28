@@ -54,18 +54,22 @@ export function reduce(state: ViewState, controls: Control[], key: Key): { state
 
 	if (key === "escape") return { state: s, outcome: { kind: "cancel" } };
 	if (!n) return { state: s };
-	if (key === "tab" || (key === "down" && current?.kind !== "choice" && current?.kind !== "accordion"))
-		return { state: { ...s, focus: (s.focus + 1) % n } };
-	if (key === "shift-tab" || (key === "up" && current?.kind !== "choice" && current?.kind !== "accordion"))
-		return { state: { ...s, focus: (s.focus - 1 + n) % n } };
+	// Up/down/tab only move focus; they never change a value.
+	if (key === "tab" || key === "down") return { state: { ...s, focus: (s.focus + 1) % n } };
+	if (key === "shift-tab" || key === "up") return { state: { ...s, focus: (s.focus - 1 + n) % n } };
+	// Number keys pick the n-th option of the focused option group.
+	if (typeof key === "object" && /^[1-9]$/.test(key.char) && current?.kind === "option") {
+		const target = controls.findIndex((c) => c.kind === "option" && c.group === current.group && c.index === Number(key.char));
+		if (target >= 0) return reduceControl({ ...s, focus: target }, controls[target] as Control, "space");
+	}
 	if (!current) return { state: s };
 
-	return reduceControl(s, current, n, key);
+	return reduceControl(s, current, key);
 }
 
 const PRESS = new Set<Key>(["enter", "space"]);
 
-function reduceControl(s: ViewState, current: Control, n: number, key: Key): { state: ViewState; outcome?: Outcome } {
+function reduceControl(s: ViewState, current: Control, key: Key): { state: ViewState; outcome?: Outcome } {
 	switch (current.kind) {
 		case "button": {
 			const outcome = PRESS.has(key) ? evaluateAction(current.action, s.values) : undefined;
@@ -74,9 +78,9 @@ function reduceControl(s: ViewState, current: Control, n: number, key: Key): { s
 		case "tabs":
 			return reduceTabs(s, current, key);
 		case "accordion":
-			return reduceAccordion(s, current, n, key);
-		case "choice":
-			return current.multiple ? reduceMulti(s, current, key) : reduceChoice(s, current, key);
+			return reduceAccordion(s, current, key);
+		case "option":
+			return reduceOption(s, current, key);
 		case "toggle":
 			if (PRESS.has(key)) s.values[current.state] = s.values[current.state] !== true;
 			return { state: s };
@@ -96,13 +100,11 @@ function reduceTabs(s: ViewState, c: Extract<Control, { kind: "tabs" }>, key: Ke
 	return { state: s };
 }
 
-function reduceAccordion(s: ViewState, c: Extract<Control, { kind: "accordion" }>, n: number, key: Key): { state: ViewState } {
+function reduceAccordion(s: ViewState, c: Extract<Control, { kind: "accordion" }>, key: Key): { state: ViewState } {
 	const open = s.selected[c.id] ?? -1;
 	if (PRESS.has(key)) s.selected[c.id] = open >= 0 ? -1 : 0;
-	if (key !== "down" && key !== "up") return { state: s };
-	const next = key === "down" ? open + 1 : open - 1;
-	if (next < 0 || next >= c.count) return { state: { ...s, focus: (s.focus + (key === "down" ? 1 : n - 1)) % n } };
-	s.selected[c.id] = next;
+	if (key === "right") s.selected[c.id] = (open + 1) % c.count;
+	if (key === "left") s.selected[c.id] = open <= 0 ? c.count - 1 : open - 1;
 	return { state: s };
 }
 
@@ -117,18 +119,6 @@ function reduceText(s: ViewState, c: Extract<Control, { kind: "text" }>, key: Ke
 	if (key === "enter") return { state: { ...s, editing: c.id } };
 	if (typeof key !== "object") return { state: s };
 	return { state: { ...s, editing: c.id, values: { ...s.values, [c.state]: String(s.values[c.state] ?? "") + key.char } } };
-}
-
-function reduceMulti(s: ViewState, c: Extract<Control, { kind: "choice" }>, key: Key): { state: ViewState } {
-	const values = c.options.map((o) => o.value);
-	const cur = s.values[c.state];
-	const list = Array.isArray(cur) ? [...(cur as string[])] : [];
-	const idx = s.selected[c.id] ?? 0;
-	if (key === "down" || key === "right") s.selected[c.id] = Math.min(values.length - 1, idx + 1);
-	if (key === "up" || key === "left") s.selected[c.id] = Math.max(0, idx - 1);
-	const v = values[idx];
-	if (PRESS.has(key) && v !== undefined) s.values[c.state] = list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
-	return { state: s };
 }
 
 function reduceEditing(s: ViewState, controls: Control[], key: Key): { state: ViewState } {
@@ -153,16 +143,21 @@ function reduceEditing(s: ViewState, controls: Control[], key: Key): { state: Vi
 	return { state: s };
 }
 
-function reduceChoice(s: ViewState, c: Extract<Control, { kind: "choice" }>, key: Key): { state: ViewState } {
-	const values = c.options.map((o) => o.value);
-	const cur = s.values[c.state];
-	const i = Math.max(0, values.indexOf(String(cur)));
-	if (key === "down" || key === "right") s.values[c.state] = values[Math.min(values.length - 1, i + (cur == null ? 0 : 1))];
-	if (key === "up" || key === "left") s.values[c.state] = values[Math.max(0, i - 1)];
-	if (PRESS.has(key) && cur == null) s.values[c.state] = values[0];
+function reduceOption(s: ViewState, c: Extract<Control, { kind: "option" }>, key: Key): { state: ViewState; outcome?: Outcome } {
+	if (!PRESS.has(key)) return { state: s };
+	if (c.multiple) {
+		const cur = s.values[c.state];
+		const list = Array.isArray(cur) ? [...(cur as string[])] : [];
+		s.values[c.state] = list.includes(c.value) ? list.filter((x) => x !== c.value) : [...list, c.value];
+		return { state: s };
+	}
+	s.values[c.state] = c.value;
+	if (key === "enter" && c.submit !== undefined) {
+		const outcome = evaluateAction(c.submit, s.values);
+		if (outcome) return { state: s, outcome };
+	}
 	return { state: s };
 }
-
 function reduceCell(s: ViewState, current: Extract<Control, { kind: "cell" }>, key: Key): { state: ViewState } {
 	if (current.options && (key === "left" || key === "right")) {
 		const rows = (s.tables[current.table] ?? []).map((r) => [...r]);
