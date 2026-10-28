@@ -4,6 +4,17 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Agent-generated UI in the TUI (2.29.0)
+
+- **pi-openui 0.1.0 (new)**: renders OpenUI Lang programs from the Oqto profile
+  (oqto-openui v0.2.1, OpenUI's full vocabulary) natively in the Pi TUI and
+  returns `@Answer` values to the agent. `/openui on|off|status` per session
+  (persisted, off by default: no prompt, tool inactive), `/openui demo` for local
+  previews. Cells-level rendering: layout, KPI tiles, tabs, accordions, steps,
+  tables and editable tables, Braille charts, forms. Never answers outside the
+  interactive TUI; non-answer actions are reported, not executed. OpenUI
+  telemetry blocked. Kitty graphics level not yet included.
+
 ### Remote input survives the compaction window (2.28.0)
 
 - **pi-xlatch-session 2.0.5**: shares arriving while pi compacts its context
