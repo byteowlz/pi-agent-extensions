@@ -97,6 +97,20 @@ Responses: `{"type":"response","id":…,"command":…,"success":…,"data"|"erro
 - `{"type":"event","event":"<pi event>","data":…,"ts":…}` for fanned-out pi events
 - `{"type":"lease","owner":"tui"|"remote","reason":…}` on every ownership change
 
+Event payloads are bounded so one event never disconnects clients:
+
+- `turn_end` carries its documented fields (`message`, `toolResults`, ids,
+  `outcome`) but not pi's handler plumbing (`context`, `entries`, `continue`);
+  `context` is the whole conversation.
+- Inline image `data` is replaced by `omittedBytes`; the image block, its type
+  and MIME type stay.
+- An event still over 512 KiB keeps only its small identity fields (for example
+  `toolCallId`, `toolName`, `outcome`) plus `omitted: {reason, bytes}`.
+- A client that falls behind receives only the newest pending `message_update`
+  (each one repeats the whole partial message), delivered before the next frame
+  so order holds. A client that falls more than 1 MiB behind on other frames is
+  still disconnected.
+
 ### Lease rules
 
 - `tui` is the default owner; observation commands (`get_state`, `get_messages`) never need it.

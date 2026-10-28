@@ -31,12 +31,42 @@ export interface Hub {
 	clientCount(): number;
 }
 
+/** Unsent bytes a client may fall behind by before it is disconnected. */
+const BACKLOG_LIMIT = 1024 * 1024;
+/** Unsent bytes after which superseded message_update frames are coalesced. */
+const COALESCE_AFTER = 64 * 1024;
+
+function isMessageUpdate(frame: unknown): boolean {
+	const value = frame as { type?: unknown; event?: unknown } | null;
+	return value?.type === "event" && value.event === "message_update";
+}
+
 export function createHub(options: HubOptions): Hub {
 	const clients = new Map<string, net.Socket>();
 	const buffers = new Map<string, string>();
+	/** Newest message_update held back from a client that is not keeping up. */
+	const heldUpdates = new Map<string, string>();
 	let clientSeq = 0;
 	let server: net.Server | null = null;
 	let listening = false;
+
+	const write = (clientId: string, socket: net.Socket, line: string): boolean => {
+		if (socket.writableLength + Buffer.byteLength(line) > BACKLOG_LIMIT) {
+			removeClient(clientId);
+			socket.destroy();
+			return false;
+		}
+		socket.write(line);
+		return true;
+	};
+
+	/** Write a held update ahead of anything newer, preserving frame order. */
+	const flushHeld = (clientId: string, socket: net.Socket): boolean => {
+		const held = heldUpdates.get(clientId);
+		if (held === undefined) return true;
+		heldUpdates.delete(clientId);
+		return write(clientId, socket, held);
+	};
 
 	const writeFrame = (clientId: string, socket: net.Socket, frame: unknown): void => {
 		if (!socket.writable) {
@@ -44,12 +74,15 @@ export function createHub(options: HubOptions): Hub {
 		}
 		try {
 			const line = `${JSON.stringify(frame)}\n`;
-			if (socket.writableLength + Buffer.byteLength(line) > 1024 * 1024) {
-				removeClient(clientId);
-				socket.destroy();
+			// Each message_update repeats the whole partial message, so only the
+			// newest matters. Hold it for a reader that is behind instead of letting
+			// quadratic re-sends exhaust its backlog and disconnect it.
+			if (isMessageUpdate(frame) && socket.writableLength > COALESCE_AFTER) {
+				heldUpdates.set(clientId, line);
 				return;
 			}
-			socket.write(line);
+			if (!flushHeld(clientId, socket)) return;
+			write(clientId, socket, line);
 		} catch {
 			// Socket died between the writable check and the write; the close
 			// handler prunes it.
@@ -102,6 +135,7 @@ export function createHub(options: HubOptions): Hub {
 	const removeClient = (clientId: string): void => {
 		if (!clients.delete(clientId)) return;
 		buffers.delete(clientId);
+		heldUpdates.delete(clientId);
 		options.onDisconnect?.(clientId);
 	};
 
@@ -118,6 +152,14 @@ export function createHub(options: HubOptions): Hub {
 		socket.setEncoding("utf8");
 		socket.on("data", (chunk: string) => {
 			handleChunk(clientId, chunk);
+		});
+		socket.on("drain", () => {
+			if (!socket.writable) return;
+			try {
+				flushHeld(clientId, socket);
+			} catch {
+				// The close handler prunes a socket that died mid-flush.
+			}
 		});
 		socket.on("error", () => {
 			removeClient(clientId);
