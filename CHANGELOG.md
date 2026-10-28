@@ -4,6 +4,19 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Move a session to another working directory (2.30.0)
+
+- **pi-session-cwd 0.1.0**: new extension — `/cwd <path>` moves the running
+  session to another working directory and takes the session file with it:
+  header `cwd` rewritten, JSONL staged and moved into the target cwd's session
+  directory, then `ctx.switchSession` rebuilds the runtime so tools, project
+  `AGENTS.md`/settings and extension cwd follow. History, branches, labels,
+  session name and other in-session state survive because the file moves rather
+  than being rewritten. `/mvcwd` picks from directories that already have
+  sessions; `/cwd-history` lists moves (recorded as `pi-session-cwd:move/v1`
+  entries, never LLM context). Interactive surfaces confirm first; RPC/print
+  require `--force` so a remote one-liner cannot silently relocate a session.
+
 ### pi-openui: terminal-native navigation, sharp corners (2.29.2)
 
 - **pi-openui 0.1.2**: fixed a wrong-answer bug: ↑/↓ inside an option list changed
