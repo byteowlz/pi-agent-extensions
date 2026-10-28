@@ -54,7 +54,15 @@ function toModelSummary(m: unknown): ModelSummary {
 import { type ModelSummary, type RpcDeps, dispatchCommand } from "./dispatch.js";
 import { type Hub, createHub } from "./hub.js";
 import { createLease, takeoverDecision } from "./lease.js";
-import { COMMAND_TYPES, type ClientCommand, type LeaseOwner, eventFrame, responseFrame, validateCommand } from "./protocol.js";
+import {
+	COMMAND_TYPES,
+	type ClientCommand,
+	type LeaseOwner,
+	eventFrame,
+	responseFrame,
+	validateCommand,
+	wireEventData,
+} from "./protocol.js";
 import { defaultSocketPath } from "./socket-path.js";
 
 const STATUS_KEY = "pi_tui_rpc";
@@ -552,7 +560,7 @@ export default function (pi: ExtensionAPI) {
 		currentCtx = ctx;
 		lease.reset("session_reset");
 		await startHub();
-		hub?.broadcast(eventFrame("session_start", event));
+		hub?.broadcast(eventFrame("session_start", wireEventData("session_start", event)));
 		updateTuiStatus();
 	});
 
@@ -563,7 +571,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (event) => {
-		hub?.broadcast(eventFrame("session_shutdown", event));
+		hub?.broadcast(eventFrame("session_shutdown", wireEventData("session_shutdown", event)));
 		currentCtx = null;
 		lease.reset("session_shutdown");
 		await stopHub();
@@ -603,7 +611,7 @@ export default function (pi: ExtensionAPI) {
 			currentCtx = ctx;
 			if (name === "session_before_compact") compacting = true;
 			if (name === "session_compact" || name === "session_compact_failed") settleCompaction();
-			hub?.broadcast(eventFrame(name, event));
+			hub?.broadcast(eventFrame(name, wireEventData(name, event)));
 			return undefined;
 		});
 	};

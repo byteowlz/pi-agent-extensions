@@ -309,3 +309,65 @@ export function responseFrame(
 export function eventFrame(event: string, data: unknown, now: () => number = Date.now): EventFrame {
 	return { type: "event", event, data, ts: now() };
 }
+
+/** Largest serialized event payload sent to clients; well under the hub's 1 MiB backlog cap. */
+export const MAX_EVENT_DATA_BYTES = 512 * 1024;
+
+/** Handler plumbing pi adds to boundary events; never part of the observed payload. */
+const BOUNDARY_ONLY_FIELDS = ["context", "entries", "continue"];
+const BOUNDARY_EVENTS = new Set(["turn_end", "agent_before_settle"]);
+/** Small fields kept when an event must be cut down, so observers can still route it. */
+const IDENTITY_FIELD_LIMIT = 512;
+
+/**
+ * Project a pi event to its bounded wire shape without mutating the original.
+ *
+ * pi hands boundary handlers the whole conversation as `context`, and tool and
+ * message events carry inline base64 images. Serialized verbatim, one turn_end
+ * or one screenshot read exceeds the hub's backlog cap and disconnects every
+ * client. Clients need the event, not the conversation: drop boundary plumbing,
+ * replace inline image data with its size, and as a last resort keep only the
+ * small identity fields with an explicit `omitted` marker.
+ */
+export function wireEventData(event: string, data: unknown): unknown {
+	if (data === null || typeof data !== "object") return data;
+	const projected = redactImages(data, new WeakSet()) as Record<string, unknown>;
+	if (BOUNDARY_EVENTS.has(event) && !Array.isArray(projected)) {
+		for (const field of BOUNDARY_ONLY_FIELDS) delete projected[field];
+	}
+	const size = Buffer.byteLength(JSON.stringify(projected));
+	if (size <= MAX_EVENT_DATA_BYTES || Array.isArray(projected)) return projected;
+	const kept: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(projected)) {
+		const small =
+			value === null ||
+			typeof value === "number" ||
+			typeof value === "boolean" ||
+			(typeof value === "string" && value.length <= IDENTITY_FIELD_LIMIT);
+		if (small) kept[key] = value;
+	}
+	kept.omitted = { reason: "oversized", bytes: size };
+	return kept;
+}
+
+function redactImages(value: unknown, seen: WeakSet<object>): unknown {
+	if (value === null || typeof value !== "object") return value;
+	if (seen.has(value)) throw new TypeError("cyclic event payload");
+	seen.add(value);
+	try {
+		if (Array.isArray(value)) return value.map((item) => redactImages(item, seen));
+		const source = value as Record<string, unknown>;
+		const out: Record<string, unknown> = {};
+		const isImage = source.type === "image" || source.type === "base64";
+		for (const [key, item] of Object.entries(source)) {
+			if (isImage && key === "data" && typeof item === "string") {
+				out.omittedBytes = item.length;
+				continue;
+			}
+			out[key] = redactImages(item, seen);
+		}
+		return out;
+	} finally {
+		seen.delete(value);
+	}
+}
