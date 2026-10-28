@@ -4,6 +4,15 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-openui loads when installed (2.29.1)
+
+- **pi-openui 0.1.1**: installed copies failed with "Cannot find module
+  '@byteowlz/oqto-openui'" because `just install` copies only the extension
+  folder. The profile (parser, prompt, fixtures, lang-core, zod) is now a
+  vendored, generated bundle `openui-vendor.js` inside the folder
+  (`bun run pi-openui/vendor-src/build.ts` to refresh). A test fails if the
+  extension imports anything outside its folder besides Pi packages.
+
 ### Agent-generated UI in the TUI (2.29.0)
 
 - **pi-openui 0.1.0 (new)**: renders OpenUI Lang programs from the Oqto profile

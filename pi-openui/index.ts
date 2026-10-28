@@ -11,13 +11,12 @@ process.env.OPENUI_TELEMETRY_DISABLED = "1";
 process.env.DO_NOT_TRACK = "1";
 Reflect.deleteProperty(process.env, "OPENUI_RUNTIME_TELEMETRY_ENABLED");
 
-import { readFile, readdir } from "node:fs/promises";
-import { PROFILE_VERSION, createOqtoParser, renderFallback, systemPrompt } from "@byteowlz/oqto-openui";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key as K, Text, matchesKey } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { herdrBlocked, herdrRelease } from "../pi-selection/herdr.js";
 import { type Key, type Outcome, answerPayload, reduce } from "./interact.js";
+import { FIXTURES, PROFILE_VERSION, SYSTEM_PROMPT, createOqtoParser, renderFallback } from "./openui-vendor.js";
 import { type Control, type Paint, type ViewState, emptyState, render } from "./render.js";
 
 export const STATE_ENTRY = "pi-openui/state";
@@ -111,12 +110,12 @@ async function interact(
 
 /** Preview a profile fixture locally in the real TUI. No model call; answers are only shown. */
 async function demo(ctx: ExtensionContext, name?: string): Promise<void> {
-	const dir = new URL("../fixtures/", import.meta.resolve("@byteowlz/oqto-openui/schema/profile.json"));
-	const names = (await readdir(dir)).sort();
+	const fixtures = FIXTURES as Record<string, string>;
+	const names = Object.keys(fixtures).sort();
 	const pick = name && names.includes(name) ? name : ctx.hasUI ? await ctx.ui.select("OpenUI demo", names) : undefined;
 	if (!pick) return;
 	if (ctx.mode !== "tui" || !ctx.hasUI) return;
-	const { root, state, errors } = parse(await readFile(new URL(`${pick}/input.oui`, dir), "utf8"));
+	const { root, state, errors } = parse(fixtures[pick] ?? "");
 	const { outcome, state: final } = await interact(ctx, root, state);
 	const shown = outcome.kind === "answer" ? `answered ${JSON.stringify(answerPayload(outcome, final))}` : outcome.kind;
 	ctx.ui.notify(`OpenUI demo ${pick}: ${shown}${errors.length ? ` (parser: ${errors.length} warning)` : ""}`, "info");
@@ -143,7 +142,7 @@ export default function (pi: ExtensionAPI) {
 			event.systemPromptOptions.sections = rest;
 			return;
 		}
-		prompt ??= await systemPrompt();
+		prompt ??= SYSTEM_PROMPT as string;
 		event.systemPromptOptions.sections = {
 			...event.systemPromptOptions.sections,
 			openui: `Emit UI by calling the \`${TOOL}\` tool with an OpenUI Lang program (Oqto profile ${PROFILE_VERSION}); never print OpenUI Lang as chat text. Always pass a short plain-text \`fallback\`. Set \`wait: true\` when the program ends with @Answer controls and you need the user's answer; the tool result is that answer.\n\n${prompt}`,

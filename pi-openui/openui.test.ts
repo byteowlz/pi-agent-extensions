@@ -1,21 +1,15 @@
 process.env.OPENUI_TELEMETRY_DISABLED = "1";
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
-import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { createOqtoParser } from "@byteowlz/oqto-openui";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import extension, { enabledOnBranch, STATE_ENTRY, TOOL } from "./index.js";
 import { type Key, evaluateAction, reduce } from "./interact.js";
+import { FIXTURES, createOqtoParser } from "./openui-vendor.js";
 import { type Paint, type ViewState, emptyState, render } from "./render.js";
 
-const fixtures = join(
-	dirname(createRequire(import.meta.url).resolve("@byteowlz/oqto-openui/schema/profile.json")),
-	"..",
-	"fixtures"
-);
 const plain: Paint = { fg: (_r, t) => t, bold: (t) => t, inverse: (t) => `<${t}>` };
-const parse = (name: string) => createOqtoParser().parse(readFileSync(join(fixtures, name, "input.oui"), "utf8"));
+const parse = (name: string) => createOqtoParser().parse(FIXTURES[name] ?? "");
 
 function drive(name: string, keys: Key[], width = 72) {
 	const parsed = parse(name);
@@ -32,7 +26,7 @@ function drive(name: string, keys: Key[], width = 72) {
 }
 
 describe("cells renderer", () => {
-	for (const name of readdirSync(fixtures)) {
+	for (const name of Object.keys(FIXTURES)) {
 		test(`${name} renders within width at 40, 72 and 120 columns`, () => {
 			const parsed = parse(name);
 			for (const width of [40, 72, 120]) {
@@ -185,7 +179,7 @@ describe("session toggle and tool", () => {
 	test("outside the TUI a waiting part never fabricates an answer", async () => {
 		const h = host([{ type: "custom", customType: STATE_ENTRY, data: { enabled: true } }], "print");
 		await h.emit("session_start", {});
-		const program = readFileSync(join(fixtures, "plan-approve", "input.oui"), "utf8");
+		const program = FIXTURES["plan-approve"] ?? "";
 		const result = (await h.tools[TOOL]?.execute(
 			"1",
 			{ program, fallback: "Approve the plan?", wait: true },
@@ -205,5 +199,17 @@ describe("session toggle and tool", () => {
 		await expect(
 			h.tools[TOOL]?.execute("1", { program: "this is not openui", fallback: "x" }, undefined, undefined, h.ctx)
 		).rejects.toThrow("did not render");
+	});
+});
+
+describe("installed layout", () => {
+	test("imports nothing outside the folder except Pi-provided packages and node builtins", () => {
+		const dir = dirname(new URL(import.meta.url).pathname);
+		const allowed = /^(node:|@earendil-works\/pi-|typebox$|\.\/|\.\.\/pi-selection\/)/;
+		for (const f of readdirSync(dir).filter((x) => x.endsWith(".ts") && !x.endsWith(".test.ts"))) {
+			for (const m of readFileSync(join(dir, f), "utf8").matchAll(/from "([^"]+)"/g)) expect(m[1]).toMatch(allowed);
+		}
+		const bundle = readFileSync(join(dir, "openui-vendor.js"), "utf8");
+		expect(bundle.match(/^import .* from "[^.][^"]*";$/gm) ?? []).toEqual([]);
 	});
 });

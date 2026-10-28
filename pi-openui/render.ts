@@ -1,11 +1,11 @@
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 /**
  * Pure terminal renderer for the Oqto OpenUI profile (cells level).
  * tree + width + theme + interaction state -> lines and focusable controls.
  * Colours come only from Pi theme roles, so it follows Pi's theme (system theme
  * follows the terminal: tinty, Omarchy, ...). No terminal I/O happens here.
  */
-import { renderFallback } from "@byteowlz/oqto-openui";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { renderFallback } from "./openui-vendor.js";
 
 /** Minimal theme surface used here; Pi's Theme satisfies it. */
 export interface Paint {

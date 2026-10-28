@@ -2,7 +2,7 @@
  * Pure keyboard reducer for an interactive OpenUI part. Key + state -> next
  * state, or a finished outcome with the evaluated @Answer value.
  */
-import { evaluate } from "@openuidev/lang-core";
+import { evaluate } from "./openui-vendor.js";
 import type { Control, ViewState } from "./render.js";
 
 export type Key =
