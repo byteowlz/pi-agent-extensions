@@ -91,7 +91,7 @@ async function interact(
 			render(width: number) {
 				const out = render(root, width, paint, state);
 				controls = out.controls;
-				return [...out.lines, theme.fg("dim", "tab/↑↓ move · ←/→ change · enter select · esc cancel")];
+				return [...out.lines, theme.fg("dim", "↑↓ move · enter choose · space toggle · 1-9 pick · ←/→ tabs · esc cancel")];
 			},
 			invalidate() {
 				// stateless: rendered fresh from state on every call

@@ -68,22 +68,67 @@ describe("answers", () => {
 		expect(outcome).toEqual({ kind: "answer", value: { approved: true } });
 	});
 
-	test("form answers carry the chosen values from state bindings", () => {
+	test("form answers carry the explicitly chosen values", () => {
 		const parsed = parse("compare-options");
 		const controls = render(parsed.root, 72, plain, emptyState(parsed.stateDeclarations, true)).controls;
+		const strict = controls.findIndex((c) => c.kind === "option" && c.value === "strict");
+		const isolated = controls.findIndex((c) => c.kind === "option" && c.value === "isolated");
+		const text = controls.findIndex((c) => c.kind === "text");
 		const submit = controls.findIndex((c) => c.kind === "button" && c.label === "Create workspace");
+		const to = (from: number, target: number): Key[] => Array(target - from).fill("down");
 		const keys: Key[] = [
-			"down",
-			"tab",
-			"right",
-			"tab",
+			...to(0, strict),
+			"enter",
+			...to(strict, isolated),
+			"space",
+			...to(isolated, text),
 			{ char: "x" },
 			"enter",
-			...Array(Math.max(0, submit - 2)).fill("tab"),
+			...to(text, submit),
 			"enter",
 		];
-		const { outcome } = drive("compare-options", keys);
-		expect(outcome).toEqual({ kind: "answer", value: { profile: "strict", network: "isolated", paths: "x" } });
+		expect(drive("compare-options", keys).outcome).toEqual({
+			kind: "answer",
+			value: { profile: "strict", network: "isolated", paths: "x" },
+		});
+	});
+
+	test("arrow keys never change a choice (regression: user picked web, agent got kitty)", () => {
+		const program = `root = Stack([form])
+form = Form("next", btns, [pick])
+pick = FormControl("Next?", OptionCards("next", "single", [OptionCard("web", "Web"), OptionCard("kitty", "Kitty"), OptionCard("runner", "Runner")], null, "web"))
+btns = Buttons([Button("Go", @Answer({next: $next}))])`;
+		const parsed = createOqtoParser().parse(program);
+		let state: ViewState = emptyState(parsed.stateDeclarations, true);
+		const press = (key: Key) => {
+			const next = reduce(state, render(parsed.root, 72, plain, state).controls, key);
+			state = next.state;
+			return next.outcome;
+		};
+		// Wander through every option and onto the button with arrows only: the value must stay "web".
+		for (const key of ["down", "down", "up", "down", "down", "down"] as Key[]) expect(press(key)).toBeUndefined();
+		expect(state.values.$next).toBe("web");
+		state = { ...state, focus: render(parsed.root, 72, plain, state).controls.findIndex((c) => c.kind === "button") };
+		expect(press("enter")).toEqual({ kind: "answer", value: { next: "web" } });
+	});
+
+	test("single-field form: Enter on an option chooses and submits; number keys pick", () => {
+		const program = `root = Stack([form])
+form = Form("next", btns, [pick])
+pick = FormControl("Next?", OptionCards("next", "single", [OptionCard("web", "Web"), OptionCard("kitty", "Kitty")]))
+btns = Buttons([Button("Go", @Answer({next: $next}))])`;
+		const parsed = createOqtoParser().parse(program);
+		const run = (keys: Key[]) => {
+			let state: ViewState = emptyState(parsed.stateDeclarations, true);
+			for (const key of keys) {
+				const next = reduce(state, render(parsed.root, 72, plain, state).controls, key);
+				state = next.state;
+				if (next.outcome) return next.outcome;
+			}
+			return undefined;
+		};
+		expect(run(["down", "enter"])).toEqual({ kind: "answer", value: { next: "kitty" } });
+		expect(run(["2", "space"].map((k) => (k === "space" ? "space" : { char: k })) as Key[])).toBeUndefined();
 	});
 
 	test("escape cancels without an answer", () => {
