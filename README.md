@@ -38,6 +38,7 @@ extensions and [migration evidence](./docs/pi-1-baseline.md) for proof limits.
 | [pi-ssh-key](./pi-ssh-key/) | Session-scoped SSH keys |
 | [pi-ctx-limit](./pi-ctx-limit/) | Per-session context compaction threshold (`/ctx`) |
 | [pi-session-cwd](./pi-session-cwd/) | Move a session (and its session file) to another working directory (`/cwd`) |
+| [pi-schedule](./pi-schedule/) | Recurring in-session prompts (`/schedule`), session- or project-scoped |
 | [pi-turn-classify](./pi-turn-classify/) | Classify each finished turn with a decision model (`/classify`) |
 | [pi-tui-rpc](./pi-tui-rpc/) | Native TUI remote control |
 | [pi-xlatch-session](./pi-xlatch-session/) | Phone-to-session sharing |

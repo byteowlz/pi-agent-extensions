@@ -4,6 +4,29 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Recurring in-session prompts, decoupled from the captain (2.34.0)
+
+- **pi-schedule 0.1.0**: new extension — `/schedule <interval> "<prompt>"` delivers
+  recurring prompts into the live session (`followUp` while streaming) so a
+  periodic check keeps the session's own context. Two scopes: **session**
+  (`~/.pi/agent/schedule/sessions/<sessionId>.json`, follows resume/reload and is
+  not inherited by forks) and **project** (`.../projects/<encoded-cwd>.json`).
+  Project actions arm in exactly one session — the one holding the project's
+  captain claim — and stay dormant and explicit when no captain is claimed, so a
+  project check never fires twice. Every tick re-reads the store and re-checks
+  ownership, so pause/resume/edit/remove and captain handover take effect without
+  a restart; a prompt refused during compaction is parked and flushed on
+  `session_compact`/`_failed`. Commands: `list`, `pause`, `resume`, `run`,
+  `remove`, `export`. Publishes a `schedule` status segment (`2·14m`).
+  `/schedule export` prints the equivalent headless `skdlr add …` per action;
+  skdlr is intentionally not a runtime dependency (a skdlr run is a separate
+  `pi -p` with its own session and no access to live state).
+- **pi-session-tools**: `/captain` no longer owns scheduling. The scheduler that
+  briefly lived behind `/captain schedule` moved to pi-schedule, which reads the
+  claim file to decide where project-scoped checks run — captain stays a
+  designation about intake, scheduling stays a general capability, and the
+  captain badge no longer encodes scheduled work.
+
 ### Fuzzy project switching (2.33.0)
 
 - **pi-session-cwd 0.2.0**: `/move` moves a session to a project by fuzzy name

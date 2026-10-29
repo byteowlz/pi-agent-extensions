@@ -10,6 +10,7 @@
 	"projectIcon": true,
 	"items": [
 		{ "id": "captain", "statusKey": "captain", "label": "\uf13d", "color": "accent", "colorValue": true, "position": "right", "order": 15 },
+		{ "id": "schedule", "statusKey": "schedule", "label": "\uf017", "color": "muted", "colorValue": true, "position": "right", "order": 16 },
 		{ "id": "kompressor", "statusKey": "kompressor-rolling", "label": "KSP", "color": "warning", "position": "right", "order": 10 },
 		{ "id": "oqto-bridge", "statusKey": "oqto-bridge", "label": "PHASE", "color": "accent", "position": "right", "order": 20 },
 		{ "id": "history-search", "statusKey": "history-search", "label": "HIS", "color": "muted", "position": "right", "order": 30 },
