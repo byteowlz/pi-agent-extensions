@@ -6,6 +6,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	readdirSync,
 	realpathSync,
 	rmSync,
 	statSync,
@@ -14,8 +15,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { preflight } from "./age-store.js";
 import { archive } from "./archive.js";
+import { parsePrivateRequest } from "./index.js";
 import { launch, loadConfig, prepare } from "./launch.js";
+import { runPrivate } from "./runner-core.js";
 
 const dirs: string[] = [];
 function fixture() {
@@ -30,6 +34,38 @@ afterEach(() => {
 });
 
 const history = join(import.meta.dir, "../pi-history-search/index.ts");
+
+function fakeExecutables(dir: string): string {
+	const bin = join(dir, "bin");
+	mkdirSync(bin, { mode: 0o700 });
+	writeFileSync(
+		join(bin, "age"),
+		'#!/usr/bin/env bash\nif [[ "$1" == "--version" ]]; then echo age-fixture; exit 0; fi\nif [[ "$1" == "-d" && "${MOCK_FAIL_DECRYPT:-}" == 1 ]]; then printf partial; exit 1; fi\nif [[ "$1" == "-r" && "${MOCK_FAIL_ENCRYPT:-}" == 1 && "${!#}" == *.jsonl ]]; then exit 1; fi\nif [[ "$1" == "-p" ]]; then cat; else last="${!#}"; cat "$last"; fi\n',
+		{ mode: 0o700 }
+	);
+	writeFileSync(
+		join(bin, "age-keygen"),
+		'#!/usr/bin/env bash\nprintf "Public key: age1fixturekey\\n" >&2\nprintf "AGE-SECRET-KEY-FIXTURE\\n"\n',
+		{ mode: 0o700 }
+	);
+	writeFileSync(
+		join(bin, "pi"),
+		'#!/usr/bin/env bash\nif [[ "$*" == *--continue* ]]; then printf "continued\\n" >> "$PI_CODING_AGENT_SESSION_DIR/demo.jsonl"; else printf "{\\"type\\":\\"session\\",\\"id\\":\\"fixture\\",\\"cwd\\":\\"/tmp\\",\\"timestamp\\":\\"test\\"}\\n" > "$PI_CODING_AGENT_SESSION_DIR/demo.jsonl"; fi\n',
+		{ mode: 0o700 }
+	);
+	return bin;
+}
+
+async function withFakePath<T>(bin: string, run: () => Promise<T>): Promise<T> {
+	const old = process.env.PATH;
+	try {
+		process.env.PATH = `${bin}:${old}`;
+		return await run();
+	} finally {
+		if (old === undefined) Reflect.deleteProperty(process.env, "PATH");
+		else process.env.PATH = old;
+	}
+}
 
 test("standard profile loads only explicit allowlist, with fresh session and no fork", () => {
 	const { root } = fixture();
@@ -47,7 +83,7 @@ test("standard profile loads only explicit allowlist, with fresh session and no 
 	);
 	expect(first.env.PI_CODING_AGENT_SESSION_DIR).toBe(first.sessionDir);
 	expect(first.env.KOMPRESS_ROLLING).toBe("0");
-	expect(first.env.ATUIN_CONFIG_DIR).toBe(join(first.sessionDir, "atuin"));
+	expect(first.env.ATUIN_CONFIG_DIR).toBe(join(first.vaultDir, "atuin"));
 	expect(readFileSync(join(first.env.ATUIN_CONFIG_DIR, "config.toml"), "utf8")).toContain('history_filter = [".*"]');
 	expect(second.args).toContain(history);
 	expect(second.args).not.toContain("builtin:codemode");
@@ -66,7 +102,7 @@ test("nohistory does not load history search, codemode, tool-search or any optio
 	expect(plan.args.filter((arg) => arg === "-e")).toHaveLength(1);
 });
 
-test("real pi RPC boot exposes history only in standard profile and uses isolated session path", () => {
+test("real pi RPC option probe exposes history only in standard profile (launcher handles encryption)", () => {
 	const { root } = fixture();
 	for (const profile of ["private", "nohistory"] as const) {
 		const plan = prepare(profile, { sessionRoot: root });
@@ -95,8 +131,7 @@ test("real pi RPC boot exposes history only in standard profile and uses isolate
 
 test("herdr tab receives private env and agent receives only the isolated pi argv", async () => {
 	const { dir, root } = fixture();
-	const fakeBin = join(dir, "bin");
-	mkdirSync(fakeBin, { mode: 0o700 });
+	const fakeBin = fakeExecutables(dir);
 	const log = join(dir, "herdr.log");
 	writeFileSync(
 		join(fakeBin, "herdr"),
@@ -116,7 +151,8 @@ test("herdr tab receives private env and agent receives only the isolated pi arg
 		expect(tab).toContain("--env PI_CODING_AGENT_SESSION_DIR=");
 		expect(tab).toContain("--env KOMPRESS_ROLLING=0");
 		expect(tab).toContain("--env ATUIN_CONFIG_DIR=");
-		expect(agent).toContain("--no-extensions --no-mcp");
+		expect(agent).toContain("pane run w1:p3");
+		expect(agent).toContain("runner.ts");
 		expect(agent).not.toContain(history);
 		expect(agent).not.toContain("--fork");
 	} finally {
@@ -127,14 +163,106 @@ test("herdr tab receives private env and agent receives only the isolated pi arg
 	}
 });
 
+test("slash command parses fresh and deliberate resume", () => {
+	expect(parsePrivateRequest("")).toEqual({ profile: "private" });
+	expect(parsePrivateRequest("nohistory")).toEqual({ profile: "nohistory" });
+	expect(parsePrivateRequest("resume /vault/a b")).toEqual({ profile: "private", resumeDir: "/vault/a b" });
+	expect(parsePrivateRequest("nohistory resume /vault/b")).toEqual({ profile: "nohistory", resumeDir: "/vault/b" });
+	expect(() => parsePrivateRequest("nohistory resume")).toThrow("Usage");
+});
+
 test("resume reuses the matching isolated directory without forking or crossing profiles", () => {
 	const { root } = fixture();
 	const fresh = prepare("nohistory", { sessionRoot: root });
-	const resumed = prepare("nohistory", { sessionRoot: root }, fresh.sessionDir);
+	const resumed = prepare("nohistory", { sessionRoot: root }, fresh.vaultDir);
 	expect(resumed.sessionDir).toBe(fresh.sessionDir);
 	expect(resumed.args).toContain("--continue");
 	expect(resumed.args).not.toContain("--fork");
-	expect(() => prepare("private", { sessionRoot: root }, fresh.sessionDir)).toThrow("resume directory");
+	expect(() => prepare("private", { sessionRoot: root }, fresh.vaultDir)).toThrow("resume directory");
+});
+
+test("missing age prevents launch before any vault or Pi process is created", async () => {
+	const { dir, root } = fixture();
+	const oldPath = process.env.PATH;
+	try {
+		process.env.PATH = join(dir, "empty-bin");
+		await expect(launch("nohistory", dir, "plain", { sessionRoot: root })).rejects.toThrow();
+		expect(readdirSync(root)).toEqual([]);
+	} finally {
+		if (oldPath === undefined) Reflect.deleteProperty(process.env, "PATH");
+		else process.env.PATH = oldPath;
+	}
+});
+
+test("individual JSONL files are age-sealed on exit, unlocked to resume, then resealed", async () => {
+	const { dir, root } = fixture();
+	const plan = prepare("nohistory", { sessionRoot: root });
+	await withFakePath(fakeExecutables(dir), async () => {
+		await runPrivate(plan, false, dir, { ...process.env, ...plan.env });
+		const ciphertext = join(plan.vaultDir, "sealed", "demo.jsonl.age");
+		expect(existsSync(ciphertext)).toBe(true);
+		expect(statSync(ciphertext).mode & 0o777).toBe(0o600);
+		expect(statSync(join(plan.vaultDir, "identity.age")).mode & 0o777).toBe(0o600);
+		expect(statSync(join(plan.vaultDir, "recipient.txt")).mode & 0o777).toBe(0o600);
+		expect(existsSync(join(plan.sessionDir, "demo.jsonl"))).toBe(false);
+		expect(existsSync(join(plan.vaultDir, "active.lock"))).toBe(false);
+		const resumed = prepare("nohistory", { sessionRoot: root }, plan.vaultDir);
+		await runPrivate(resumed, true, dir, { ...process.env, ...resumed.env });
+		expect(readFileSync(ciphertext, "utf8")).toContain("continued");
+		expect(existsSync(join(plan.sessionDir, "demo.jsonl"))).toBe(false);
+	});
+});
+
+test("recipient mode verifies identity before Pi and refuses an unlock-mode or permission change", async () => {
+	const { dir, root } = fixture();
+	const identityFile = join(dir, "identity.txt");
+	writeFileSync(identityFile, "plugin identity fixture", { mode: 0o600 });
+	const config = { sessionRoot: root, age: { recipient: "age1fixturekey", identityFile } };
+	const plan = prepare("nohistory", config);
+	await withFakePath(fakeExecutables(dir), async () => {
+		await runPrivate(plan, false, dir, { ...process.env, ...plan.env });
+		expect(existsSync(join(plan.vaultDir, "identity.age"))).toBe(false);
+		const switched = prepare("nohistory", { sessionRoot: root }, plan.vaultDir);
+		await expect(preflight(switched, true)).rejects.toThrow("age mode changed");
+		chmodSync(identityFile, 0o644);
+		const resumed = prepare("nohistory", config, plan.vaultDir);
+		await expect(preflight(resumed, true)).rejects.toThrow("unsafe private session file");
+		expect(existsSync(join(plan.sessionDir, "demo.jsonl"))).toBe(false);
+	});
+});
+
+test("failed age unlock discards partial plaintext and never starts Pi", async () => {
+	const { dir, root } = fixture();
+	const plan = prepare("nohistory", { sessionRoot: root });
+	const bin = fakeExecutables(dir);
+	await withFakePath(bin, async () => {
+		await runPrivate(plan, false, dir, { ...process.env, ...plan.env });
+		process.env.MOCK_FAIL_DECRYPT = "1";
+		try {
+			const resumed = prepare("nohistory", { sessionRoot: root }, plan.vaultDir);
+			await expect(runPrivate(resumed, true, dir, { ...process.env, ...resumed.env })).rejects.toThrow("age -d failed");
+			expect(existsSync(join(plan.sessionDir, "demo.jsonl"))).toBe(false);
+			expect(existsSync(join(plan.vaultDir, "sealed", "demo.jsonl.age"))).toBe(true);
+		} finally {
+			Reflect.deleteProperty(process.env, "MOCK_FAIL_DECRYPT");
+		}
+	});
+});
+
+test("failed age sealing leaves plaintext and a lock instead of reporting success", async () => {
+	const { dir, root } = fixture();
+	const plan = prepare("nohistory", { sessionRoot: root });
+	await withFakePath(fakeExecutables(dir), async () => {
+		process.env.MOCK_FAIL_ENCRYPT = "1";
+		try {
+			await expect(runPrivate(plan, false, dir, { ...process.env, ...plan.env })).rejects.toThrow("age -r failed");
+			expect(existsSync(join(plan.sessionDir, "demo.jsonl"))).toBe(true);
+			expect(existsSync(join(plan.vaultDir, "active.lock"))).toBe(true);
+			await expect(preflight(plan, true)).rejects.toThrow("plaintext session files remain");
+		} finally {
+			Reflect.deleteProperty(process.env, "MOCK_FAIL_ENCRYPT");
+		}
+	});
 });
 
 test("bad extension and insecure directory fail closed", () => {
@@ -154,6 +282,10 @@ test("config requires private regular file and validates allowlist", () => {
 	chmodSync(config, 0o600);
 	writeFileSync(config, JSON.stringify({ extensions: { other: "relative.ts" } }));
 	expect(() => loadConfig(config)).toThrow("allowlist");
+	writeFileSync(config, JSON.stringify({ age: { recipient: "age1fixturekey", identityFile: join(dir, "identity.txt") } }));
+	expect(loadConfig(config).age?.recipient).toBe("age1fixturekey");
+	writeFileSync(config, JSON.stringify({ age: { recipient: "bad", identityFile: "relative" } }));
+	expect(() => loadConfig(config)).toThrow("age requires");
 	const alias = join(dir, "alias.json");
 	symlinkSync(config, alias);
 	expect(() => loadConfig(alias)).toThrow("regular file");
