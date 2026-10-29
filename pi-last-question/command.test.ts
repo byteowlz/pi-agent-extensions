@@ -101,14 +101,33 @@ assert.ok(rows[0].includes('⌥Q expand'), 'header advertises the expand shortcu
 assert.ok(rows[0].includes('/'), 'header carries the timestamp');
 assert.equal(new Set(rows.map((line) => line.length)).size, 1, 'card is a rectangle');
 
-// --- 2. a new prompt replaces the strip; a short one needs no marker ------
-entries = [...entries, userEntry('what is the cache TTL?')];
+// --- 2. the card follows a new prompt immediately ------------------------
+// The reported bug: pi emits the input event BEFORE the user message is on the
+// branch, so reading the branch showed the previous question and the card stayed
+// one prompt behind. The submitted text is used until the branch catches up.
+const beforeInput = widgets.length;
 await events.get('input')({ source: 'interactive', text: 'what is the cache TTL?' }, ctx());
+assert.ok(widgets.length > beforeInput, 'submitting renders immediately');
+assert.ok(
+  widgets.at(-1).content.join('').includes('what is the cache TTL?'),
+  'shows the submitted question, not the stale branch'
+);
+
+// the branch then catches up and the committed text still wins
+entries = [...entries, userEntry('what is the cache TTL?')];
+await events.get('turn_end')({ turnIndex: 1 }, ctx());
 const second = widgets.at(-1);
 const shortRows = second.content.filter((line) => line.trim().length > 0);
 assert.equal(shortRows.length, 2, 'header plus one question line');
-assert.ok(shortRows[1].includes('what is the cache TTL?'));
+assert.ok(shortRows[1].includes('what is the cache TTL?'), 'still correct after commit');
 assert.ok(!second.content.join('').includes('…'), 'no truncation marker when it fits');
+
+// a later submission wins over the older branch, and an assistant reply keeps it
+entries = [...entries, userEntry('and what about the second one?')];
+await events.get('input')({ source: 'interactive', text: 'and what about the second one?' }, ctx());
+assert.ok(widgets.at(-1).content.join('').includes('and what about the second one?'), 'newest submission wins');
+await events.get('message_end')({ message: { role: 'assistant' } }, ctx());
+assert.ok(widgets.at(-1).content.join('').includes('and what about the second one?'), 'assistant reply keeps it');
 
 // --- 3. expand shortcut → overlay → insert into the editor ----------------
 entries = [userEntry(longQuestion)];

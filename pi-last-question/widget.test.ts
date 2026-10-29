@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { MAX_LINES, RULE, joinRow, planCard } from "./last-question";
+
 import { createLastQuestionCard } from "./widget";
 
 /** Identity theme that records which tokens were used. */
@@ -24,7 +26,7 @@ const QUESTION =
 
 describe("card planning", () => {
 	test("header carries the timestamp and the expand hint", () => {
-		const plan = planCard(`${QUESTION} ${QUESTION}`, 80, { stamp: "10/29/2026, 12:00 PM", hint: "⌥Q", glyph: "\uf128" });
+		const plan = planCard(`${QUESTION} ${QUESTION}`, 80, { stamp: "10/29/2026, 12:00 PM", hint: "⌥Q" });
 		expect(plan.header.right).toBe("⌥Q expand");
 		expect(plan.header.left).toContain("10/29/2026, 12:00 PM");
 		expect(plan.body).toHaveLength(MAX_LINES);
@@ -65,22 +67,18 @@ describe("card planning", () => {
 describe("card component", () => {
 	test("renders a full-width background rectangle using pi's message tokens", () => {
 		const theme = recordingTheme();
-		const card = createLastQuestionCard({
-			theme,
-			text: QUESTION,
-			stamp: "10/29/2026, 12:00 PM",
-			hint: "⌥Q",
-			glyph: "\uf128",
-		});
+		const card = createLastQuestionCard({ theme, text: QUESTION, stamp: "10/29/2026, 12:00 PM", hint: "⌥Q" });
 		const lines = card.box.render(72);
 		// header + two question rows, every row exactly the widget width
 		expect(lines).toHaveLength(3);
 		expect(new Set(lines.map((line) => line.length))).toEqual(new Set([72]));
-		expect(theme.used).toContain("bg:customMessageBg");
-		expect(theme.used).toContain("fg:customMessageLabel");
-		expect(theme.used).toContain("fg:customMessageText");
-		expect(theme.used).toContain("fg:accent");
+		// Blue user-message family, not the violet extension-block family.
+		expect(theme.used).toContain("bg:userMessageBg");
+		expect(theme.used).toContain("fg:border");
+		expect(theme.used).toContain("fg:mdLink");
+		expect(theme.used).toContain("fg:userMessageText");
 		expect(theme.used).toContain("fg:dim");
+		expect(theme.used).not.toContain("bg:customMessageBg");
 	});
 
 	test("every row starts with the rule, and the question is fully visible", () => {
@@ -90,6 +88,7 @@ describe("card component", () => {
 		expect(lines.every((line) => line.startsWith(RULE))).toBe(true);
 		expect(lines[1]).toContain("what is the cache TTL?");
 		expect(lines[0]).toContain("10/29/2026, 9:05 AM");
+		expect(lines[0].startsWith(RULE)).toBe(true);
 	});
 
 	test("narrow widths still produce aligned rows without overflow", () => {
@@ -110,5 +109,47 @@ describe("card component", () => {
 		card.box.invalidate();
 		const after = card.box.render(40);
 		expect(after.join("\n")).toContain("first");
+	});
+});
+
+describe("styled themes (ANSI)", () => {
+	/** Theme that wraps text in SGR codes the way a real theme does. */
+	const ansiTheme = () => ({
+		fg: (color: string, text: string) => `\u001b[38;5;${color.length % 200}m${text}\u001b[0m`,
+		bg: (_color: string, text: string) => `\u001b[48;5;17m${text}\u001b[0m`,
+	});
+	// ESC built at runtime: a literal control character in a regex is a lint error.
+	const ESC = String.fromCharCode(27);
+	const strip = (line: string): string => line.replace(new RegExp(`${ESC}\\[[0-9;]*m`, "g"), "");
+	// pi-tui's own cell width: `⌥` and friends are double-width.
+	const visible = (line: string): number => visibleWidth(line);
+
+	test("the shortcut hint survives styling and stays right-aligned", () => {
+		// Regression: padding was measured on styled strings, so ANSI bytes collapsed
+		// the gap and a byte-wise slice dropped the hint entirely in a real terminal.
+		const card = createLastQuestionCard({
+			theme: ansiTheme(),
+			text: "how do I rotate the deploy key?",
+			stamp: "10/29/2026, 12:20 PM",
+			hint: "⌥Q",
+		});
+		const lines = card.box.render(98);
+		const header = strip(lines[0] as string);
+		expect(header).toContain("⌥Q expand");
+		expect(header.trimEnd().endsWith("⌥Q expand")).toBe(true);
+		expect(visible(lines[0] as string)).toBe(98);
+	});
+
+	test("every styled row keeps the rectangle width", () => {
+		const card = createLastQuestionCard({
+			theme: ansiTheme(),
+			text: "how do I rotate the deploy key without breaking the build for the running pods?",
+			stamp: "10/29/2026, 12:20 PM",
+			hint: "⌥Q",
+		});
+		for (const width of [40, 60, 98]) {
+			const lines = card.box.render(width);
+			for (const line of lines) expect(visible(line)).toBe(width);
+		}
 	});
 });

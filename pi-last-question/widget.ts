@@ -1,17 +1,18 @@
 /**
  * The widget component: a pi-styled card above the prompt box.
  *
- * Visual language is pi's own, not invented here:
- *  - `Box(1, 0, theme.bg("customMessageBg"))` gives the padded background
- *    rectangle pi uses for extension-provided blocks (Box pads every row to the
- *    widget width, so the block is a true rectangle).
- *  - a left rule per row (`▌`) plus `customMessageLabel`/`customMessageText`
- *    colours, so it reads as a message block rather than stray text.
- *  - the hint sits right-aligned in `dim`, the timestamp in `muted` — the same
- *    hierarchy pi uses in its message headers.
+ * Visual language is pi's own, not invented here. The card describes *your*
+ * message, so it borrows the user-message family (blue) rather than the
+ * extension-block family (violet):
+ *  - `Box(1, 0, theme.bg("userMessageBg"))` gives the blue background rectangle
+ *    pi uses for user messages (Box pads every row to the widget width, so the
+ *    block is a true rectangle).
+ *  - the left rule (`▌`) is `border` — also blue, one step quieter — and the
+ *    timestamp is `mdLink`, the text `userMessageText`.
+ *  - the shortcut hint is right-aligned in `dim` for hierarchy.
  */
 
-import { Box } from "@earendil-works/pi-tui";
+import { Box, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 import { type CardPlan, RULE, planCard } from "./last-question.js";
 
@@ -52,17 +53,24 @@ export function createLastQuestionCard(options: {
 			const lines: string[] = [];
 
 			// Header: rule + timestamp on the left, shortcut hint on the right.
-			const headerLeft = theme.fg("customMessageLabel", current.header.left);
-			const headerRight = current.header.right ? theme.fg("dim", current.header.right) : "";
+			//
+			// Padding is computed from the PLAIN plan strings, never from the styled
+			// ones: theme.fg() adds ANSI bytes, so measuring a styled string with
+			// .length collapses the gap and a byte-wise slice then eats the hint
+			// (invisible with an identity theme, obvious in a real terminal).
 			const headerWidth = Math.max(0, width - 2);
-			// Colours are applied after padding so the row stays aligned.
-			const pad = Math.max(0, headerWidth - current.header.left.length - current.header.right.length);
-			lines.push(`${theme.fg("accent", RULE)} ${headerLeft}${" ".repeat(pad)}${headerRight}`.slice(0, Math.max(width, 1)));
+			// Width in terminal cells, not code points: `⌥` is double-width, so a
+			// .length-based gap loses a cell and truncation eats the hint's last glyph.
+			const gap = Math.max(0, headerWidth - visibleWidth(current.header.left) - visibleWidth(current.header.right));
+			const headerLeft = theme.fg("mdLink", current.header.left);
+			const headerRight = current.header.right ? theme.fg("dim", current.header.right) : "";
+			const headerRow = `${theme.fg("border", RULE)} ${headerLeft}${" ".repeat(gap)}${headerRight}`;
+			lines.push(truncateToWidth(headerRow, width, ""));
 
 			// Body: the question itself, dim rule, message text.
 			for (const row of current.body) {
-				const text = theme.fg("customMessageText", row);
-				lines.push(`${theme.fg("accent", RULE)} ${text}`);
+				const text = theme.fg("userMessageText", row);
+				lines.push(truncateToWidth(`${theme.fg("border", RULE)} ${text}`, width, ""));
 			}
 			cache = { width, lines, plan: current };
 			return lines;
@@ -72,7 +80,7 @@ export function createLastQuestionCard(options: {
 		},
 	};
 
-	const box = new Box(1, 0, (text: string) => theme.bg("customMessageBg", text));
+	const box = new Box(1, 0, (text: string) => theme.bg("userMessageBg", text));
 	box.addChild(component);
 	return { box, component, plan };
 }

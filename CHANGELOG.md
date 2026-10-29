@@ -4,6 +4,21 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-last-question: blue card, and it actually updates (2.38.0)
+
+- **pi-last-question 0.3.0**: the card now uses pi's blue user-message family
+  (`userMessageBg` background, `border` rule, `mdLink` timestamp,
+  `userMessageText` question) instead of the violet extension-block tokens, since
+  it shows the user's own message; the Nerd Font icon is gone.
+- Fixed the reported "it does not update" bug: pi emits `input` (and `turn_start`)
+  **before** the user message is on the session branch, so the card rendered the
+  previous question and never refreshed. The submitted text is shown immediately
+  and reconciled with the branch on `message_end`/`turn_end`/`agent_end`.
+- Fixed the `⌥Q expand` hint being cut in real terminals: padding was measured
+  with string `.length` on ANSI-styled text and on the double-width `⌥`; widths
+  now come from pi-tui's `visibleWidth` and rows are cut with `truncateToWidth`.
+  Verified in a real pi TUI via pty + terminal emulator (100x40).
+
 ### Last question as a pi-styled card (2.37.0)
 
 - **pi-last-question 0.2.0**: the widget above the prompt box is now a card drawn
