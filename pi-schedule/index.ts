@@ -18,10 +18,12 @@
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+import { MAX_QUEUE_AGE_MS, type QueuedDelivery, drainQueue, ensureDeliverer, startInbox } from "./inbox.js";
 import {
 	type ScheduleScope,
 	type ScheduledAction,
 	addAction,
+	agentDirectory,
 	findAction,
 	formatActions,
 	formatInterval,
@@ -31,9 +33,12 @@ import {
 	readActions,
 	removeAction,
 	setActionEnabled,
+	setActionSkdlr,
 	skdlrExportCommand,
+	splitArgs,
 	statusSummary,
 } from "./schedule.js";
+import { buildLink, parseOwnedSchedules, removeSchedule, runSkdlr } from "./skdlr.js";
 
 interface ArmedAction {
 	action: ScheduledAction;
@@ -91,12 +96,13 @@ export default function piSchedule(pi: ExtensionAPI): void {
 		ctxRef = ctx;
 		const key = sessionKey(ctx);
 
-		const sessionActions = readActions("session", key).filter((action) => action.enabled);
+		const localOnly = (action: ScheduledAction): boolean => action.enabled && action.delivery !== "skdlr";
+		const sessionActions = readActions("session", key).filter(localOnly);
 		for (const action of sessionActions) armOne(ctx, action, "session", key);
 
 		const ownership = projectOwnership(ctx.cwd, key);
 		if (ownership.armed) {
-			const projectActions = readActions("project", ctx.cwd).filter((action) => action.enabled);
+			const projectActions = readActions("project", ctx.cwd).filter(localOnly);
 			for (const action of projectActions) armOne(ctx, action, "project", ctx.cwd);
 		}
 
@@ -126,14 +132,14 @@ export default function piSchedule(pi: ExtensionAPI): void {
 		description:
 			'Recurring in-session prompts: /schedule hourly "check the board" (session) or add --project so the project captain runs it; no argument lists actions.',
 		handler: async (args, ctx) => {
-			const tokens = args.trim().split(/\s+/).filter(Boolean);
+			const tokens = splitArgs(args);
 			const scope: ScheduleScope = tokens.includes("--project") ? "project" : "session";
 			const rest = tokens.filter((token) => token !== "--project");
 			const [sub = "list", ...tail] = rest;
 			const key = scope === "session" ? sessionKey(ctx) : ctx.cwd;
 
 			// "list" is both a subcommand and a no-argument default.
-			const isSubcommand = ["list", "pause", "resume", "run", "remove", "rm", "export"].includes(sub);
+			const isSubcommand = ["list", "pause", "resume", "run", "remove", "rm", "export", "link", "unlink", "skdlr"].includes(sub);
 
 			if (!isSubcommand) {
 				// /schedule <interval> "<prompt>"
@@ -181,6 +187,122 @@ export default function piSchedule(pi: ExtensionAPI): void {
 					`project scope (${path.basename(ctx.cwd) || ctx.cwd})${ownership.armed ? "" : ` — dormant: ${ownership.reason}`}:\n${formatActions(projectActions)}`
 				);
 				ctx.ui.notify(blocks.join("\n\n"), "info");
+				return;
+			}
+
+			if (sub === "link" || sub === "unlink" || sub === "skdlr") {
+				const sessionId = sessionKey(ctx);
+				// Resolve a selector across both scopes: linking is about an action,
+				// and requiring --project to find an action you just listed is a trap.
+				const resolvedScope = (selector: string): { scope: ScheduleScope; key: string; action?: ScheduledAction } => {
+					const inScope = findAction(readActions(scope, key), selector);
+					if (inScope) return { scope, key, action: inScope };
+					const other: ScheduleScope = scope === "session" ? "project" : "session";
+					const otherKey = other === "session" ? sessionId : ctx.cwd;
+					const elsewhere = findAction(readActions(other, otherKey), selector);
+					return elsewhere ? { scope: other, key: otherKey, action: elsewhere } : { scope, key };
+				};
+				const actions = readActions(scope, key);
+
+				if (sub === "skdlr") {
+					const result = await runSkdlr(["list"]);
+					const owned = result.ok ? parseOwnedSchedules(result.stdout ?? "") : [];
+					const linked = actions.filter((action) => action.skdlr);
+					const lines = [
+						`backend: ${result.ok ? "reachable" : `unavailable (${result.stderr ?? "skdlr failed"})`}`,
+						`linked actions (${scope} scope): ${linked.length === 0 ? "none" : ""}`,
+						...linked.map(
+							(action) => `  ${action.skdlr?.name}  ${action.skdlr?.schedule}  →  ${action.label ?? action.text.slice(0, 50)}`
+						),
+					];
+					if (owned.length > 0) {
+						lines.push("", "skdlr schedules owned by this extension:");
+						for (const entry of owned) lines.push(`  ${entry.name}${entry.status ? ` [${entry.status}]` : ""}`);
+					}
+					lines.push("", 'link: /schedule link <n|id> --schedule "<cron|natural>" [--queue]');
+					ctx.ui.notify(lines.join("\n"), result.ok ? "info" : "warning");
+					return;
+				}
+
+				if (sub === "unlink") {
+					const selector = rest.slice(1).join(" ").trim() || rest[0] || "";
+					const found = resolvedScope(selector);
+					const action = found.action;
+					if (!action) {
+						ctx.ui.notify(`schedule: no action matches "${selector}" in either scope`, "error");
+						return;
+					}
+					if (!action.skdlr) {
+						ctx.ui.notify(`schedule: "${action.id}" is not linked to skdlr (using the in-session timer)`, "info");
+						return;
+					}
+					const removal = await removeSchedule(action.skdlr.name);
+					setActionSkdlr(found.scope, found.key, action.id, undefined);
+					arm(ctx);
+					ctx.ui.notify(
+						removal.removed
+							? `Unlinked ${action.skdlr.name}; the in-session timer is back (${formatInterval(action.intervalMs)}).`
+							: `Cleared the link locally, but skdlr still lists ${action.skdlr.name}: ${removal.stderr ?? "remove it manually with skdlr remove <name> --yes"}`,
+						removal.removed ? "info" : "warning"
+					);
+					return;
+				}
+
+				// link:  /schedule link <n|id> --schedule "0 9 * * 1-5" [--queue]
+				const whenIndex = rest.indexOf("--schedule");
+				const scheduleExpr = whenIndex === -1 ? "" : (rest[whenIndex + 1] ?? "").trim();
+				const queueWanted = rest.includes("--queue");
+				const selectorTokens = rest
+					.slice(1)
+					.filter((token) => token !== "--queue")
+					.slice(0, whenIndex === -1 ? undefined : Math.max(0, whenIndex - 1));
+				const selector = selectorTokens.join(" ").trim();
+				const found = selector ? resolvedScope(selector) : { scope, key };
+				const action = found.action;
+				if (!action || !scheduleExpr) {
+					ctx.ui.notify(
+						'Usage: /schedule link <n|id> --schedule "<cron|natural>" [--queue]\n  e.g. /schedule link 1 --schedule "0 9 * * 1-5"',
+						"warning"
+					);
+					return;
+				}
+				if (action.skdlr) {
+					ctx.ui.notify(`schedule: "${action.id}" is already linked as ${action.skdlr.name}; unlink first`, "warning");
+					return;
+				}
+
+				const link = buildLink({
+					scope: found.scope,
+					project: ctx.cwd,
+					action,
+					sessionId,
+					schedule: scheduleExpr,
+					nodePath: process.execPath,
+					deliverer: ensureDeliverer(),
+					agentDir: agentDirectory(),
+					queue: queueWanted,
+				});
+				const created = await runSkdlr(link.args);
+				if (!created.ok) {
+					ctx.ui.notify(`schedule: skdlr refused the link: ${created.stderr ?? "unknown error"}\n  ${link.preview}`, "error");
+					return;
+				}
+				setActionSkdlr(found.scope, found.key, action.id, { name: link.name, schedule: scheduleExpr });
+				arm(ctx);
+				ctx.ui.notify(
+					[
+						`Linked "${action.label ?? action.text}" to skdlr (${found.scope} scope).`,
+						`  skdlr:    ${link.name}  (${scheduleExpr})`,
+						`  delivers: this session (${sessionId.slice(0, 8)}) via the inbox socket`,
+						"  the in-session timer for this action is off, so it cannot fire twice",
+						queueWanted
+							? "  --queue: a missed run is parked and delivered on the next start"
+							: "  no --queue: a run with no live session fails visibly",
+						"",
+						`  skdlr show ${link.name}`,
+					].join("\n"),
+					"info"
+				);
 				return;
 			}
 
@@ -264,14 +386,61 @@ export default function piSchedule(pi: ExtensionAPI): void {
 
 	// One handler per event: keep arm/disarm in the existing lifecycle hooks so
 	// Map-based test fakes and real pi behave identically.
+	/** Inbox socket for external schedulers (skdlr) + deliverer script. */
+	let inbox: { close: () => void; path: string } | undefined;
+
+	const closeInbox = (): void => {
+		inbox?.close();
+		inbox = undefined;
+	};
+
+	const openInbox = (ctx: ExtensionContext): void => {
+		closeInbox();
+		const sessionId = ctx.sessionManager.getSessionId();
+		try {
+			ensureDeliverer();
+		} catch (error) {
+			ctx.ui.notify(`schedule: could not write the deliverer script: ${(error as Error)?.message ?? error}`, "warning");
+		}
+		inbox = startInbox({
+			sessionId,
+			onDelivery: (delivery) => {
+				deliver(delivery.text);
+				ctx.ui.notify(`schedule: delivered via ${delivery.source ?? "inbox"}`, "info");
+				publishStatus(ctx);
+			},
+			onError: (message) => ctx.ui.notify(`schedule: inbox unavailable: ${message}`, "warning"),
+		});
+	};
+
+	/** Deliver whatever a scheduler parked while this session was closed. */
+	const drainMissed = (ctx: ExtensionContext): void => {
+		const { deliveries, dropped } = drainQueue(ctx.sessionManager.getSessionId());
+		if (deliveries.length === 0 && dropped === 0) return;
+		for (const item of deliveries) deliverMissedOne(item);
+		if (dropped > 0)
+			ctx.ui.notify(
+				`schedule: dropped ${dropped} stale queued check(s) (older than ${Math.round(MAX_QUEUE_AGE_MS / 3_600_000)}h)`,
+				"warning"
+			);
+	};
+
+	const deliverMissedOne = (item: QueuedDelivery): void => {
+		const age = item.ageMs > 60_000 ? `[scheduled ${Math.round(item.ageMs / 60_000)}m ago] ` : "";
+		deliver(`${age}${item.text}`);
+	};
+
 	pi.on("session_start", async (_event, ctx) => {
 		ctxRef = ctx;
 		if (!ctx.hasUI && ctx.mode !== "rpc" && ctx.mode !== "tui") {
-			// Single-shot print/json: never keep timers alive.
+			// Single-shot print/json: never keep timers or sockets alive.
 			disarm();
+			closeInbox();
 			publishStatus(ctx);
 			return;
 		}
+		openInbox(ctx);
+		drainMissed(ctx);
 		arm(ctx);
 	});
 
@@ -309,6 +478,7 @@ export default function piSchedule(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async () => {
 		disarm();
+		closeInbox();
 		ctxRef = undefined;
 		parked = [];
 		compacting = false;

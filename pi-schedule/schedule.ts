@@ -40,6 +40,15 @@ export interface ScheduledAction {
 	lastRunAt?: string;
 	/** Optional display label; defaults to the text. */
 	label?: string;
+	/**
+	 * Who fires this action. "session" = this extension's timer (default);
+	 * "skdlr" = an external skdlr schedule delivers through the inbox socket.
+	 * Exclusive by construction: a linked action never runs its own timer, so a
+	 * check can never fire twice.
+	 */
+	delivery?: "session" | "skdlr";
+	/** Set when delivery === "skdlr". */
+	skdlr?: { name: string; schedule: string; linkedAt: string };
 }
 
 export interface ActionStore {
@@ -204,6 +213,15 @@ function parseAction(raw: unknown): ScheduledAction | undefined {
 	};
 	if (typeof raw.lastRunAt === "string" && raw.lastRunAt) action.lastRunAt = raw.lastRunAt;
 	if (typeof raw.label === "string" && raw.label.trim()) action.label = raw.label.trim();
+	if (raw.delivery === "skdlr") action.delivery = "skdlr";
+	const linked = raw.skdlr;
+	if (isRecord(linked) && typeof linked.name === "string" && linked.name) {
+		action.skdlr = {
+			name: linked.name,
+			schedule: typeof linked.schedule === "string" ? linked.schedule : "",
+			linkedAt: typeof linked.linkedAt === "string" ? linked.linkedAt : "",
+		};
+	}
 	return action;
 }
 
@@ -334,7 +352,9 @@ export function formatActions(actions: readonly ScheduledAction[], now = Date.no
 	const lines: string[] = [];
 	actions.forEach((action, index) => {
 		const paused = action.enabled ? "" : " (paused)";
-		lines.push(`${index + 1}. [${formatInterval(action.intervalMs)}]${paused} ${action.label ?? action.text}`);
+		const when =
+			action.delivery === "skdlr" && action.skdlr ? `skdlr ${action.skdlr.schedule}` : formatInterval(action.intervalMs);
+		lines.push(`${index + 1}. [${when}]${paused} ${action.label ?? action.text}`);
 		const detail: string[] = [`id ${action.id}`];
 		if (action.lastRunAt) {
 			const last = Date.parse(action.lastRunAt);
@@ -378,4 +398,80 @@ export function skdlrExportCommand(project: string, action: ScheduledAction): st
 	const name = `schedule-${path.basename(path.resolve(project)) || "project"}-${action.id}`.toLowerCase();
 	const prompt = action.text.replace(/"/g, '\\"');
 	return `skdlr add ${shellQuote(name)} --schedule ${shellQuote(formatInterval(action.intervalMs))} --workdir ${shellQuote(path.resolve(project))} --description ${shellQuote(`scheduled check: ${action.text.slice(0, 80)}`)} --command ${shellQuote(`pi -p "${prompt}"`)}`;
+}
+
+/** Mark an action as delivered by an skdlr schedule (its own timer stops). */
+export function setActionSkdlr(
+	scope: ScheduleScope,
+	key: string,
+	selector: string,
+	linked: { name: string; schedule: string } | undefined,
+	agentDir?: string
+): { action?: ScheduledAction; actions: ScheduledAction[] } {
+	const actions = readActions(scope, key, agentDir);
+	const target = findAction(actions, selector);
+	if (!target) return { actions };
+	const next = actions.map((action) => {
+		if (action.id !== target.id) return action;
+		if (!linked) {
+			const { skdlr: _dropped, delivery: _delivery, ...rest } = action;
+			return { ...rest, delivery: "session" as const };
+		}
+		return {
+			...action,
+			delivery: "skdlr" as const,
+			skdlr: { name: linked.name, schedule: linked.schedule, linkedAt: new Date().toISOString() },
+		};
+	});
+	writeActions(scope, key, next, agentDir);
+	const updated = next.find((action) => action.id === target.id);
+	return { action: updated, actions: next };
+}
+
+/**
+ * Split a command line into arguments, honouring single and double quotes.
+ *
+ * Required because cron expressions and prompts contain spaces:
+ *   /schedule link 1 --schedule "0 9 * * 1-5"
+ *   /schedule hourly "check the board"
+ * Quotes are removed; escaped quotes inside a double-quoted run are kept.
+ */
+export function splitArgs(input: string): string[] {
+	const args: string[] = [];
+	let current = "";
+	let quote: '"' | "'" | undefined;
+	let dirty = false;
+	for (let i = 0; i < input.length; i++) {
+		const ch = input[i] as string;
+		if (quote) {
+			if (ch === "\\" && quote === '"' && i + 1 < input.length) {
+				current += input[i + 1];
+				i += 1;
+				continue;
+			}
+			if (ch === quote) {
+				quote = undefined;
+				continue;
+			}
+			current += ch;
+			continue;
+		}
+		if (ch === '"' || ch === "'") {
+			quote = ch;
+			dirty = true;
+			continue;
+		}
+		if (/\s/.test(ch)) {
+			if (dirty) {
+				args.push(current);
+				current = "";
+				dirty = false;
+			}
+			continue;
+		}
+		current += ch;
+		dirty = true;
+	}
+	if (dirty) args.push(current);
+	return args;
 }

@@ -14,6 +14,20 @@
  */
 
 export const MAX_STATE_CHARS = 6000;
+/** Error text is the most information-dense part of a failed turn; keep it long. */
+export const MAX_ERROR_CHARS = 1200;
+
+/** Where an error came from. */
+export type ErrorSource = "provider" | "tool" | "aborted";
+
+export interface TurnError {
+	/** `provider` = model/API failure, `tool` = a tool returned an error, `aborted` = cancelled. */
+	source: ErrorSource;
+	/** Verbatim message, bounded by MAX_ERROR_CHARS. */
+	message: string;
+	/** Tool name when source is `tool`. */
+	tool?: string;
+}
 
 export interface ToolUse {
 	name: string;
@@ -42,6 +56,15 @@ export interface TurnDigest {
 	sessionName?: string;
 	/** True when the turn ended in an error/abort. */
 	errored?: boolean;
+	/**
+	 * The actual error text, verbatim.
+	 *
+	 * Provider error strings are diverse and change constantly ("529 overloaded",
+	 * "stream ended without finish_reason", "invalid_api_key"), so the classifier
+	 * reads them rather than a flag: mapping a moving surface to a stable set of
+	 * categories is exactly what a decision model is good at.
+	 */
+	error?: TurnError;
 	/** Wall-clock duration of the turn. */
 	durationMs?: number;
 }
@@ -92,11 +115,18 @@ export function toolDetail(toolName: string, args: unknown): string | undefined 
  * fields rather than parsing sentences; keys are short to save tokens.
  */
 export function renderState(digest: TurnDigest): Record<string, unknown> {
-	const state: Record<string, unknown> = {
-		cwd: digest.cwd,
-		user: clip(digest.userText, 1200),
-		assistant: clip(digest.assistantText, 1600),
-	};
+	const state: Record<string, unknown> = { cwd: digest.cwd };
+	// An error is the whole story of the turn: it goes first so nothing can
+	// truncate it away, and it keeps its own (large) budget.
+	if (digest.error) {
+		state.error = {
+			source: digest.error.source,
+			...(digest.error.tool ? { tool: digest.error.tool } : {}),
+			message: clip(digest.error.message, MAX_ERROR_CHARS),
+		};
+	}
+	state.user = clip(digest.userText, 1200);
+	state.assistant = clip(digest.assistantText, 1600);
 
 	if (digest.gitRemotes.length > 0) state.remotes = digest.gitRemotes.slice(0, 4);
 	if (digest.sessionName) state.session = digest.sessionName;

@@ -21,6 +21,7 @@ import {
 	removeAction,
 	setActionEnabled,
 	skdlrExportCommand,
+	splitArgs,
 	statusSummary,
 	storePath,
 	writeActions,
@@ -194,5 +195,20 @@ describe("skdlr export", () => {
 		expect(command).toContain("--workdir '/work/alpha'");
 		expect(command).toContain("pi -p");
 		expect(command).toContain("--description");
+	});
+});
+
+describe("argument tokenizer", () => {
+	test("honours quotes so cron expressions and prompts survive", () => {
+		expect(splitArgs('link 1 --schedule "0 9 * * 1-5"')).toEqual(["link", "1", "--schedule", "0 9 * * 1-5"]);
+		expect(splitArgs('hourly "check the board"')).toEqual(["hourly", "check the board"]);
+		expect(splitArgs("30m 'review intake' --project")).toEqual(["30m", "review intake", "--project"]);
+		expect(splitArgs("   ")).toEqual([]);
+		expect(splitArgs("plain")).toEqual(["plain"]);
+	});
+
+	test("empty quotes produce an empty token, and backslash escapes a quote", () => {
+		expect(splitArgs('a ""')).toEqual(["a", ""]);
+		expect(splitArgs('x "say \\"hi\\""')).toEqual(["x", 'say "hi"']);
 	});
 });

@@ -61,7 +61,24 @@ export interface TurnClassifyConfig {
 	projects: ProjectCandidate[];
 	/** Show the card in the status line. */
 	statusLine: boolean;
+	/**
+	 * Optional background corpus. When set, every finished turn is appended to this
+	 * JSONL with the model's answers and confidences, so a calibration set builds
+	 * itself from real traffic instead of being reconstructed later.
+	 */
+	dataset?: DatasetConfig;
 }
+
+export interface DatasetConfig {
+	/** Path to the JSONL file. `~` is expanded. */
+	path: string;
+	/** Rotate to `<path>.1` once the file exceeds this size. Default 20 MiB. */
+	maxBytes?: number;
+	/** Only record turns that produced an error. */
+	errorsOnly?: boolean;
+}
+
+export const DEFAULT_DATASET_MAX_BYTES = 20 * 1024 * 1024;
 
 export const DEFAULTS: TurnClassifyConfig = {
 	enabled: false,
@@ -117,6 +134,18 @@ export function mergeConfig(base: TurnClassifyConfig, raw: Record<string, unknow
 		next.confidenceFloor = raw.confidenceFloor;
 	}
 	if (typeof raw.statusLine === "boolean") next.statusLine = raw.statusLine;
+	if (isRecord(raw.dataset)) {
+		const path = raw.dataset.path;
+		if (typeof path === "string" && path.trim()) {
+			next.dataset = {
+				path: path.trim(),
+				...(typeof raw.dataset.maxBytes === "number" && raw.dataset.maxBytes > 0
+					? { maxBytes: raw.dataset.maxBytes }
+					: {}),
+				...(raw.dataset.errorsOnly === true ? { errorsOnly: true } : {}),
+			};
+		}
+	}
 	if (Array.isArray(raw.projects)) {
 		const projects: ProjectCandidate[] = [];
 		for (const entry of raw.projects) {
@@ -179,10 +208,30 @@ interface TurnBuffer {
 	commands: string[];
 	startedAt?: number;
 	errored: boolean;
+	/** Last tool error text seen in this turn. */
+	toolError?: string;
 }
 
 function emptyBuffer(): TurnBuffer {
 	return { userText: "", tools: [], files: new Set(), commands: [], errored: false };
+}
+
+/** Pull the human-readable message out of a tool result of unknown shape. */
+function toolErrorMessage(result: unknown): string | undefined {
+	if (typeof result === "string") return result.trim() || undefined;
+	if (!result || typeof result !== "object") return undefined;
+	const record = result as Record<string, unknown>;
+	for (const key of ["error", "message", "stderr", "output", "text"]) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim()) return value.trim();
+	}
+	// toolResult-style content blocks
+	const content = record.content;
+	if (Array.isArray(content)) {
+		const text = extractText(content).trim();
+		if (text) return text;
+	}
+	return undefined;
 }
 
 export default function piTurnClassify(pi: ExtensionAPI): void {
@@ -301,9 +350,11 @@ export default function piTurnClassify(pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_execution_end", async (event, _ctx) => {
-		const result = event as unknown as { isError?: boolean; toolName?: string };
+		const result = event as unknown as { isError?: boolean; toolName?: string; result?: unknown };
 		if (result.isError) {
 			buffer.errored = true;
+			const message = toolErrorMessage(result.result);
+			if (message) buffer.toolError = `${result.toolName ?? "tool"}: ${message}`;
 			const last = buffer.tools.at(-1);
 			if (last) last.failed = true;
 		}
@@ -314,9 +365,28 @@ export default function piTurnClassify(pi: ExtensionAPI): void {
 	pi.on("agent_end", async (event, ctx) => {
 		if (!config.enabled) return;
 		if (inFlight) return; // one classification at a time; skip rather than queue
-		const message = (event as unknown as { message?: { content?: unknown; stopReason?: string } }).message;
-		const assistantText = extractText(message?.content);
+
+		// pi hands the whole turn here: `messages`, not a single message. The last
+		// assistant message is the turn's closing answer and carries the error text.
+		const messages = (event as unknown as { messages?: unknown[] }).messages ?? [];
+		const assistantMessages = messages.filter(
+			(message): message is { content?: unknown; stopReason?: string; errorMessage?: string } =>
+				Boolean(message) && typeof message === "object" && (message as { role?: string }).role === "assistant"
+		);
+		const closing = assistantMessages.at(-1);
+		const assistantText = [...assistantMessages].reverse().map((message) => extractText(message.content)).find((text) => text.trim()) ?? "";
 		if (!buffer.userText && !assistantText) return;
+
+		// The error is the interesting part of a failed turn: keep its verbatim text.
+		const failed = assistantMessages.find((message) => message.stopReason === "error" && message.errorMessage);
+		const aborted = assistantMessages.some((message) => message.stopReason === "aborted");
+		const error: TurnError | undefined = failed?.errorMessage
+			? { source: "provider", message: failed.errorMessage }
+			: aborted
+				? { source: "aborted", message: "the turn was interrupted (user abort or session switch)" }
+				: buffer.toolError
+					? { source: "tool", message: buffer.toolError }
+					: undefined;
 
 		const digest: TurnDigest = {
 			userText: buffer.userText,
@@ -329,7 +399,8 @@ export default function piTurnClassify(pi: ExtensionAPI): void {
 			...(safe<string | undefined>(() => ctx.sessionManager.getSessionName(), undefined)
 				? { sessionName: safe<string | undefined>(() => ctx.sessionManager.getSessionName(), undefined) }
 				: {}),
-			...(buffer.errored || (message?.stopReason === "error" ? { errored: true } : {})),
+			...((buffer.errored || error || closing?.stopReason === "error") ? { errored: true } : {}),
+			...(error ? { error } : {}),
 			...(buffer.startedAt ? { durationMs: Date.now() - buffer.startedAt } : {}),
 		};
 		buffer = emptyBuffer();
