@@ -166,18 +166,26 @@ so a 50-row list would mean reading gigabytes to show 50 one-liners.
   "sessionFile": "/home/wismut/.pi/agent/sessions/--home-wismut-byteowlz-eavs--/...jsonl",
   "cwd": "/home/wismut/byteowlz/eavs",
   "latest": { "turn": 7, "line": "eavs · implement · unfinished · code", "answers": { "...": {} } },
-  "turns": [ "…the last 20 full cards, oldest first…" ],
-  "history": [ { "turn": 1, "at": "…", "line": "…" }, "…one line per turn, up to 500…" ],
+  "turns": [ "…full cards that fit the size budget, oldest first…" ],
+  "history": [ { "turn": 1, "at": "…", "line": "…" }, "…one line per turn, up to 5000…" ],
   "updatedAt": "2026-10-29T10:00:00.000Z"
 }
 ```
 
-Two tiers, because the sizes are very different: a **full card is ~1 kB**
-(probabilities included) while a **line-only entry is ~75 B**. Keeping every full
-card would cost ~208 kB for a 200-turn session — the opposite of what a cheap list
-wants. So full detail is bounded (`keep`, default 20) and the scrollback is kept as
-lines (`historyLimit`, default 500 → ~37 kB worst case). Nothing is lost
-permanently either way: the session file still holds every full card.
+Two tiers, bounded by **bytes** rather than an arbitrary count, because what costs
+is the per-row read and the full-document rewrite on each turn, not disk.
+
+Measured on the 200 largest sessions here: **median 30 turns, mean 79, max 661**;
+a full card is ~1 kB (probabilities included) and a line-only entry ~75 B. So:
+
+- an ordinary session (~30 turns, ~30-54 kB) keeps **every** turn in `turns`;
+- a pathological one stops growing at **512 kB** (`maxBytes`): the oldest *full*
+  cards are shed first (a 700-turn session keeps ~269 of them) while `history`
+  keeps **one line per turn**, up to 5000 — so the story stays complete.
+
+Nothing is lost either way: the session file still holds every full card, and
+`dataset.path` is where full digests with probabilities belong when the purpose is
+calibration rather than a list row.
 
 Why this shape:
 

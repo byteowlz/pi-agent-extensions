@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.3
+
+- The sidecar is bounded by **bytes, not a card count**. Measurements on the 200
+  largest sessions here (median 30 turns, mean 79, max 661; a full card ~1 kB, a
+  line ~75 B) showed the earlier "last 20" was unnecessary: an ordinary session
+  keeps every turn (~54 kB). The document now stops growing at `maxBytes`
+  (default 512 kB), shedding the oldest full cards first while `history` keeps one
+  line per turn up to 5000 — so a 700-turn session keeps ~269 full cards and its
+  complete scrollback. What the budget actually bounds is the per-row read and the
+  full-document rewrite on every turn.
+
 ## 0.4.2
 
 - The card sidecar keeps **two tiers** instead of a flat "last 10": the last
