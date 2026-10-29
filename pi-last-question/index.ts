@@ -23,7 +23,8 @@ import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import { WIDGET_KEY, formatStamp, lastQuestion, questionStamp } from "./last-question.js";
 import { createLastQuestionCard } from "./widget.js";
 
-const SHORTCUT_HINT = "⌥Q";
+/** Advertised in the card, only when the question does not fit two lines. */
+const SHORTCUT_HINT = "ctrl+q";
 
 export default function piLastQuestion(pi: ExtensionAPI): void {
 	let widgetCtx: ExtensionContext | undefined;
@@ -195,12 +196,14 @@ export default function piLastQuestion(pi: ExtensionAPI): void {
 		insertIntoEditor(ctx, question.text);
 	};
 
-	pi.registerShortcut(Key.ctrlAlt("q"), {
+	// Plain ctrl bindings: a, b, c, d, e, f, g, j, k, l, o, p, s, t, u, w, x, y, z
+	// are already taken by pi's editor/app, so q (expand) and n (insert) are free.
+	pi.registerShortcut(Key.ctrl("q"), {
 		description: "Expand your last question (enter inserts it into the prompt box)",
 		handler: (ctx) => openExpanded(ctx),
 	});
 
-	pi.registerShortcut(Key.ctrlAlt("j"), {
+	pi.registerShortcut(Key.ctrl("n"), {
 		description: "Put your last question into the prompt box",
 		handler: (ctx) => jump(ctx),
 	});

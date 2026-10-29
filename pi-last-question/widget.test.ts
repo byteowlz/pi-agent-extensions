@@ -26,32 +26,38 @@ const QUESTION =
 
 describe("card planning", () => {
 	test("header carries the timestamp and the expand hint", () => {
-		const plan = planCard(`${QUESTION} ${QUESTION}`, 80, { stamp: "10/29/2026, 12:00 PM", hint: "⌥Q" });
-		expect(plan.header.right).toBe("⌥Q expand");
+		const plan = planCard(`${QUESTION} ${QUESTION}`, 80, { stamp: "10/29/2026, 12:00 PM", hint: "ctrl+q" });
+		expect(plan.header.right).toBe("ctrl+q expand");
 		expect(plan.header.left).toContain("10/29/2026, 12:00 PM");
 		expect(plan.body).toHaveLength(MAX_LINES);
 		expect(plan.truncated).toBe(true);
 		expect(plan.body[MAX_LINES - 1]?.endsWith("…")).toBe(true);
 	});
 
+	test("a question that fits shows no shortcut hint", () => {
+		const plan = planCard("what is the cache TTL?", 80, { stamp: "10/29/2026, 9:05 AM", hint: "ctrl+q" });
+		expect(plan.truncated).toBe(false);
+		expect(plan.header.right).toBe("");
+	});
+
 	test("a short question is not marked as truncated", () => {
-		const plan = planCard("what is the cache TTL?", 80, { stamp: "10/29/2026, 9:05 AM", hint: "⌥Q" });
+		const plan = planCard("what is the cache TTL?", 80, { stamp: "10/29/2026, 9:05 AM", hint: "ctrl+q" });
 		expect(plan.body).toHaveLength(1);
 		expect(plan.truncated).toBe(false);
 		expect(plan.body[0]).toBe("what is the cache TTL?");
 	});
 
 	test("the hint degrades before the timestamp is cut", () => {
-		const stamp = "10/29/2026, 12:00 PM"; // 18 cells, ~20 with the glyph
-		// Full hint needs usable >= head + "⌥Q expand" + 2; compact needs the 3-cell form.
-		expect(planCard(QUESTION, 90, { stamp, hint: "⌥Q" }).header.right).toBe("⌥Q expand");
-		expect(planCard(QUESTION, 29, { stamp, hint: "⌥Q" }).header.right).toBe("⌥Q");
-		expect(planCard(QUESTION, 20, { stamp, hint: "⌥Q" }).header.right).toBe("");
+		const stamp = "10/29/2026, 12:00 PM";
+		const long = `${QUESTION} ${QUESTION}`; // always overflows two lines
+		expect(planCard(long, 90, { stamp, hint: "ctrl+q" }).header.right).toBe("ctrl+q expand");
+		expect(planCard(long, 31, { stamp, hint: "ctrl+q" }).header.right).toBe("ctrl+q");
+		expect(planCard(long, 20, { stamp, hint: "ctrl+q" }).header.right).toBe("");
 	});
 
 	test("every planned row fits the width budget", () => {
 		for (const width of [24, 40, 72, 120]) {
-			const plan = planCard(QUESTION, width, { stamp: "10/29/2026, 12:00 PM", hint: "⌥Q" });
+			const plan = planCard(QUESTION, width, { stamp: "10/29/2026, 12:00 PM", hint: "ctrl+q" });
 			const usable = Math.max(6, width - 2);
 			expect(joinRow(plan.header, usable).length).toBeLessThanOrEqual(usable);
 			for (const row of plan.body) expect(row.length).toBeLessThanOrEqual(usable);
@@ -59,7 +65,7 @@ describe("card planning", () => {
 	});
 
 	test("multi-line input is flattened to one flowing line", () => {
-		const plan = planCard("one\ntwo\nthree", 80, { hint: "⌥Q" });
+		const plan = planCard("one\ntwo\nthree", 80, { hint: "ctrl+q" });
 		expect(plan.body).toEqual(["one two three"]);
 	});
 });
@@ -67,7 +73,12 @@ describe("card planning", () => {
 describe("card component", () => {
 	test("renders a full-width background rectangle using pi's message tokens", () => {
 		const theme = recordingTheme();
-		const card = createLastQuestionCard({ theme, text: QUESTION, stamp: "10/29/2026, 12:00 PM", hint: "⌥Q" });
+		const card = createLastQuestionCard({
+			theme,
+			text: `${QUESTION} ${QUESTION}`,
+			stamp: "10/29/2026, 12:00 PM",
+			hint: "ctrl+q",
+		});
 		const lines = card.box.render(72);
 		// header + two question rows, every row exactly the widget width
 		expect(lines).toHaveLength(3);
@@ -83,7 +94,7 @@ describe("card component", () => {
 
 	test("every row starts with the rule, and the question is fully visible", () => {
 		const theme = recordingTheme();
-		const card = createLastQuestionCard({ theme, text: "what is the cache TTL?", stamp: "10/29/2026, 9:05 AM", hint: "⌥Q" });
+		const card = createLastQuestionCard({ theme, text: "what is the cache TTL?", stamp: "10/29/2026, 9:05 AM", hint: "ctrl+q" });
 		const lines = card.box.render(60).map((line) => line.trim());
 		expect(lines.every((line) => line.startsWith(RULE))).toBe(true);
 		expect(lines[1]).toContain("what is the cache TTL?");
@@ -94,7 +105,12 @@ describe("card component", () => {
 	test("narrow widths still produce aligned rows without overflow", () => {
 		const theme = recordingTheme();
 		for (const width of [20, 30, 50, 100]) {
-			const card = createLastQuestionCard({ theme, text: QUESTION, stamp: "10/29/2026, 12:00 PM", hint: "⌥Q" });
+			const card = createLastQuestionCard({
+				theme,
+				text: `${QUESTION} ${QUESTION}`,
+				stamp: "10/29/2026, 12:00 PM",
+				hint: "ctrl+q",
+			});
 			const lines = card.box.render(width);
 			expect(new Set(lines.map((line) => line.length))).toEqual(new Set([width]));
 		}
@@ -102,7 +118,7 @@ describe("card component", () => {
 
 	test("invalidate forces a re-render after the text changes", () => {
 		const theme = recordingTheme();
-		const card = createLastQuestionCard({ theme, text: "first", hint: "⌥Q" });
+		const card = createLastQuestionCard({ theme, text: "first", hint: "ctrl+q" });
 		const before = card.box.render(40);
 		expect(before.join("\n")).toContain("first");
 		card.component.invalidate();
@@ -129,14 +145,14 @@ describe("styled themes (ANSI)", () => {
 		// the gap and a byte-wise slice dropped the hint entirely in a real terminal.
 		const card = createLastQuestionCard({
 			theme: ansiTheme(),
-			text: "how do I rotate the deploy key?",
+			text: `${QUESTION} ${QUESTION}`,
 			stamp: "10/29/2026, 12:20 PM",
-			hint: "⌥Q",
+			hint: "ctrl+q",
 		});
 		const lines = card.box.render(98);
 		const header = strip(lines[0] as string);
-		expect(header).toContain("⌥Q expand");
-		expect(header.trimEnd().endsWith("⌥Q expand")).toBe(true);
+		expect(header).toContain("ctrl+q expand");
+		expect(header.trimEnd().endsWith("ctrl+q expand")).toBe(true);
 		expect(visible(lines[0] as string)).toBe(98);
 	});
 
@@ -145,7 +161,7 @@ describe("styled themes (ANSI)", () => {
 			theme: ansiTheme(),
 			text: "how do I rotate the deploy key without breaking the build for the running pods?",
 			stamp: "10/29/2026, 12:20 PM",
-			hint: "⌥Q",
+			hint: "ctrl+q",
 		});
 		for (const width of [40, 60, 98]) {
 			const lines = card.box.render(width);

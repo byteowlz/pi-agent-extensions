@@ -4,6 +4,17 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-last-question: plain ctrl bindings, hint only when expandable (2.39.0)
+
+- **pi-last-question 0.4.0**: shortcuts are now plain `ctrl` bindings — `ctrl+q`
+  expands the last question, `ctrl+n` inserts it into the prompt box (pi's editor
+  already owns a–g, j, k, l, o–p, s–u, w–z).
+- The `ctrl+q expand` hint is shown **only when the question is cut off**; a
+  question that fits both lines renders no shortcut at all, so the card stays
+  quiet when there is nothing hidden. The bindings work either way.
+- Verified in a real pi TUI (pty + terminal emulator): short prompt → no hint,
+  long prompt → full `ctrl+q expand`, card still follows each submission.
+
 ### pi-last-question: blue card, and it actually updates (2.38.0)
 
 - **pi-last-question 0.3.0**: the card now uses pi's blue user-message family

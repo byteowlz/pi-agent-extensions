@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+- Shortcuts are plain `ctrl` bindings: **`ctrl+q`** expands the question and
+  **`ctrl+n`** inserts it into the prompt box. (pi's editor owns a–g, j, k, l, o,
+  p, s, t, u, w, x, y, z; `q` and `n` are free.) The old `ctrl+alt` pair is gone.
+- **The hint only shows when the question is actually cut off.** A question that
+  fits both lines renders no shortcut at all, so the card stays quiet unless
+  there is something hidden; the bindings keep working either way.
+- Verified in a real pi TUI (pty + terminal emulator): a short prompt shows no
+  hint, a long one shows `ctrl+q expand`, and the card still follows submissions.
+
 ## 0.3.0
 
 - **Blue instead of violet, and no icon.** The card now borrows pi's user-message

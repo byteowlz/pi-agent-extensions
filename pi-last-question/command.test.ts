@@ -87,7 +87,7 @@ extension({
 });
 
 const userEntry = (text) => ({ type: 'message', id: 'u' + Math.random(), message: { role: 'user', content: [{ type: 'text', text }], timestamp: Date.now() } });
-const longQuestion = 'how do I rotate the deploy key without breaking the build for the running pods while the old one is cached in the sidecar container and the gateway still pins the previous certificate fingerprint in its config';
+const longQuestion = 'how do I rotate the deploy key without breaking the build for the running pods while the old one is cached in the sidecar container and the gateway still pins the previous certificate fingerprint in its config and the health probe keeps flapping';
 entries = [userEntry(longQuestion)];
 
 await events.get('session_start')({ reason: 'startup' }, ctx());
@@ -97,7 +97,7 @@ assert.equal(first.options.placement, 'aboveEditor');
 const rows = first.content.filter((line) => line.trim().length > 0);
 assert.ok(rows.length <= 3, 'header plus at most two question lines');
 assert.ok(rows[1].includes('how do I rotate the deploy key'), 'shows the question');
-assert.ok(rows[0].includes('⌥Q expand'), 'header advertises the expand shortcut');
+assert.ok(rows[0].includes('ctrl+q expand'), 'header advertises the expand shortcut');
 assert.ok(rows[0].includes('/'), 'header carries the timestamp');
 assert.equal(new Set(rows.map((line) => line.length)).size, 1, 'card is a rectangle');
 
@@ -121,6 +121,7 @@ const shortRows = second.content.filter((line) => line.trim().length > 0);
 assert.equal(shortRows.length, 2, 'header plus one question line');
 assert.ok(shortRows[1].includes('what is the cache TTL?'), 'still correct after commit');
 assert.ok(!second.content.join('').includes('…'), 'no truncation marker when it fits');
+assert.ok(!second.content.join('').includes('ctrl+q'), 'no shortcut hint when nothing is hidden');
 
 // a later submission wins over the older branch, and an assistant reply keeps it
 entries = [...entries, userEntry('and what about the second one?')];
