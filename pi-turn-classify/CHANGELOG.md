@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.0
+
+- **kNN prior, measured and deliberately not wired in.** `embeddings.ts` (EmbeddingGemma
+  2 via vqtrs, MRL-truncated to 128 dims, task prefix and timeout handling),
+  `knn.ts` (int8 vectors, ~176 B/turn, brute-force cosine, append-only JSONL) and
+  `bench-knn.ts` (leave-one-out neighbours, per-question retrieval ceiling).
+  Result on the 16-turn seed: jev +0.0 pts, d3 −1.8 pts, 2–5 answers changed, with
+  a retrieval ceiling at or below chance for most questions (`error_kind` 0%,
+  `work_done` 31%, `activity` 38%) and usable only for `scope` (81%) and
+  `project_mismatch` (88%). The corpus is too small and too homogeneous to carry
+  label signal; a reranker and ≥50 labels per class are the prerequisites.
+- Fixed a real store bug the new tests caught: `VectorStore.add` read the file
+  *after* appending, then pushed the entry again (every entry was inserted twice
+  and `neighbours()` could return the same turn as its own neighbour).
+- Fixed `renderState`/`embeddingText` crashing on hand-written digests that omit
+  collections (the bench path passes raw samples).
+- Boolean labels in a neighbour render with their name (`blocked: yes` -> "blocked",
+  `work_done: no` -> "unfinished") because a bare "yes" is ambiguous.
+
 ## 0.5.0
 
 - **Forks, resumes and branch navigation are correct now.** `turn` was used as the
