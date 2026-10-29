@@ -4,7 +4,7 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
-### Fuzzy project switching (2.31.0)
+### Fuzzy project switching (2.33.0)
 
 - **pi-session-cwd 0.2.0**: `/move` moves a session to a project by fuzzy name
   (`/move foxline`), or opens a picker over configured roots when called bare.

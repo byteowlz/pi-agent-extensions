@@ -1,7 +1,7 @@
 {
   "name": "@byteowlz/pi-session-cwd",
-  "version": "0.1.0",
-  "description": "Move a running pi session to another working directory, relocating its session file (/cwd)",
+  "version": "0.2.0",
+  "description": "Move a session to another working directory (its session file included), with fuzzy project switching (/cwd, /move)",
   "type": "module",
   "keywords": [
     "pi-package",

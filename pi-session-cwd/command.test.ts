@@ -91,7 +91,7 @@ extension({
 
 const cwdCommand = commands.get('cwd');
 assert.ok(cwdCommand, 'cwd command registered');
-assert.ok(commands.get('mvcwd'), 'mvcwd picker registered');
+assert.ok(commands.get('move'), 'move command registered');
 assert.ok(commands.get('cwd-history'), 'cwd-history registered');
 
 // --- 1. rpc without --force must refuse and touch nothing ---------------
@@ -172,7 +172,101 @@ await cwdCommand(relativeArg, ctx({
 }));
 assert.equal(switchedTo, path.join(agentDir, 'sessions', encode(thirdReal), 'second.jsonl'), 'relative path moved');
 
-// --- 7. cwd-history lists the moves --------------------------------------
+// --- 7. /move resolves a project by fuzzy name and switches -------------
+const rootWork = path.join(home, 'work');
+fs.mkdirSync(path.join(rootWork, 'foxline'), { recursive: true });
+fs.mkdirSync(path.join(rootWork, 'foxhole'), { recursive: true });
+fs.mkdirSync(path.join(agentDir), { recursive: true });
+fs.writeFileSync(path.join(agentDir, 'session-cwd.json'), JSON.stringify({ roots: [rootWork], depth: 1, includeSessionDirs: false }));
+
+// seed a session that currently lives in the third project
+const sess3 = path.join(path.dirname(switchedTo), 'third.jsonl');
+fs.writeFileSync(sess3, [
+  JSON.stringify({ type: 'session', version: 3, id: 'ghi', timestamp: '2026-01-03T00:00:00.000Z', cwd: switchedTo ? path.dirname(path.dirname(switchedTo)) : thirdReal }),
+  JSON.stringify({ type: 'message', id: 'm1', parentId: null, timestamp: '2026-01-03T00:00:00.000Z',
+    message: { role: 'user', content: [{ type: 'text', text: 'y' }], timestamp: 1 } }),
+].join('\\n') + '\\n');
+
+const thirdCtx = (overrides = {}) => ctx({
+  cwd: thirdReal,
+  sessionManager: {
+    getSessionId: () => 'ghi',
+    getSessionFile: () => sess3,
+    getEntries: () => [],
+    getBranch: () => [],
+    usesDefaultSessionDir: () => true,
+  },
+  ...overrides,
+});
+
+const moveCommand = commands.get('move');
+// ambiguous: "fox" matches foxline and foxhole -> non-interactive refuses
+mode = 'rpc';
+notifications.length = 0;
+await moveCommand('fox --force', thirdCtx());
+assert.ok(notifications.some((n) => n.level === 'warning' && /matches several projects/.test(n.message)),
+  'ambiguous query asks instead of guessing');
+
+// unique: the full name resolves and actually moves
+switchedTo = null;
+notifications.length = 0;
+await moveCommand('foxline --force', thirdCtx());
+const foxPath = path.join(rootWork, 'foxline');
+assert.equal(switchedTo, path.join(agentDir, 'sessions', encode(fs.realpathSync(foxPath)), 'third.jsonl'),
+  'unique fuzzy match moved the session');
+assert.equal(fs.existsSync(sess3), false, 'old file removed by /move');
+
+// ambiguous in a TUI: the picker answers, with the query pre-filled
+const sess5 = switchedTo.replace(/third\.jsonl$/, 'fourth.jsonl');
+fs.writeFileSync(sess5, [
+  JSON.stringify({ type: 'session', version: 3, id: 'mno', timestamp: '2026-01-04T00:00:00.000Z', cwd: fs.realpathSync(foxPath) }),
+].join('\\n') + '\\n');
+mode = 'tui';
+switchedTo = null;
+let pickerQuery;
+await moveCommand('fox', ctx({
+  cwd: fs.realpathSync(foxPath),
+  sessionManager: { getSessionId: () => 'mno', getSessionFile: () => sess5, getEntries: () => [], getBranch: () => [], usesDefaultSessionDir: () => true },
+  ui: {
+    notify: () => {},
+    select: async (_prompt, options) => options[0],
+    custom: async (factory) => {
+      // emulate pi: build the component, capture the pre-filled query, choose row 0
+      let chosen;
+      const done = (value) => { chosen = value; };
+      const comp = factory({ requestRender: () => {} }, { fg: (_c, t) => t }, {}, done);
+      comp.render(60);
+      pickerQuery = null;
+      // pick the first visible row by simulating an enter keypress
+      comp.handleInput('\\r');
+      return chosen;
+    },
+  },
+}));
+assert.ok(switchedTo, 'tui picker chose a project and moved');
+assert.ok(switchedTo.includes('fox'), 'picked one of the fuzzy matches');
+
+// a path argument goes through the path logic, not project matching
+const explicit = path.join(rootWork, 'foxhole');
+const sess4 = switchedTo.replace(/third\.jsonl$/, 'fourth.jsonl');
+fs.writeFileSync(sess4, [
+  JSON.stringify({ type: 'session', version: 3, id: 'jkl', timestamp: '2026-01-04T00:00:00.000Z', cwd: fs.realpathSync(foxPath) }),
+].join('\\n') + '\\n');
+switchedTo = null;
+await moveCommand(explicit + ' --force', ctx({
+  cwd: fs.realpathSync(foxPath),
+  sessionManager: { getSessionId: () => 'jkl', getSessionFile: () => sess4, getEntries: () => [], getBranch: () => [], usesDefaultSessionDir: () => true },
+}));
+assert.equal(switchedTo, path.join(agentDir, 'sessions', encode(fs.realpathSync(explicit)), 'fourth.jsonl'),
+  'a path argument bypasses fuzzy matching');
+
+// no match: clear error with a suggestion
+notifications.length = 0;
+await moveCommand('zzzz-nothing --force', thirdCtx());
+assert.ok(notifications.some((n) => n.level === 'error' && /no project matches/.test(n.message)),
+  'no match is an error, not a silent no-op');
+
+// --- 8. cwd-history lists the moves --------------------------------------
 notifications.length = 0;
 await commands.get('cwd-history')('', ctx());
 assert.ok(notifications.length >= 0);
