@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.2
+
+- The card sidecar keeps **two tiers** instead of a flat "last 10": the last
+  `keep` full cards (default 20, ~1 kB each) plus a line-only `history` of every
+  turn (`historyLimit`, default 500, ~75 B each). A 200-turn session therefore gets
+  a complete scrollback for ~37 kB instead of ~208 kB of probabilities it will
+  never re-read, and older turns are only dropped from `history` past the cap.
+  Re-classifying a turn updates its line rather than appending a duplicate.
+  Nothing is lost: the session file still holds every full card.
+
 ## 0.4.1
 
 - The labeler no longer asks the removed `risk` question either (it kept asking a

@@ -33,8 +33,17 @@ import { join } from "node:path";
 import type { TurnCard } from "./schema.js";
 
 export const CARD_STORE_VERSION = 1;
-/** How many recent cards per session to keep in the sidecar. */
-export const DEFAULT_KEEP = 10;
+/**
+ * How many *full* cards to keep per session.
+ *
+ * Measured: a full card is ~1.0 kB (option probabilities included), a line-only
+ * entry ~75 B. Keeping every full card for a 200-turn session costs ~208 kB; the
+ * sidecar exists to make listing cheap, so full detail is bounded and the history
+ * is kept as lines instead.
+ */
+export const DEFAULT_KEEP = 20;
+/** How many line-only history entries to keep (complete scrollback, ~75 B each). */
+export const DEFAULT_HISTORY_LIMIT = 500;
 
 /** One session's sidecar document. */
 export interface SessionCardFile {
@@ -47,6 +56,11 @@ export interface SessionCardFile {
 	latest: TurnCard;
 	/** Recent cards, oldest first, oldest dropped beyond `keep`. */
 	turns: TurnCard[];
+	/**
+	 * Every turn's one-liner (oldest first), so a scrollback stays complete without
+	 * storing probabilities for turns nobody will inspect again.
+	 */
+	history: Array<{ turn: number; at: string; line: string }>;
 	updatedAt: string;
 }
 
@@ -55,8 +69,10 @@ export interface CardStoreOptions {
 	agentDir?: string;
 	/** Explicit override for the cards directory. */
 	cardsDir?: string;
-	/** Cards kept per session. */
+	/** Cards kept per session (full detail). */
 	keep?: number;
+	/** Line-only history entries kept per session. */
+	historyLimit?: number;
 }
 
 export function defaultAgentDir(): string {
@@ -80,6 +96,8 @@ export function readSessionCards(options: CardStoreOptions, sessionId: string): 
 	try {
 		const parsed = JSON.parse(readFileSync(path, "utf-8")) as SessionCardFile;
 		if (parsed?.version !== CARD_STORE_VERSION || !Array.isArray(parsed.turns)) return undefined;
+		// Older sidecars predate `history`; treat it as empty rather than invalid.
+		if (!Array.isArray(parsed.history)) parsed.history = [];
 		return parsed;
 	} catch {
 		return undefined;
@@ -95,6 +113,7 @@ export function readSessionCards(options: CardStoreOptions, sessionId: string): 
  */
 export function writeSessionCard(options: CardStoreOptions, card: TurnCard): SessionCardFile | undefined {
 	const keep = Math.max(1, options.keep ?? DEFAULT_KEEP);
+	const historyLimit = Math.max(keep, options.historyLimit ?? DEFAULT_HISTORY_LIMIT);
 	const dir = cardsDirectory(options);
 	try {
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -104,6 +123,15 @@ export function writeSessionCard(options: CardStoreOptions, card: TurnCard): Ses
 		const withoutDuplicates = previous.filter((entry) => entry.turn !== card.turn);
 		const turns = [...withoutDuplicates, card].sort((a, b) => a.turn - b.turn).slice(-keep);
 
+		// The history keeps one line per turn, including turns whose full card has
+		// already rolled out of `turns`.
+		const history = [
+			...(existing?.history ?? []).filter((entry) => entry.turn !== card.turn),
+			{ turn: card.turn, at: card.at, line: card.line },
+		]
+			.sort((a, b) => a.turn - b.turn)
+			.slice(-historyLimit);
+
 		const document: SessionCardFile = {
 			version: CARD_STORE_VERSION,
 			sessionId: card.sessionId,
@@ -111,6 +139,7 @@ export function writeSessionCard(options: CardStoreOptions, card: TurnCard): Ses
 			cwd: card.cwd,
 			latest: turns[turns.length - 1] ?? card,
 			turns,
+			history,
 			updatedAt: new Date().toISOString(),
 		};
 
