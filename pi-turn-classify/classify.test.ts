@@ -114,6 +114,7 @@ test("a finished turn is classified and stored as a card", { timeout: 60_000 }, 
 			api: "systemone",
 			statusLine: true,
 			dataset: { path: datasetPath },
+			cardsDir: path.join(home, "cards"),
 		})
 	);
 
@@ -249,6 +250,23 @@ await commands.get('classify')('schema', ctx);
 assert.ok(notifications[0].message.includes('8 questions'), 'schema lists the questions: ' + notifications[0].message.split('\\n')[0]);
 assert.ok(notifications[0].message.includes('project_mismatch'), 'schema names the questions');
 
+// --- a resumed session continues the branch numbering, and the sidecar keeps both
+// The old behaviour reset the counter on session_start, so the first turn after a
+// resume reused turn 1 and overwrote the original card in the sidecar.
+await events.get('session_start')({ reason: 'resume' }, ctx);
+await events.get('input')({ source: 'interactive', text: 'continue where we left off with this work' }, ctx);
+await events.get('agent_end')(
+  { messages: [{ role: 'assistant', content: [{ type: 'text', text: 'Continued the work.' }], stopReason: 'stop' }] },
+  ctx
+);
+const resumedCards = appended.filter((entry) => entry.customType === 'pi-turn-classify:card/v1').map((entry) => entry.data);
+const lastTurn = resumedCards.at(-1).turn;
+assert.ok(lastTurn > 1, 'turn numbers continue after a resume, got ' + lastTurn);
+const stored = readFileSync(process.env.FIXTURE_CARDS + '/fixture-session.json', 'utf8');
+const storedDoc = JSON.parse(stored);
+assert.equal(storedDoc.history.length, resumedCards.length, 'every card has a timeline entry');
+assert.equal(new Set(storedDoc.history.map((entry) => entry.at)).size, storedDoc.history.length, 'no timeline entry was overwritten');
+
 // --- /classify off stops classification ---------------------------------
 notifications.length = 0;
 await commands.get('classify')('off', ctx);
@@ -275,6 +293,7 @@ console.log('turn-classify verified');
 					PI_CODING_AGENT_DIR: path.join(home, "agent"),
 					FIXTURE_CWD: cwd,
 					FIXTURE_DATASET: datasetPath,
+					FIXTURE_CARDS: path.join(home, "cards"),
 				},
 			});
 			let stdout = "";

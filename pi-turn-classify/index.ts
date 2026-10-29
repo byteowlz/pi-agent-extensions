@@ -27,7 +27,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { pruneCards, readSessionCards, storeStats, writeSessionCard } from "./card-store.js";
+import { pruneCards, readSessionCards, seedSessionCards, storeStats, writeSessionCard } from "./card-store.js";
 import { appendRecord, buildRecord, shouldRecord } from "./dataset.js";
 import { type DecisionClientConfig, DecisionError, classify, demoteLowConfidence } from "./decision-client.js";
 import { type ToolUse, type TurnDigest, extractText, localProjectHints, renderState, toolDetail } from "./digest.js";
@@ -307,6 +307,9 @@ export default function piTurnClassify(pi: ExtensionAPI): void {
 				: {}),
 			cwd: digest.cwd,
 			turn: startedTurn,
+			...(safe<string | undefined>(() => ctx.sessionManager.getLeafId(), undefined)
+				? { branch: safe<string | undefined>(() => ctx.sessionManager.getLeafId(), undefined) }
+				: {}),
 			source: { api: result.api, model: result.model, endpoint: result.endpoint, ms: result.ms },
 			answers,
 			line: renderLine(answers, questions),
@@ -383,8 +386,21 @@ export default function piTurnClassify(pi: ExtensionAPI): void {
 	pi.on("session_start", async (_event, ctx) => {
 		config = loadConfig(ctx.cwd);
 		buffer = emptyBuffer();
-		turnCount = 0;
-		lastCard = readCards(ctx.sessionManager.getBranch()).at(-1);
+		// Turn numbers come from the branch, never from a counter reset on start:
+		// resuming a session must not renumber (and overwrite) its earlier turns.
+		const branchCards = readCards(ctx.sessionManager.getBranch());
+		turnCount = branchCards.length;
+		// A fork inherits its parent's cards but has a new session id and therefore no
+		// sidecar; adopt the inherited ones so its timeline does not begin mid-story.
+		const sessionId = safe(() => ctx.sessionManager.getSessionId(), "");
+		if (sessionId && branchCards.length > 0) {
+			try {
+				seedSessionCards(storeOptions(), sessionId, branchCards);
+			} catch {
+				// seeding is a convenience, never a failure
+			}
+		}
+		lastCard = branchCards.at(-1);
 		applyStatus(ctx);
 		// Cheap housekeeping: sidecars whose transcript is gone and that are old.
 		try {

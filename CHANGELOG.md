@@ -4,6 +4,20 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Cards survive forks, resumes and branch navigation (2.38.0)
+
+- **pi-turn-classify 0.5.0**: storing a card keyed by `turn` broke twice. Resuming
+  a session restarts pi's turn counter, so the first classification after a resume
+  reused turn 1 and **overwrote** the original card in the sidecar; and a fork has a
+  new session id, so its timeline started at the fork and ignored every card it
+  inherited on its branch. Turn numbers now come from the branch, a timeline entry
+  is identified by its timestamp (so a revisited turn never overwrites history), a
+  fork seeds its sidecar from the inherited cards, and each card records the
+  session-tree `branch` so diverged paths stay distinguishable.
+- The sidecar keeps **every** turn rather than a truncated window: full parses are
+  rare and the point is seeing a session change over time. `maxBytes` (8 MB) is now
+  a safety valve only, and timeline entries carry the fields that move.
+
 ### pi-last-question: plain ctrl bindings, hint only when expandable (2.39.0)
 
 - **pi-last-question 0.4.0**: shortcuts are now plain `ctrl` bindings — `ctrl+q`
