@@ -4,6 +4,30 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### skdlr-owned timing with in-session delivery (2.35.0)
+
+- **pi-schedule 0.2.0**: skdlr is now a first-class *optional* integration instead
+  of an export. `/schedule link <n|id> --schedule "<cron|natural>" [--queue]`
+  registers a real skdlr schedule whose command is this extension's self-contained
+  deliverer, which hands the prompt to the running session over a private inbox
+  socket (`schedule/inbox/<sessionId>.sock`, dir 0700, socket 0600, absolute
+  `--agent-dir` so a systemd unit needs no environment). skdlr owns the timing;
+  the extension owns delivery into the live session, which `pi -p` cannot do
+  without opening a different session.
+- Linking is exclusive — a linked action stops using its in-session timer, so it
+  cannot fire twice; `/schedule unlink` removes the skdlr schedule (with `--yes`,
+  verified by re-listing) and restores the timer; `/schedule skdlr` reports
+  backend status and linked actions. Link/unlink resolve selectors across both
+  scopes so `/schedule link 1` works on a project action without `--project`.
+- `--queue` parks a run that finds no live session (bounded to 20 entries / 24 h);
+  the next start delivers them prefixed `[scheduled <age> ago]` and reports
+  dropped stale ones. Without it a missed run fails visibly (deliverer exit 1).
+- Quoted-argument parsing (`splitArgs`) so cron expressions like
+  `--schedule "0 9 * * 1-5"` and prompts with spaces survive intact.
+- Inbox hardening: created only for long-lived sessions, idempotent stale-socket
+  clearing, removed on shutdown, oversized payloads and silent connections
+  rejected instead of buffered.
+
 ### Turn labelling UI for calibration (2.35.0)
 
 - **pi-turn-classify 0.2.0**: `labeler/` — a web UI for hand-labelling real agent

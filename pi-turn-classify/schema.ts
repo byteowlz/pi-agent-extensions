@@ -119,6 +119,30 @@ export const SCOPE: ChoiceOption[] = [
 /** Answer id used when the model cannot tell; also the fallback for bad answers. */
 export const UNCLEAR = "unclear";
 
+/**
+ * Error categories.
+ *
+ * This is the strongest case for a decision model in the whole schema: provider
+ * error strings are diverse and churn constantly ("529 overloaded",
+ * "stream ended without finish_reason", "invalid_api_key", "context_length_exceeded",
+ * "ECONNRESET"), and hand-written regexes rot. A small model maps the raw message
+ * onto a stable little taxonomy, which is what downstream automation needs:
+ * retry, re-auth, trim context, or ask the user.
+ */
+export const ERROR_KIND: ChoiceOption[] = [
+	{ id: "provider_overloaded", label: "provider overloaded", hint: "capacity, 529/503, overloaded or busy" },
+	{ id: "rate_limited", label: "rate limited", hint: "429, quota, too many requests, spend limit" },
+	{ id: "auth", label: "auth", hint: "401/403, invalid or expired key, permission denied, OAuth" },
+	{ id: "context_overflow", label: "context overflow", hint: "context length or token limit exceeded" },
+	{ id: "network", label: "network", hint: "DNS, connect, TLS, timeout, socket reset" },
+	{ id: "content_filter", label: "content filtered", hint: "refusal, safety or policy block" },
+	{ id: "invalid_request", label: "invalid request", hint: "400: malformed tool call, unsupported parameter or input" },
+	{ id: "bad_response", label: "bad response", hint: "empty, unparseable, stream ended without finish_reason" },
+	{ id: "tool_failed", label: "tool failed", hint: "a command, test or file operation failed" },
+	{ id: "cancelled", label: "cancelled", hint: "aborted by the user" },
+	{ id: UNCLEAR, label: "unclear", hint: "the message does not identify the cause" },
+];
+
 export interface ProjectCandidate {
 	/** Stable id, e.g. "pi-agent-extensions". */
 	id: string;
@@ -134,7 +158,12 @@ export interface ProjectCandidate {
  * against the projects that actually exist. When candidates are unknown the
  * question is dropped and only `project_mismatch` remains meaningful.
  */
-export function buildQuestions(projects: ProjectCandidate[]): QuestionSpec[] {
+export interface BuildOptions {
+	/** Include the error questions. They are meaningless on a clean turn. */
+	hasError?: boolean;
+}
+
+export function buildQuestions(projects: ProjectCandidate[], options: BuildOptions = {}): QuestionSpec[] {
 	const questions: QuestionSpec[] = [];
 
 	if (projects.length > 0) {
@@ -199,6 +228,25 @@ export function buildQuestions(projects: ProjectCandidate[]): QuestionSpec[] {
 			options: SCOPE,
 		}
 	);
+
+	// Only asked when the turn actually failed: the error text is in the state.
+	if (options.hasError) {
+		questions.push(
+			{
+				id: "error_kind",
+				kind: "choice",
+				instructions: "What kind of failure was this turn's error?",
+				options: ERROR_KIND,
+			},
+			{
+				id: "error_transient",
+				kind: "boolean",
+				instructions: "Would a plain retry plausibly succeed without any change?",
+				yesHint: "transient: overload, rate limit, network blip",
+				noHint: "needs a change: credentials, context size, input, a bug",
+			}
+		);
+	}
 
 	return questions;
 }
@@ -396,6 +444,12 @@ export function renderLine(answers: TurnCardAnswers, questions?: QuestionSpec[])
 
 	const attention = label("attention", "attention");
 	if (attention) parts.push(`needs ${attention}`);
+
+	const errorKind = label("error_kind", "error_kind");
+	if (errorKind) {
+		const transient = answers.error_transient?.value === "yes";
+		parts.push(`error ${errorKind}${transient ? " (retryable)" : ""}`);
+	}
 
 	return parts.join(" · ");
 }
