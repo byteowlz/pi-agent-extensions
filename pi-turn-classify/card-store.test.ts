@@ -145,14 +145,56 @@ describe("writing", () => {
 		}
 	});
 
-	test("keeps only the most recent `keep` cards", () => {
+	test("an ordinary session keeps every turn (the budget only binds pathological ones)", () => {
+		const dir = tmp();
+		try {
+			const options = { cardsDir: dir };
+			// 30 turns is the median session here.
+			for (let turn = 1; turn <= 30; turn += 1) writeSessionCard(options, card({ turn }));
+			const document = readSessionCards(options, "sess-1");
+			expect(document?.turns).toHaveLength(30);
+			expect(document?.turns.map((entry) => entry.turn)).toEqual(Array.from({ length: 30 }, (_, index) => index + 1));
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("a pathological session stays inside the byte budget, dropping only old full cards", () => {
+		const dir = tmp();
+		try {
+			// 400 turns of fat cards: far past any observed session, and past the budget.
+			const fat = card({
+				...card(),
+				answers: Object.fromEntries(
+					Array.from({ length: 8 }, (_, index) => [
+						`q${index}`,
+						{ value: "v", confidence: 0.9, probabilities: { alpha: 0.5, beta: 0.5 } },
+					])
+				),
+			});
+			for (let turn = 1; turn <= 400; turn += 1) writeSessionCard({ cardsDir: dir }, { ...fat, turn, line: `t${turn}` });
+
+			const document = readSessionCards({ cardsDir: dir }, "sess-1");
+			const bytes = fs.statSync(path.join(dir, "sess-1.json")).size;
+			expect(bytes).toBeLessThanOrEqual(512 * 1024);
+			// full cards were shed…
+			expect(document?.turns.length).toBeLessThan(400);
+			// …but the newest survives and the whole story is still in the lines
+			expect(document?.latest.turn).toBe(400);
+			expect(document?.history.map((entry) => entry.turn)).toEqual(Array.from({ length: 400 }, (_, index) => index + 1));
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("an explicit keep still wins when a caller wants a hard cap", () => {
 		const dir = tmp();
 		try {
 			const options = { cardsDir: dir, keep: 3 };
 			for (let turn = 1; turn <= 6; turn += 1) writeSessionCard(options, card({ turn }));
 			const document = readSessionCards(options, "sess-1");
 			expect(document?.turns.map((entry) => entry.turn)).toEqual([4, 5, 6]);
-			expect(document?.latest.turn).toBe(6);
+			expect(document?.history.map((entry) => entry.turn)).toEqual([1, 2, 3, 4, 5, 6]);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}

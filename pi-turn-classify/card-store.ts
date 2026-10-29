@@ -34,16 +34,23 @@ import type { TurnCard } from "./schema.js";
 
 export const CARD_STORE_VERSION = 1;
 /**
- * How many *full* cards to keep per session.
+ * Size budget for one session's sidecar.
  *
- * Measured: a full card is ~1.0 kB (option probabilities included), a line-only
- * entry ~75 B. Keeping every full card for a 200-turn session costs ~208 kB; the
- * sidecar exists to make listing cheap, so full detail is bounded and the history
- * is kept as lines instead.
+ * The cost that matters is not disk (a full card is ~1 kB and the median session
+ * has 30 turns, so keeping every turn is ~30 kB) but *per-row read cost* and the
+ * full-document rewrite on each turn. Bounding bytes bounds both, while letting
+ * every ordinary session keep its complete history.
+ *
+ * Measured on the 200 largest sessions here: median 30 turns, max 661. So this
+ * budget keeps every turn of a normal session (~30 kB) and every line of even the
+ * longest one, only shedding the oldest *full* cards of pathological sessions
+ * (their lines stay).
  */
-export const DEFAULT_KEEP = 20;
-/** How many line-only history entries to keep (complete scrollback, ~75 B each). */
-export const DEFAULT_HISTORY_LIMIT = 500;
+export const DEFAULT_MAX_BYTES = 512 * 1024;
+/** Always keep at least this many full cards, even under an absurd budget. */
+export const MIN_FULL_CARDS = 5;
+/** Hard stop for the line history, far above any observed session (max 661). */
+export const DEFAULT_HISTORY_LIMIT = 5000;
 
 /** One session's sidecar document. */
 export interface SessionCardFile {
@@ -69,10 +76,12 @@ export interface CardStoreOptions {
 	agentDir?: string;
 	/** Explicit override for the cards directory. */
 	cardsDir?: string;
-	/** Cards kept per session (full detail). */
+	/** Explicit cap on full cards; normally the byte budget decides. */
 	keep?: number;
 	/** Line-only history entries kept per session. */
 	historyLimit?: number;
+	/** Size budget for the document (default DEFAULT_MAX_BYTES). */
+	maxBytes?: number;
 }
 
 export function defaultAgentDir(): string {
@@ -112,8 +121,9 @@ export function readSessionCards(options: CardStoreOptions, sessionId: string): 
  * undefined when the write was impossible (a sidecar is never worth a failure).
  */
 export function writeSessionCard(options: CardStoreOptions, card: TurnCard): SessionCardFile | undefined {
-	const keep = Math.max(1, options.keep ?? DEFAULT_KEEP);
-	const historyLimit = Math.max(keep, options.historyLimit ?? DEFAULT_HISTORY_LIMIT);
+	const keep = options.keep ? Math.max(1, options.keep) : Number.POSITIVE_INFINITY;
+	const historyLimit = Math.max(1, options.historyLimit ?? DEFAULT_HISTORY_LIMIT);
+	const maxBytes = Math.max(4096, options.maxBytes ?? DEFAULT_MAX_BYTES);
 	const dir = cardsDirectory(options);
 	try {
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -121,7 +131,7 @@ export function writeSessionCard(options: CardStoreOptions, card: TurnCard): Ses
 		const previous = existing?.turns ?? [];
 		// Same session + same turn = the same row, re-classified.
 		const withoutDuplicates = previous.filter((entry) => entry.turn !== card.turn);
-		const turns = [...withoutDuplicates, card].sort((a, b) => a.turn - b.turn).slice(-keep);
+		const allTurns = [...withoutDuplicates, card].sort((a, b) => a.turn - b.turn).slice(-keep);
 
 		// The history keeps one line per turn, including turns whose full card has
 		// already rolled out of `turns`.
@@ -132,7 +142,10 @@ export function writeSessionCard(options: CardStoreOptions, card: TurnCard): Ses
 			.sort((a, b) => a.turn - b.turn)
 			.slice(-historyLimit);
 
-		const document: SessionCardFile = {
+		// Keep every full card that fits the budget; the oldest ones fall out first
+		// (their lines remain in `history`, so nothing about the story is lost).
+		let turns = allTurns;
+		const makeDocument = (): SessionCardFile => ({
 			version: CARD_STORE_VERSION,
 			sessionId: card.sessionId,
 			...(card.sessionFile ? { sessionFile: card.sessionFile } : {}),
@@ -141,7 +154,12 @@ export function writeSessionCard(options: CardStoreOptions, card: TurnCard): Ses
 			turns,
 			history,
 			updatedAt: new Date().toISOString(),
-		};
+		});
+		let document = makeDocument();
+		while (turns.length > MIN_FULL_CARDS && JSON.stringify(document, null, 2).length > maxBytes) {
+			turns = turns.slice(Math.ceil((turns.length - MIN_FULL_CARDS) / 2) || 1);
+			document = makeDocument();
+		}
 
 		const path = join(dir, cardFileName(card.sessionId));
 		const staged = `${path}.tmp-${process.pid}`;
