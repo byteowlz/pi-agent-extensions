@@ -1,0 +1,36 @@
+{
+  "name": "@byteowlz/pi-schedule",
+  "version": "0.1.0",
+  "description": "Recurring in-session prompts (/schedule): session-scoped, or project-scoped and owned by the project captain",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "schedule"
+  ],
+  "files": [
+    "*.ts",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "homepage": "https://github.com/byteowlz/pi-agent-extensions/tree/main/pi-schedule",
+  "bugs": {
+    "url": "https://github.com/byteowlz/pi-agent-extensions/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/byteowlz/pi-agent-extensions.git",
+    "directory": "pi-schedule"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.0.0"
+  },
+  "license": "MIT"
+}

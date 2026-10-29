@@ -6,33 +6,18 @@ import * as path from "node:path";
 import {
 	CAPTAIN_ENTRY_TYPE,
 	type CaptainClaim,
-	MIN_INTERVAL_MS,
-	actionId,
-	actionsPath,
-	addAction,
 	claimPath,
 	clearClaim,
 	encodeProject,
-	findAction,
-	formatActions,
 	formatCaptainLine,
 	formatCaptainStatus,
-	formatDuration,
-	formatInterval,
 	judgeClaim,
-	markActionRun,
 	parseAgentList,
 	parseClaim,
-	parseInterval,
 	projectSessions,
-	readActions,
 	readCaptainEntry,
 	readClaim,
-	removeAction,
-	setActionEnabled,
-	skdlrExportCommand,
 	summarizeCaptain,
-	writeActions,
 	writeClaim,
 } from "./captain";
 
@@ -244,126 +229,5 @@ describe("introspection summary", () => {
 		expect(summarizeCaptain("/work/alpha", "sess-2", dir).self).toBe(false);
 		// a different project never inherits the claim
 		expect(summarizeCaptain("/work/beta", "sess-1", dir).claimed).toBe(false);
-	});
-});
-
-describe("interval parsing", () => {
-	test("accepts compact units, words and aliases", () => {
-		expect(parseInterval("30m")).toEqual({ intervalMs: 1_800_000 });
-		expect(parseInterval("2h")).toEqual({ intervalMs: 7_200_000 });
-		expect(parseInterval("1d")).toEqual({ intervalMs: 86_400_000 });
-		expect(parseInterval("every 15 minutes")).toEqual({ intervalMs: 900_000 });
-		expect(parseInterval("hourly")).toEqual({ intervalMs: 3_600_000 });
-		expect(parseInterval("Daily")).toEqual({ intervalMs: 86_400_000 });
-		expect(parseInterval("  45s ")).toEqual({ intervalMs: 45_000 });
-	});
-
-	test("rejects nonsense, zero and dangerously short intervals", () => {
-		for (const bad of ["", "soon", "hourlyish", "0m", "-5m", "2 fortnights"]) {
-			expect(parseInterval(bad)).toHaveProperty("error");
-		}
-		const tooShort = parseInterval("5s");
-		expect("error" in tooShort && tooShort.error).toContain("minimum");
-		expect(MIN_INTERVAL_MS).toBeGreaterThanOrEqual(10_000);
-	});
-
-	test("formats intervals back into the same vocabulary", () => {
-		expect(formatInterval(1_800_000)).toBe("30m");
-		expect(formatInterval(7_200_000)).toBe("2h");
-		expect(formatInterval(86_400_000)).toBe("1d");
-		expect(formatDuration(4 * 60_000)).toBe("4m");
-		expect(formatDuration(38_000)).toBe("38s");
-		expect(formatDuration(2 * 3_600_000)).toBe("2h");
-	});
-});
-
-describe("action store", () => {
-	test("adds, lists, resolves, pauses and removes project actions", () => {
-		const dir = tmp();
-		const first = addAction("/work/alpha", { text: "check board again", intervalMs: 3_600_000 }, dir);
-		expect(first.action.id).toBe("check-board-again");
-		expect(readActions("/work/alpha", dir).map((a) => a.id)).toEqual(["check-board-again"]);
-		// project-scoped: another project starts empty
-		expect(readActions("/work/beta", dir)).toEqual([]);
-
-		const second = addAction("/work/alpha", { text: "check board again", intervalMs: 60_000 }, dir);
-		expect(second.action.id).toBe("check-board-again-2");
-		expect(actionId("check board again", second.actions)).toBe("check-board-again-3");
-
-		// 1-based index and id prefix both resolve
-		expect(findAction(second.actions, "1")?.id).toBe("check-board-again");
-		expect(findAction(second.actions, "check-board-again-2")?.id).toBe("check-board-again-2");
-		expect(findAction(second.actions, "check-board")?.id).toBeUndefined();
-
-		const paused = setActionEnabled("/work/alpha", "1", false, dir);
-		expect(paused.action?.enabled).toBe(false);
-		expect(readActions("/work/alpha", dir)[0]?.enabled).toBe(false);
-
-		const { removed } = removeAction("/work/alpha", "check-board-again-2", dir);
-		expect(removed?.id).toBe("check-board-again-2");
-		expect(readActions("/work/alpha", dir).map((a) => a.id)).toEqual(["check-board-again"]);
-	});
-
-	test("marks runs without disturbing other actions or unknown ids", () => {
-		const dir = tmp();
-		addAction("/work/alpha", { text: "one", intervalMs: 60_000 }, dir);
-		addAction("/work/alpha", { text: "two", intervalMs: 60_000 }, dir);
-		markActionRun("/work/alpha", "one", "2026-10-29T11:00:00.000Z", dir);
-		const actions = readActions("/work/alpha", dir);
-		expect(actions[0]?.lastRunAt).toBe("2026-10-29T11:00:00.000Z");
-		expect(actions[1]?.lastRunAt).toBeUndefined();
-		markActionRun("/work/alpha", "nope", "2026-10-29T11:00:00.000Z", dir);
-		expect(readActions("/work/alpha", dir)).toHaveLength(2);
-	});
-
-	test("malformed stores read as no actions", () => {
-		const dir = tmp();
-		const file = actionsPath("/work/alpha", dir);
-		fs.mkdirSync(path.dirname(file), { recursive: true });
-		fs.writeFileSync(file, JSON.stringify({ version: 2, actions: [{ id: "x", text: "y", intervalMs: 1000 }] }));
-		expect(readActions("/work/alpha", dir)).toEqual([]);
-		fs.writeFileSync(
-			file,
-			JSON.stringify({
-				version: 1,
-				actions: [
-					{ id: "", text: "y", intervalMs: 1000 },
-					{ id: "ok", text: "t", intervalMs: 0 },
-				],
-			})
-		);
-		expect(readActions("/work/alpha", dir)).toEqual([]);
-		// a valid round-trip through writeActions keeps unknown fields out
-		writeActions("/work/alpha", [], dir);
-		expect(readActions("/work/alpha", dir)).toEqual([]);
-	});
-
-	test("listing shows interval, pause state, id and next run", () => {
-		const dir = tmp();
-		addAction("/work/alpha", { text: "check board", intervalMs: 3_600_000 }, dir);
-		const actions = readActions("/work/alpha", dir);
-		const fresh = formatActions(actions);
-		expect(fresh).toContain("1. [1h] check board");
-		expect(fresh).toContain("id check-board");
-
-		const ran = [{ ...(actions[0] as (typeof actions)[number]), lastRunAt: new Date(1_000_000).toISOString() }];
-		expect(formatActions(ran, 1_000_000 + 15 * 60_000)).toContain("next in 45m");
-		expect(formatActions(ran, 1_000_000 + 2 * 3_600_000)).toContain("due now");
-		expect(formatActions([{ ...ran[0]!, enabled: false }])).toContain("(paused)");
-		expect(formatActions([])).toContain("/captain schedule");
-	});
-});
-
-describe("skdlr export", () => {
-	test("produces an add command with schedule, workdir and a quoted prompt", () => {
-		const dir = tmp();
-		addAction("/work/alpha", { text: 'check board and say "hi"', intervalMs: 3_600_000 }, dir);
-		const [action] = readActions("/work/alpha", dir);
-		const command = skdlrExportCommand("/work/alpha", action!);
-		expect(command).toStartWith("skdlr add 'captain-alpha-check-board-and-say-hi'");
-		expect(command).toContain("--schedule '1h'");
-		expect(command).toContain("--workdir '/work/alpha'");
-		expect(command).toContain("pi -p");
-		expect(command).toContain("--description");
 	});
 });
