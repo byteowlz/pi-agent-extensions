@@ -153,19 +153,69 @@ Both are plain HTTP POSTs; the extension speaks either:
 }
 ```
 
-### Model quirks handled
+### Model quirks handled (both directions, learned live)
 
-- **D3 checkpoints reject `instructions` with 400** (their prompt is fixed by the
-  checkpoint). `"instructions": "auto"` omits them for `vllm-sr/d3*`, and a 400
-  mentioning instructions triggers exactly one retry without them.
-- System One caps `choice` at 26 options; the schema caps at 24 + 2.
-- `score` answers come back as an expected level index; they are rounded to the
-  nearest level id and clamped.
+Deployments of the *same* model family disagree about `instructions`:
+
+- a **vLLM D3 checkpoint** rejects them with 400 — its prompt is fixed
+- the **vllm-sr System One deployment** serving `vllm-sr/d3-lite` **requires** them
+  (`400 missing wire field instructions`)
+
+So `instructions: "auto"` is not a model-name guess; it starts from a name hint and
+then **flips once in whichever direction the server asks for** (rejection →
+retry without, required → retry with). An explicit `always`/`never` is never
+flipped: if you pin a mode, the error surfaces.
+
+`noul` criteria are always sent as `{ "true": ..., "false": ... }`, never `null`:
+one of the live servers rejects a null criteria with `expected JSON object`.
+
+A yes/no answer that reports `noul` but no `confidence` (both live servers do
+this) gets `confidence = max(p, 1-p)`, so a yes/no is not reported as a
+0-confidence guess.
 
 ## Benchmark
 
 The point of a decision model is cheap decisions, so the harness reports what
 lets you trust one: accuracy, **ECE**, high-confidence accuracy, and latency.
+
+### Measured (2026-10-29, 14 hand-labelled turns)
+
+Both models reached through the EAVS gateway (`/<provider>/v1/systemone`), 7
+projects as candidates, one request per turn:
+
+| | `vllm-sr/d3-lite` | `jev-1.14.0` |
+| --- | --- | --- |
+| accuracy | **78.6%** | 75.5 – 76.5% |
+| mean confidence | 66.5% | 80.3% |
+| ECE (lower is better) | 0.194 | **0.057 – 0.066** |
+| high-confidence (≥0.80) share | 34.7% | 64.3% |
+| accuracy at high confidence | 100% | 92.1% |
+| latency mean / p95 | 768 / 1027 ms | **230 / 459 ms** |
+
+Per question (accuracy, worst first):
+
+| question | d3-lite | jev |
+| --- | --- | --- |
+| `project` | 92.9% | **100%** |
+| `project_mismatch` | 85.7% | **100%** |
+| `activity` | **92.9%** | 92.9% |
+| `status` | 50.0% | 85.7% |
+| `attention` | 78.6% | 42.9% |
+| `artifact` | 64.3% | **78.6%** |
+| `scope` | **85.7%** | 35.7% |
+
+Readings that matter more than the totals:
+
+- **`project` and `project_mismatch` are the reliable part** (86-100%), which is
+  the question this extension exists for. Identifying *which* project — including
+  when the cwd lies — is learnable at 0.8B.
+- **jev is the better-calibrated and much faster model here** (ECE 0.06 vs 0.19,
+  230 ms vs 768 ms); d3-lite is systematically under-confident, so its cards will
+  say "unclear" more often than its accuracy warrants.
+- **`status` and `scope` are weak** (50% / 36-86%) — they are the first candidates
+  to drop or reframe (a "how far" question is genuinely ambiguous mid-turn).
+- 14 samples is a *smoke* bench, not calibration data. The point is the harness:
+  label your own turns, re-run, then fit cutoffs.
 
 ```bash
 bun run pi-turn-classify/bench.ts \

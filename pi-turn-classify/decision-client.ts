@@ -61,9 +61,22 @@ export class DecisionError extends Error {
 	}
 }
 
-/** D3 checkpoints never accept `instructions`: the prompt is fixed. */
+/**
+ * Whether a model name *suggests* instructions are welcome.
+ *
+ * This is only a first guess, never a decision: the same family disagrees across
+ * deployments. A vLLM D3 checkpoint rejects `instructions` with 400 (its prompt
+ * is fixed), while a vllm-sr System One deployment serving the same d3-lite
+ * requires them ("missing wire field instructions"). `classify()` therefore
+ * self-heals in both directions on a 400 that mentions instructions.
+ */
 export function supportsInstructions(model: string): boolean {
 	return !/(^|\/)d3(-|$|\/)/i.test(model.trim());
+}
+
+/** True when the error says instructions are missing (server requires them). */
+function isInstructionsRequired(status: number | undefined, body: string): boolean {
+	return status === 400 && /missing wire field instructions|instructions (is|are) required/i.test(body);
 }
 
 function baseUrl(endpoint: string): string {
@@ -172,7 +185,16 @@ export function parseSystemOneAnswers(raw: unknown, questions: QuestionSpec[]): 
 		const entry = reported[question.id];
 		if (!entry || typeof entry !== "object") continue;
 		const value = systemOneValue(question, entry);
-		if (value !== undefined) answers[question.id] = toAnswer(value, entry);
+		if (value === undefined) continue;
+		const answer = toAnswer(value, entry);
+		// A yes/no read is itself a probability: when the server reports `noul` but
+		// no `confidence`, the distance from 0.5 is the certainty. Without this a
+		// noul answer would look like a 0-confidence guess in every report.
+		if (answer.confidence === undefined && question.kind === "boolean") {
+			const yes = asNumber(entry.noul);
+			if (yes !== undefined) answer.confidence = Math.max(yes, 1 - yes);
+		}
+		answers[question.id] = answer;
 	}
 	return answers;
 }
@@ -300,13 +322,25 @@ export async function classify(request: DecisionRequest): Promise<DecisionResult
 				signal
 			);
 		} catch (error) {
-			// Some checkpoints (D3) reject `instructions`; retry once without them.
-			if (error instanceof DecisionError && includeInstructions && isInstructionsRejection(error.status, error.message)) {
-				includeInstructions = false;
-				response = await post(path, client, buildBody(client, questions, state, request.instructions, false), fetchImpl, signal);
-			} else {
-				throw error;
-			}
+			// Deployments disagree about `instructions`: a vLLM D3 checkpoint rejects
+			// them (its prompt is fixed), while a vllm-sr System One deployment serving
+			// the same d3-lite requires them ("missing wire field instructions").
+			// Flip the mode once, in whichever direction the server asks for.
+			const askedFor = error instanceof DecisionError;
+			const flip =
+				askedFor &&
+				client.instructions === "auto" &&
+				((includeInstructions && isInstructionsRejection(error.status, error.message)) ||
+					(!includeInstructions && isInstructionsRequired(error.status, error.message)));
+			if (!flip) throw error;
+			includeInstructions = !includeInstructions;
+			response = await post(
+				path,
+				client,
+				buildBody(client, questions, state, request.instructions, includeInstructions),
+				fetchImpl,
+				signal
+			);
 		}
 
 		const answers =

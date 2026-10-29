@@ -106,6 +106,14 @@ describe("sample loading", () => {
 	test("reads the bundled seed set", () => {
 		const samples = loadSamples(path.join(import.meta.dir, "samples", "seed.jsonl"));
 		expect(samples.length).toBeGreaterThanOrEqual(12);
+		// The project question only exists when candidates are supplied, so build the
+		// schema from the projects the seed itself expects.
+		const candidates = [
+			...new Set(
+				samples.map((entry) => entry.expect.project).filter((id): id is string => typeof id === "string" && id !== "other")
+			),
+		].map((id) => ({ id }));
+		const questions = buildQuestions(candidates);
 		for (const entry of samples) {
 			expect(entry.id).toBeTruthy();
 			expect(typeof entry.digest.cwd).toBe("string");

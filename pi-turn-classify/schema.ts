@@ -47,6 +47,13 @@ export interface QuestionSpec {
 	options?: ChoiceOption[];
 	/** For `score`: ordered levels, lowest first. */
 	levels?: ChoiceOption[];
+	/**
+	 * For `boolean`: the meaning of each side. Servers differ here — some accept
+	 * `criteria: null`, others reject it and want descriptions — so both sides
+	 * always carry text and `null` is never sent.
+	 */
+	yesHint?: string;
+	noHint?: string;
 }
 
 /** The kind of work the turn mostly did. */
@@ -152,6 +159,8 @@ export function buildQuestions(projects: ProjectCandidate[]): QuestionSpec[] {
 			kind: "boolean",
 			instructions:
 				"Is the work actually about a different project than the working directory suggests (for example editing a shared tool while working in another repo)?",
+			yesHint: "the work belongs to a different project than the cwd",
+			noHint: "the work belongs to the project of the cwd",
 		},
 		{
 			id: "activity",
@@ -235,8 +244,13 @@ export function toSystemOneQuestions(
 		if (question.kind === "choice") {
 			rendered[question.id] = { type: "choice", ...base, criteria: choiceCriteria(question.options ?? []) };
 		} else if (question.kind === "boolean") {
-			// noul: a yes/no read. `criteria` may be omitted entirely.
-			rendered[question.id] = { type: "noul", ...base, criteria: null };
+			// noul is a yes/no read. Always send both descriptions: a null criteria
+			// is rejected by some System One servers ("expected JSON object").
+			rendered[question.id] = {
+				type: "noul",
+				...base,
+				criteria: { true: question.yesHint ?? "yes", false: question.noHint ?? "no" },
+			};
 		} else {
 			rendered[question.id] = {
 				type: "score",
