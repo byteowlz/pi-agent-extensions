@@ -1,0 +1,38 @@
+{
+  "name": "@byteowlz/pi-session-cwd",
+  "version": "0.2.0",
+  "description": "Move a session to another working directory (its session file included), with fuzzy project switching (/cwd, /move)",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "session",
+    "cwd"
+  ],
+  "files": [
+    "*.ts",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "homepage": "https://github.com/byteowlz/pi-agent-extensions/tree/main/pi-session-cwd",
+  "bugs": {
+    "url": "https://github.com/byteowlz/pi-agent-extensions/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/byteowlz/pi-agent-extensions.git",
+    "directory": "pi-session-cwd"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.0.0",
+    "@earendil-works/pi-tui": "1.0.0"
+  },
+  "license": "MIT"
+}

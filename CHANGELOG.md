@@ -4,7 +4,19 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
-### pi-private: per-session-file age sealing (2.31.0)
+### pi-tui-rpc: bounded event frames (2.38.0)
+
+- **pi-tui-rpc**: forwarded events are projected to their observed shape before
+  fanout. `turn_end` no longer carries pi's handler plumbing (`context` is the
+  whole conversation), inline image `data` is replaced by `omittedBytes`, and an
+  event still over 512 KiB keeps only its identity fields plus
+  `omitted: {reason, bytes}`. A client that falls behind now receives just the
+  newest pending `message_update` in order instead of being disconnected by
+  quadratic partial-message re-sends. Previously every turn end and every
+  screenshot read exceeded the hub backlog cap, disconnecting all clients about
+  once per tool call.
+
+### pi-private: per-session-file age sealing (2.38.0)
 
 - **pi-private 0.2.0:** `/private` and `/private nohistory` now require age
   before Pi starts, encrypt individual JSONL files after clean exit, decrypt
@@ -15,7 +27,7 @@ All notable changes to pi-agent-extensions will be documented in this file.
   limitation and an explicit recovery command. Age/YubiKey binaries were not
   installed for real integration tests; unit tests use a mock age executable.
 
-### pi-private: isolated fresh-session profiles (2.30.0)
+### pi-private: isolated fresh-session profiles (2.38.0)
 
 - **pi-private 0.1.0 (new):** `/private` starts a fresh session with an explicit
   extension allowlist (including the sibling history-search entry point); `/private
@@ -26,6 +38,178 @@ All notable changes to pi-agent-extensions will be documented in this file.
   Added config schema, real Pi RPC boot and propagation tests, and an optional
   manual age recipient archive helper. Password/YubiKey live-session encryption
   remains unimplemented; sessions are plaintext and the README documents limits.
+
+### Last question as a pi-styled card (2.37.0)
+
+- **pi-last-question 0.2.0**: the widget above the prompt box is now a card drawn
+  with pi's own primitives — `Box(1, 0, theme.bg("customMessageBg"))` for the
+  padded background rectangle, an `accent` left rule per row, the timestamp in
+  `customMessageLabel`, the question in `customMessageText`, and the shortcut hint
+  right-aligned in `dim`. The hint degrades (`⌥Q expand` → `⌥Q` → omitted) before
+  the timestamp is cut, and every row is padded to the widget width so narrow
+  terminals stay a true rectangle.
+- The age label is replaced by an **absolute local timestamp**
+  (`10/29/2026, 12:00 PM`): the widget only re-renders when the branch changes, so
+  a relative "15s ago" would freeze and misstate the question's age.
+
+### Last question above the prompt box (2.36.0)
+
+- **pi-last-question 0.1.0**: new extension — pins the most recent user question
+  in a two-line widget directly above the editor (`ui.setWidget(...,
+  placement:"aboveEditor")`), with an age label and a `… ⌥Q` marker only when the
+  text is cut. `ctrl+alt+q` expands the full question in a scrollable overlay
+  (`enter` inserts it into the prompt box, `y` copies, `esc` closes);
+  `ctrl+alt+j` jumps straight there by putting the full text in the prompt box,
+  appending to a draft; `/last-question` reports it on surfaces without a TUI.
+  Tracks the branch (submit, start/resume, tree navigation) and ignores assistant
+  turns, tool results and custom entries.
+
+### Card sidecar for list views, and no more risk question (2.37.0)
+
+- **pi-turn-classify 0.4.0**: cards are now also written to a per-session sidecar
+  at `<agentDir>/turn-classify/cards/<sessionId>.json` (one small file per session,
+  atomic rename, 0600, last 10 turns plus `latest`). The session file remains the
+  source of truth — cards travel with the session and cannot drift from the
+  transcript — but a list view cannot read transcripts: this machine has 2,865
+  session files and the largest is 94 MB, so rendering 50 rows would read
+  gigabytes. Per-session files mean live sessions never contend, a consumer reads
+  one small file per row, and deleting the directory only costs a re-read. Stale
+  sidecars are pruned on session start; `cardsDir` overrides the location.
+- **The `risk` question is gone.** Five-level severity scored 25% (d3) / 37.5%
+  (jev) — worse than guessing, for both — because consequence is a property of
+  what an action does to the world, not of a turn summary. Removing it lifted
+  overall accuracy (d3 75.6% -> 81.4%). The schema is 8 questions on a clean turn,
+  10 on a failed one.
+
+### Error classification and a background corpus (2.36.0)
+
+- **pi-turn-classify 0.3.0**: failed turns are now classified, not just flagged.
+  The digest keeps the verbatim provider/tool error message (1200 chars, never
+  trimmed away) and two questions are asked only for such turns: `error_kind`
+  (provider_overloaded, rate_limited, auth, context_overflow, network,
+  content_filter, invalid_request, bad_response, tool_failed, cancelled, unclear)
+  and `error_transient`. Provider error strings churn constantly, and this is the
+  strongest case for a decision model in the whole schema — measured 83-100% on
+  the seed set.
+- A tool failure only fails a turn when the turn produced no answer; a recovered
+  `ls: no such file` is a hiccup. False positives on real sessions: 40% -> 7%.
+- Fixed `agent_end` handling: pi passes `messages`, so the closing answer and the
+  `errorMessage` now come from the turn itself.
+- **Background dataset**: `dataset.path` appends every finished turn (digest,
+  model answers with raw probabilities, error text, provenance) to JSONL with size
+  rotation; failed classifications are recorded too, with the reason. The labeler
+  can read it directly (`--from-dataset`), and only human labels ever become
+  scoring samples.
+- Schema v2: `work_done` + `blocked` replace the five-way `status`.
+- Measured: d3-lite 75.6-81.0% / ECE 0.107-0.129, jev 74.4-78.2% / ECE 0.055-0.070.
+  `risk` scores 25%/37.5% and should become a binary "irreversible action?".
+
+### skdlr-owned timing with in-session delivery (2.35.0)
+
+- **pi-schedule 0.2.0**: skdlr is now a first-class *optional* integration instead
+  of an export. `/schedule link <n|id> --schedule "<cron|natural>" [--queue]`
+  registers a real skdlr schedule whose command is this extension's self-contained
+  deliverer, which hands the prompt to the running session over a private inbox
+  socket (`schedule/inbox/<sessionId>.sock`, dir 0700, socket 0600, absolute
+  `--agent-dir` so a systemd unit needs no environment). skdlr owns the timing;
+  the extension owns delivery into the live session, which `pi -p` cannot do
+  without opening a different session.
+- Linking is exclusive — a linked action stops using its in-session timer, so it
+  cannot fire twice; `/schedule unlink` removes the skdlr schedule (with `--yes`,
+  verified by re-listing) and restores the timer; `/schedule skdlr` reports
+  backend status and linked actions. Link/unlink resolve selectors across both
+  scopes so `/schedule link 1` works on a project action without `--project`.
+- `--queue` parks a run that finds no live session (bounded to 20 entries / 24 h);
+  the next start delivers them prefixed `[scheduled <age> ago]` and reports
+  dropped stale ones. Without it a missed run fails visibly (deliverer exit 1).
+- Quoted-argument parsing (`splitArgs`) so cron expressions like
+  `--schedule "0 9 * * 1-5"` and prompts with spaces survive intact.
+- Inbox hardening: created only for long-lived sessions, idempotent stale-socket
+  clearing, removed on shutdown, oversized payloads and silent connections
+  rejected instead of buffered.
+
+### Turn labelling UI for calibration (2.35.0)
+
+- **pi-turn-classify 0.2.0**: `labeler/` — a web UI for hand-labelling real agent
+  turns, because 14 self-written seed turns cannot decide between d3 and jev or
+  calibrate confidence. `extract.ts` turns the session store into digests
+  (closing answer, tool trail, files, commands, cwd, git remotes; deduplicated
+  across forks; pleasantries dropped) and `server.ts` serves them tailnet-only
+  with seven keyboard-driven questions. `labels.jsonl` is already bench-sample
+  format, so the corpus feeds `bench.ts` and a calibration fit directly.
+  Registered in owlznest as "turn labeler".
+- The labeler asks the **v2** field set (`work_done` + `blocked` + `attention`
+  instead of the five-way `status`), matching the intended display line
+  `<dir> working on <topic>[ in <target>] · <working|idle|blocked> <reason>`.
+
+### Recurring in-session prompts, decoupled from the captain (2.34.0)
+
+- **pi-schedule 0.1.0**: new extension — `/schedule <interval> "<prompt>"` delivers
+  recurring prompts into the live session (`followUp` while streaming) so a
+  periodic check keeps the session's own context. Two scopes: **session**
+  (`~/.pi/agent/schedule/sessions/<sessionId>.json`, follows resume/reload and is
+  not inherited by forks) and **project** (`.../projects/<encoded-cwd>.json`).
+  Project actions arm in exactly one session — the one holding the project's
+  captain claim — and stay dormant and explicit when no captain is claimed, so a
+  project check never fires twice. Every tick re-reads the store and re-checks
+  ownership, so pause/resume/edit/remove and captain handover take effect without
+  a restart; a prompt refused during compaction is parked and flushed on
+  `session_compact`/`_failed`. Commands: `list`, `pause`, `resume`, `run`,
+  `remove`, `export`. Publishes a `schedule` status segment (`2·14m`).
+  `/schedule export` prints the equivalent headless `skdlr add …` per action;
+  skdlr is intentionally not a runtime dependency (a skdlr run is a separate
+  `pi -p` with its own session and no access to live state).
+- **pi-session-tools**: `/captain` no longer owns scheduling. The scheduler that
+  briefly lived behind `/captain schedule` moved to pi-schedule, which reads the
+  claim file to decide where project-scoped checks run — captain stays a
+  designation about intake, scheduling stays a general capability, and the
+  captain badge no longer encodes scheduled work.
+
+### Fuzzy project switching (2.33.0)
+
+- **pi-session-cwd 0.2.0**: `/move` moves a session to a project by fuzzy name
+  (`/move foxline`), or opens a picker over configured roots when called bare.
+  An ambiguous query (`/move fox` matching foxline and foxhole) asks with a
+  pre-filtered picker instead of guessing; exact/clear-prefix matches move
+  immediately; RPC/print error with the candidate list. Roots are configurable
+  via `.pi/session-cwd.json` or `~/.pi/agent/session-cwd.json`
+  (`roots`, `depth`, `includeSessionDirs`), defaulting to `~/work` and
+  `~/byteowlz` with a safe fallback when the file is missing or malformed.
+  `/move` also accepts literal paths. Replaces `/mvcwd`. The move already ends
+  in the new session: `switchSession` re-homes the runtime, so pi reports
+  "Resumed session" and later turns resolve the new project.
+
+### Turn classification with a decision model (2.32.0)
+
+- **pi-turn-classify 0.1.0**: new extension — classifies every finished turn with
+  a decision model (Jeff / D3 / Clef) instead of a chat model, and stores a turn
+  card as a `pi-turn-classify:card/v1` custom entry (never LLM context). Seven
+  closed questions: which project the work really belongs to (with
+  `project_mismatch`, so working in one directory for another project is
+  visible), activity, status, attention needed, risk (score), artifact and scope.
+  The one-line card is composed from answer ids, so it cannot invent content.
+- Speaks both APIs: TypeSafe System One (`/v1/systemone`) and the OpenAI
+  Decisions API (`/v1/decisions`). D3 checkpoints reject `instructions` with 400,
+  so `"instructions": "auto"` omits them for `vllm-sr/d3*` and a 400 mentioning
+  instructions retries once without them.
+- Calibration-aware: choices below `confidenceFloor` render as `unclear`, a 0.5
+  yes/no counts as no answer, raw probabilities are always stored, and `bench.ts`
+  reports accuracy, ECE, high-confidence accuracy and latency over a 14-turn
+  hand-labelled seed set. Off by default; `/classify off` is a no-reload kill
+  switch; classification never blocks or fails a turn.
+
+### Move a session to another working directory (2.30.0)
+
+- **pi-session-cwd 0.1.0**: new extension — `/cwd <path>` moves the running
+  session to another working directory and takes the session file with it:
+  header `cwd` rewritten, JSONL staged and moved into the target cwd's session
+  directory, then `ctx.switchSession` rebuilds the runtime so tools, project
+  `AGENTS.md`/settings and extension cwd follow. History, branches, labels,
+  session name and other in-session state survive because the file moves rather
+  than being rewritten. `/mvcwd` picks from directories that already have
+  sessions; `/cwd-history` lists moves (recorded as `pi-session-cwd:move/v1`
+  entries, never LLM context). Interactive surfaces confirm first; RPC/print
+  require `--force` so a remote one-liner cannot silently relocate a session.
 
 ### pi-openui: terminal-native navigation, sharp corners (2.29.2)
 

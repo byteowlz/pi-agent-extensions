@@ -1,0 +1,37 @@
+{
+  "name": "@byteowlz/pi-last-question",
+  "version": "0.2.0",
+  "description": "Show your last question above the prompt box (2 lines, expand or insert with a shortcut)",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "tui"
+  ],
+  "files": [
+    "*.ts",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "homepage": "https://github.com/byteowlz/pi-agent-extensions/tree/main/pi-last-question",
+  "bugs": {
+    "url": "https://github.com/byteowlz/pi-agent-extensions/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/byteowlz/pi-agent-extensions.git",
+    "directory": "pi-last-question"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.0.0",
+    "@earendil-works/pi-tui": "1.0.0"
+  },
+  "license": "MIT"
+}

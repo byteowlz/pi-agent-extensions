@@ -1,0 +1,45 @@
+{
+  "name": "@byteowlz/pi-turn-classify",
+  "version": "0.4.2",
+  "description": "Classify every finished agent turn with a decision model (Jeff/D3 systemone or OpenAI decisions API)",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "decision-model",
+    "jev",
+    "d3",
+    "classification"
+  ],
+  "files": [
+    "*.json",
+    "*.ts",
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md",
+    "labeler",
+    "samples"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "homepage": "https://github.com/byteowlz/pi-agent-extensions/tree/main/pi-turn-classify",
+  "bugs": {
+    "url": "https://github.com/byteowlz/pi-agent-extensions/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/byteowlz/pi-agent-extensions.git",
+    "directory": "pi-turn-classify"
+  },
+  "scripts": {
+    "bench": "bun run bench.ts"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.0.0"
+  },
+  "license": "MIT"
+}

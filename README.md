@@ -37,6 +37,11 @@ extensions and [migration evidence](./docs/pi-1-baseline.md) for proof limits.
 | [pi-statusline](./pi-statusline/) | Native TUI footer |
 | [pi-ssh-key](./pi-ssh-key/) | Session-scoped SSH keys |
 | [pi-ctx-limit](./pi-ctx-limit/) | Per-session context compaction threshold (`/ctx`) |
+| [pi-session-cwd](./pi-session-cwd/) | Move a session (and its session file) to another working directory (`/cwd`) |
+| [pi-schedule](./pi-schedule/) | Recurring in-session prompts (`/schedule`), session- or project-scoped |
+| [pi-last-question](./pi-last-question/) | Your last question above the prompt box (`ctrl+alt+q` expand, `ctrl+alt+j` insert) |
+| [pi-turn-classify](./pi-turn-classify/) | Classify each finished turn with a decision model (`/classify`) |
+| [turn labeler](./pi-turn-classify/labeler/) | Web UI to hand-label real turns (calibration corpus for the classifier) |
 | [pi-tui-rpc](./pi-tui-rpc/) | Native TUI remote control |
 | [pi-xlatch-session](./pi-xlatch-session/) | Phone-to-session sharing |
 | [pi-read-file-guard](./pi-read-file-guard/) | Oversized text guard — under review |

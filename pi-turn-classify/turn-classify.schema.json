@@ -1,0 +1,125 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/byteowlz/pi-agent-extensions/pi-turn-classify/turn-classify.schema.json",
+  "title": "pi-turn-classify configuration",
+  "description": "Classify each finished agent turn with a decision model",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Classify turns. Off by default: it is opt-in network traffic."
+    },
+    "endpoint": {
+      "type": "string",
+      "format": "uri",
+      "default": "http://100.64.0.9:8010",
+      "description": "Decision server base URL. A trailing /v1 is accepted."
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "default": "vllm-sr/d3-lite",
+      "description": "Model id as the server knows it (e.g. vllm-sr/d3-lite, Cloudflare/clef-flash)."
+    },
+    "api": {
+      "enum": [
+        "systemone",
+        "decisions"
+      ],
+      "default": "systemone",
+      "description": "systemone = TypeSafe/Jeff /v1/systemone; decisions = OpenAI Decisions API /v1/decisions."
+    },
+    "apiKey": {
+      "type": "string",
+      "description": "Optional bearer token, e.g. an EAVS virtual key."
+    },
+    "timeoutMs": {
+      "type": "integer",
+      "minimum": 100,
+      "default": 20000,
+      "description": "Per-request timeout. A timeout is reported, never retried in the turn path."
+    },
+    "instructions": {
+      "enum": [
+        "auto",
+        "always",
+        "never"
+      ],
+      "default": "auto",
+      "description": "auto omits question instructions for D3 checkpoints, which reject them with 400."
+    },
+    "confidenceFloor": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.4,
+      "description": "Choice answers below this confidence render as 'unclear' on the card."
+    },
+    "statusLine": {
+      "type": "boolean",
+      "default": true,
+      "description": "Show the latest card in the TUI status line."
+    },
+    "cardsDir": {
+      "type": "string",
+      "description": "Override the card sidecar directory. Default: <agentDir>/turn-classify/cards, one small JSON file per session, so list views never read whole transcripts."
+    },
+    "projects": {
+      "type": "array",
+      "description": "Known projects for the 'which project' question. Derived from cwd and git remotes when omitted.",
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "required": [
+              "id"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "hint": {
+                "type": "string",
+                "description": "Extra steer for the model: path, remote, or what the project is."
+              }
+            }
+          }
+        ]
+      }
+    },
+    "dataset": {
+      "type": "object",
+      "description": "Optional background corpus: append every finished turn (digest + model answers + error) to a JSONL file so a calibration set builds itself.",
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "JSONL file path; ~ is expanded."
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "default": 20971520,
+          "description": "Rotate to <path>.1 above this size."
+        },
+        "errorsOnly": {
+          "type": "boolean",
+          "default": false,
+          "description": "Record only failed turns."
+        }
+      }
+    }
+  }
+}

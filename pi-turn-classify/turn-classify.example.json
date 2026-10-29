@@ -1,0 +1,33 @@
+{
+  "enabled": true,
+  "endpoint": "http://100.64.0.9:8010",
+  "model": "vllm-sr/d3-lite",
+  "api": "systemone",
+  "timeoutMs": 20000,
+  "instructions": "auto",
+  "confidenceFloor": 0.4,
+  "statusLine": true,
+  "projects": [
+    {
+      "id": "pi-agent-extensions",
+      "hint": "pi coding agent extensions, ~/byteowlz/pi-agent-extensions"
+    },
+    {
+      "id": "eavs",
+      "hint": "LLM gateway / proxy, ~/byteowlz/eavs"
+    },
+    {
+      "id": "oqto",
+      "hint": "agent platform, ~/byteowlz/oqto-media-local"
+    },
+    {
+      "id": "wiki",
+      "hint": "knowledge wiki, ~/wiki"
+    }
+  ],
+  "dataset": {
+    "path": "~/.local/share/pi-turn-classify/dataset.jsonl",
+    "maxBytes": 20971520,
+    "errorsOnly": false
+  }
+}
