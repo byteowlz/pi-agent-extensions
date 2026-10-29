@@ -125,22 +125,26 @@ export function renderState(digest: TurnDigest): Record<string, unknown> {
 			message: clip(digest.error.message, MAX_ERROR_CHARS),
 		};
 	}
-	state.user = clip(digest.userText, 1200);
-	state.assistant = clip(digest.assistantText, 1600);
+	state.user = clip(digest.userText ?? "", 1200);
+	state.assistant = clip(digest.assistantText ?? "", 1600);
 
-	if (digest.gitRemotes.length > 0) state.remotes = digest.gitRemotes.slice(0, 4);
+	const remotes = digest.gitRemotes ?? [];
+	const files = digest.filesTouched ?? [];
+	const commands = digest.commands ?? [];
+	const tools = digest.tools ?? [];
+	if (remotes.length > 0) state.remotes = remotes.slice(0, 4);
 	if (digest.sessionName) state.session = digest.sessionName;
 
-	if (digest.filesTouched.length > 0) {
-		state.files = digest.filesTouched.slice(0, 25).map((file) => clip(file, 120));
+	if (files.length > 0) {
+		state.files = files.slice(0, 25).map((file) => clip(file, 120));
 	}
-	if (digest.commands.length > 0) {
-		state.commands = digest.commands.slice(0, 15).map((command) => clip(command, 160));
+	if (commands.length > 0) {
+		state.commands = commands.slice(0, 15).map((command) => clip(command, 160));
 	}
-	if (digest.tools.length > 0) {
+	if (tools.length > 0) {
 		// Compress runs of the same tool: "bash×5" instead of five rows.
 		const counts = new Map<string, number>();
-		for (const tool of digest.tools) counts.set(tool.name, (counts.get(tool.name) ?? 0) + 1);
+		for (const tool of tools) counts.set(tool.name, (counts.get(tool.name) ?? 0) + 1);
 		state.tools = [...counts.entries()].map(([name, count]) => (count > 1 ? `${name}×${count}` : name));
 	}
 	if (digest.errored) state.errored = true;

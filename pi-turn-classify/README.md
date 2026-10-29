@@ -108,6 +108,58 @@ the turn produced no answer**. A recovered `ls: no such file` mid-turn is not a
 failed turn — measuring that distinction took the false-positive rate from 40% to
 7% of real turns.
 
+## kNN prior: retrieval as evidence (measured, not yet worth it)
+
+A decision model reads labels, never vectors — so a vector cannot be handed to it.
+What *can* be handed over is the label set of the **most similar labelled turns**:
+
+```
+similar labelled turns: [eavs · debug · blocked] 0.82  [eavs · implement] 0.71
+```
+
+Retrieval doing the job a bigger model would otherwise need. `embeddings.ts` builds
+one vector per turn (EmbeddingGemma 2 via vqtrs, MRL-truncated to 128 dims), `knn.ts`
+stores them as int8 (~176 B/turn, whole history in one JSONL, brute-force cosine —
+no vector database), and `bench-knn.ts` measures the effect with **leave-one-out**
+neighbours so a turn can never retrieve itself.
+
+```bash
+bun run pi-turn-classify/bench-knn.ts --samples pi-turn-classify/samples/seed.jsonl \
+  --endpoint http://localhost:3033/jev --model jev-latest \
+  --embed-endpoint http://127.0.0.1:3010 --k 5 --dim 128
+```
+
+**Result on the 16-turn seed (2026-10-29, Mac Studio):**
+
+| | jev | d3-lite |
+| --- | --- | --- |
+| accuracy with prior | 74.1% → 74.1% (+0.0) | 78.6% → 76.8% (−1.8) |
+| answers changed | 2 | 5 |
+| latency added | ~180 ms | ~855 ms |
+
+…and the diagnostic that explains it — **how often the closest neighbour already
+had the right label** (the ceiling on what retrieval could ever contribute):
+
+| question | ceiling |
+| --- | --- |
+| `error_kind` | 0% |
+| `work_done` | 31% |
+| `activity` | 38% |
+| `attention`, `blocked`, `artifact`, `project` | 44–50% |
+| `scope` | 81% |
+| `project_mismatch` | 88% |
+
+So: **not wired into the runtime.** With 16 turns from 16 different tasks, the
+nearest neighbour shares the *topic* but not the *label* — every turn is "coding in
+a repo", so cosine is dominated by jargon (`bun test`, `cargo check`) rather than by
+what kind of work it was. Retrieval only predicts the questions that are genuinely
+about surface similarity: `scope` and `project_mismatch`.
+
+Revisit when (a) there are ≥50 labelled turns **per class** (the labeler builds
+this), and (b) neighbour selection uses a **reranker** (`/v1/rerank` on the same
+server) instead of raw bi-encoder cosine, injecting only for questions whose
+measured ceiling exceeds ~70%.
+
 ## Background dataset (the corpus that builds itself)
 
 Calibration needs labelled real traffic, and reconstructing it later mostly does
