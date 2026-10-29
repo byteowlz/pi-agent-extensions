@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0
+
+- **labeler/**: a web UI for hand-labelling real agent turns, because 14
+  self-written seed turns cannot decide a model or a calibration. `extract.ts`
+  splits the session store into turns (closing answer, tool trail, files,
+  commands, cwd, remotes; deduplicated across forks; pleasantries dropped) and
+  `server.ts` serves them on the tailnet with seven keyboard-driven questions.
+  `labels.jsonl` is already bench-sample format, so labels feed `bench.ts` and a
+  calibration fit with no conversion. Registered in owlznest.
+- Labelling asks the **v2** questions (`work_done` + `blocked` + `attention`
+  instead of the five-way `status`), matching the display line
+  `<dir> working on <topic>[ in <target>] · <working|idle|blocked> <reason>`.
+- Extractor fixes found by its tests: the turn keeps its **closing** assistant
+  answer (not the narration), and short-but-real turns are no longer dropped.
+
 ## 0.1.1
 
 - Verified against the live decision servers and fixed the contract on both:
