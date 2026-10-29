@@ -4,6 +4,29 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Error classification and a background corpus (2.36.0)
+
+- **pi-turn-classify 0.3.0**: failed turns are now classified, not just flagged.
+  The digest keeps the verbatim provider/tool error message (1200 chars, never
+  trimmed away) and two questions are asked only for such turns: `error_kind`
+  (provider_overloaded, rate_limited, auth, context_overflow, network,
+  content_filter, invalid_request, bad_response, tool_failed, cancelled, unclear)
+  and `error_transient`. Provider error strings churn constantly, and this is the
+  strongest case for a decision model in the whole schema — measured 83-100% on
+  the seed set.
+- A tool failure only fails a turn when the turn produced no answer; a recovered
+  `ls: no such file` is a hiccup. False positives on real sessions: 40% -> 7%.
+- Fixed `agent_end` handling: pi passes `messages`, so the closing answer and the
+  `errorMessage` now come from the turn itself.
+- **Background dataset**: `dataset.path` appends every finished turn (digest,
+  model answers with raw probabilities, error text, provenance) to JSONL with size
+  rotation; failed classifications are recorded too, with the reason. The labeler
+  can read it directly (`--from-dataset`), and only human labels ever become
+  scoring samples.
+- Schema v2: `work_done` + `blocked` replace the five-way `status`.
+- Measured: d3-lite 75.6-81.0% / ECE 0.107-0.129, jev 74.4-78.2% / ECE 0.055-0.070.
+  `risk` scores 25%/37.5% and should become a binary "irreversible action?".
+
 ### skdlr-owned timing with in-session delivery (2.35.0)
 
 - **pi-schedule 0.2.0**: skdlr is now a first-class *optional* integration instead

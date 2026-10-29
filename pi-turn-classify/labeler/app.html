@@ -65,9 +65,13 @@
   }
   .body { padding: 10px; white-space: pre-wrap; word-break: break-word; max-height: 42vh; overflow-y: auto; }
   .body.mono { font-family: var(--font-mono); font-size: 12px; }
+  section.block.error { border-color: var(--danger); }
+  section.block.error > h2 { color: var(--danger); border-bottom-color: var(--danger); }
   .body.asst { max-height: 34vh; }
   .empty { color: var(--muted-foreground); font-style: italic; }
   aside { border-left: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
+  /* Nine questions (error turns) do not fit: the list scrolls, the actions stay. */
+  #questions { overflow-y: auto; flex: 1 1 auto; min-height: 0; }
   .q { border-bottom: 1px solid var(--border); padding: 10px 12px; }
   .q.active { background: var(--surface-sunken); box-shadow: inset 3px 0 0 var(--primary); }
   .q-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
@@ -117,16 +121,9 @@
 </main>
 
 <script type="module">
-const QUESTIONS = [
-  { field: "project", label: "which project is this work about?", opts: () => projectOptions() },
-  { field: "activity", label: "what kind of work?", opts: () => ANSWERS.activity },
-  { field: "work_done", label: "is the requested work complete?", opts: () => ANSWERS.work_done },
-  { field: "blocked", label: "is it blocked on something else?", opts: () => ANSWERS.blocked },
-  { field: "attention", label: "does it need the user? what kind?", opts: () => ANSWERS.attention },
-  { field: "risk", label: "how consequential were the actions?", opts: () => ANSWERS.risk },
-  { field: "artifact", label: "what did it produce?", opts: () => ANSWERS.artifact },
-];
-
+// The server decides which questions apply: the error questions exist only on
+// failed turns, exactly as the extension asks the model.
+let QUESTIONS = [];
 let ANSWERS = {};
 let candidate = null;
 let answers = {};
@@ -154,6 +151,12 @@ async function refreshState() {
   return state;
 }
 
+/** Options for one question (project options are dynamic per turn). */
+function optionsFor(question) {
+  if (question.kind === "project") return projectOptions();
+  return question.options ?? ANSWERS[question.field] ?? [];
+}
+
 function projectOptions() {
   // Candidates the extractor already revealed: the cwd name and any repo in the
   // digest, plus the explicit escape hatches. Order matters: first is the default.
@@ -165,6 +168,15 @@ function projectOptions() {
   }
   for (const extra of ["other", "unclear"]) if (!out.includes(extra)) out.push(extra);
   return out;
+}
+
+/** The error is the point of a failed turn: never hide it behind a flag. */
+function errorBlock(state) {
+  const error = state.error;
+  if (!error && !state.errored) return "";
+  const meta = error ? `${error.source}${error.tool ? " · " + error.tool : ""}` : "unknown source";
+  const message = error?.message ?? "(no error message captured for this turn)";
+  return `<section class="block error"><h2>error · ${esc(meta)}</h2><div class="body mono">${esc(message)}</div></section>`;
 }
 
 function renderTurn() {
@@ -193,6 +205,7 @@ function renderTurn() {
   el("turn").innerHTML = `
     <div class="ctx">${chips}</div>
     <section class="block"><h2>user asked</h2><div class="body">${esc(s.userText) || '<span class="empty">—</span>'}</div></section>
+    ${errorBlock(s)}
     <section class="block"><h2>assistant finished with</h2><div class="body asst">${esc(s.assistantText) || '<span class="empty">—</span>'}</div></section>
     <section class="block"><h2>tools (${(s.tools ?? []).length})</h2>${list(tools, true)}</section>
     ${(s.filesTouched ?? []).length ? `<section class="block"><h2>files</h2>${list(s.filesTouched, true)}</section>` : ""}
@@ -202,7 +215,7 @@ function renderTurn() {
 
 function renderQuestions() {
   const html = QUESTIONS.map((question, index) => {
-    const options = question.opts();
+    const options = optionsFor(question);
     const chosen = answers[question.field];
     const buttons = options
       .map((option, optionIndex) =>
@@ -234,6 +247,7 @@ async function load(after) {
     return;
   }
   ANSWERS = data.answers;
+  QUESTIONS = data.questions ?? [];
   candidate = data.candidate;
   answers = {};
   focus = 0;
@@ -326,7 +340,7 @@ document.addEventListener("keydown", (event) => {
   const digit = Number.parseInt(event.key, 10);
   if (!Number.isNaN(digit) && digit >= 1 && digit <= 9) {
     const question = QUESTIONS[focus];
-    const options = question.opts();
+    const options = optionsFor(question);
     const value = options[digit - 1];
     if (value) choose(question.field, value);
   }

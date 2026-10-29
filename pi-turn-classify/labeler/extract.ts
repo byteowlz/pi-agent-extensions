@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
-import { type ToolUse, extractText, toolDetail } from "../digest.js";
+import { type ToolUse, type TurnError, extractText, toolDetail } from "../digest.js";
 
 export interface Candidate {
 	id: string;
@@ -31,6 +31,7 @@ export interface Candidate {
 		gitRemotes: string[];
 		sessionName?: string;
 		errored?: boolean;
+		error?: TurnError;
 		durationMs?: number;
 	};
 	/** Provenance for the UI (never sent to the model). */
@@ -128,6 +129,10 @@ export function turnsFromSession(path: string, perSession: number): Candidate[] 
 		commands: string[];
 		/** Text of the turn's closing assistant message (not the narration). */
 		finalText: string;
+		/** Verbatim provider error text, when the turn failed. */
+		error?: TurnError;
+		/** Last tool failure seen; only fails the turn if nothing answered. */
+		toolError?: TurnError;
 		startedAt?: number;
 		errored: boolean;
 		model?: string;
@@ -138,6 +143,8 @@ export function turnsFromSession(path: string, perSession: number): Candidate[] 
 		if (!current) return;
 		index += 1;
 		const assistantText = current.finalText.trim();
+		// A tool hiccup in a turn that still answered is not a failed turn.
+		if (!current.error && current.toolError && !assistantText) current.error = current.toolError;
 		// A turn is skip only when there is nothing at all to judge: no ask, or an
 		// ask with neither an answer nor any tool activity. Short answers are real
 		// turns ("Fixed the lint error.") — pleasantries are filtered later, by the
@@ -157,7 +164,8 @@ export function turnsFromSession(path: string, perSession: number): Candidate[] 
 				cwd,
 				gitRemotes: gitRemotesFor(cwd),
 				...(sessionName ? { sessionName } : {}),
-				...(current.errored ? { errored: true } : {}),
+				...(current.errored || current.error ? { errored: true } : {}),
+				...(current.error ? { error: current.error } : {}),
 				...(current.startedAt ? { durationMs: Date.now() - current.startedAt } : {}),
 			},
 			meta: {
@@ -206,13 +214,26 @@ export function turnsFromSession(path: string, perSession: number): Candidate[] 
 				// turn's closing answer, which is what a reader (and the model) needs.
 				if (messageText.join(" ").trim()) current.finalText = messageText.join("\n");
 			}
-			if (entry.message.stopReason === "error" || entry.message.stopReason === "aborted") current.errored = true;
+			const stop = entry.message.stopReason;
+			const errorMessage = (entry.message as { errorMessage?: string }).errorMessage;
+			if (stop === "error") {
+				current.errored = true;
+				if (errorMessage) current.error = { source: "provider", message: errorMessage };
+			} else if (stop === "aborted") {
+				current.errored = true;
+				current.error ??= { source: "aborted", message: "the turn was interrupted (user abort or session switch)" };
+			}
 			continue;
 		}
 		if (role === "toolResult") {
-			// Errors matter for labelling ("blocked"/"errored"), so record the flag.
-			const content = extractText(entry.message.content);
-			if (/^error|command not found|permission denied/i.test(content.trim())) current.errored = true;
+			// The message itself is what makes an error labelable, so keep the text.
+			const content = extractText(entry.message.content).trim();
+			const toolName = (entry.message as { toolName?: string }).toolName;
+			// Recorded as the turn's error candidate, but not as a failed turn yet:
+			// only flush() decides that, and only when nothing answered.
+			if (/^error|command not found|permission denied|no such file/i.test(content)) {
+				current.toolError ??= { source: "tool", ...(toolName ? { tool: toolName } : {}), message: content.slice(0, 1200) };
+			}
 		}
 	}
 	flush();
@@ -253,7 +274,39 @@ export function extract(options: ExtractOptions = {}): Candidate[] {
 	return candidates;
 }
 
-function parseArgs(argv: string[]): { limit: number; perSession: number; out: string } {
+/**
+ * Read a background dataset (`dataset.path` in the extension config) as the queue.
+ *
+ * The records already carry the digest, so the labeler can label exactly the
+ * traffic that was classified — including the error text.
+ */
+export function candidatesFromDataset(path: string): Candidate[] {
+	const text = readFileSync(path, "utf-8");
+	const candidates: Candidate[] = [];
+	for (const line of text.split("\n")) {
+		if (!line.trim()) continue;
+		let record: { id?: unknown; state?: unknown; session?: unknown; turn?: unknown };
+		try {
+			record = JSON.parse(line) as typeof record;
+		} catch {
+			continue;
+		}
+		if (!record.state || typeof record.state !== "object") continue;
+		const session = (record.session ?? {}) as { id?: string; file?: string };
+		candidates.push({
+			id: typeof record.id === "string" ? record.id : `dataset-${candidates.length + 1}`,
+			state: record.state as Candidate["state"],
+			meta: {
+				sessionFile: typeof session.file === "string" ? session.file : path,
+				sessionId: typeof session.id === "string" ? session.id : "",
+				turn: typeof record.turn === "number" ? record.turn : 0,
+			},
+		});
+	}
+	return candidates;
+}
+
+function parseArgs(argv: string[]): { limit: number; perSession: number; out: string; dataset?: string } {
 	const map = new Map<string, string>();
 	for (let index = 0; index < argv.length; index += 1) {
 		const token = argv[index];
@@ -275,7 +328,9 @@ function parseArgs(argv: string[]): { limit: number; perSession: number; out: st
 
 if (import.meta.main) {
 	const args = parseArgs(process.argv.slice(2));
-	const candidates = extract({ limit: args.limit, perSession: args.perSession });
+	const candidates = args.dataset
+		? candidatesFromDataset(args.dataset)
+		: extract({ limit: args.limit, perSession: args.perSession });
 	mkdirSync(dirname(args.out), { recursive: true });
 	// Keep it JSONL and stable so the UI can stream it.
 	writeFileSync(args.out, `${candidates.map((candidate) => JSON.stringify(candidate)).join("\n")}\n`);

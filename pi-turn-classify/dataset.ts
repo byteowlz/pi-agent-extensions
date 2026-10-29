@@ -21,8 +21,8 @@ import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from "nod
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import type { AnswerMap, QuestionSpec, TurnCard } from "./schema.js";
 import type { TurnDigest } from "./digest.js";
+import type { AnswerMap, QuestionSpec, TurnCard } from "./schema.js";
 
 export const DATASET_VERSION = 1;
 

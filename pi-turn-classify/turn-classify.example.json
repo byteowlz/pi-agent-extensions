@@ -8,9 +8,26 @@
   "confidenceFloor": 0.4,
   "statusLine": true,
   "projects": [
-    { "id": "pi-agent-extensions", "hint": "pi coding agent extensions, ~/byteowlz/pi-agent-extensions" },
-    { "id": "eavs", "hint": "LLM gateway / proxy, ~/byteowlz/eavs" },
-    { "id": "oqto", "hint": "agent platform, ~/byteowlz/oqto-media-local" },
-    { "id": "wiki", "hint": "knowledge wiki, ~/wiki" }
-  ]
+    {
+      "id": "pi-agent-extensions",
+      "hint": "pi coding agent extensions, ~/byteowlz/pi-agent-extensions"
+    },
+    {
+      "id": "eavs",
+      "hint": "LLM gateway / proxy, ~/byteowlz/eavs"
+    },
+    {
+      "id": "oqto",
+      "hint": "agent platform, ~/byteowlz/oqto-media-local"
+    },
+    {
+      "id": "wiki",
+      "hint": "knowledge wiki, ~/wiki"
+    }
+  ],
+  "dataset": {
+    "path": "~/.local/share/pi-turn-classify/dataset.jsonl",
+    "maxBytes": 20971520,
+    "errorsOnly": false
+  }
 }

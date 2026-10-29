@@ -71,15 +71,6 @@ export const ACTIVITY: ChoiceOption[] = [
 	{ id: "chat", label: "chat", hint: "answering a question, no artifact produced" },
 ];
 
-/** How far the work got by the end of the turn. */
-export const STATUS: ChoiceOption[] = [
-	{ id: "exploring", label: "exploring", hint: "looking around, nothing changed yet" },
-	{ id: "implementing", label: "implementing", hint: "mid-change, still in progress" },
-	{ id: "verifying", label: "verifying", hint: "checking that work done actually holds" },
-	{ id: "blocked", label: "blocked", hint: "cannot proceed without something" },
-	{ id: "done", label: "done", hint: "the requested work is complete" },
-];
-
 /** Whether the turn needs the user, and what kind. */
 export const ATTENTION: ChoiceOption[] = [
 	{ id: "none", label: "none", hint: "no input needed, safe to ignore" },
@@ -198,10 +189,20 @@ export function buildQuestions(projects: ProjectCandidate[], options: BuildOptio
 			options: ACTIVITY,
 		},
 		{
-			id: "status",
-			kind: "choice",
-			instructions: "How far did the work get by the end of this turn?",
-			options: STATUS,
+			// `done` + `blocked` replace the old five-way status: they are the two
+			// facts the display line needs, and "how far along" measured worst (50%).
+			id: "work_done",
+			kind: "boolean",
+			instructions: "Is the work the user asked for complete at the end of this turn?",
+			yesHint: "the request is finished",
+			noHint: "the request is still in progress or was not finished",
+		},
+		{
+			id: "blocked",
+			kind: "boolean",
+			instructions: "Is the turn blocked on something outside itself (a decision, approval, credential or external system)?",
+			yesHint: "cannot proceed without something external",
+			noHint: "nothing external is in the way",
 		},
 		{
 			id: "attention",
@@ -433,8 +434,13 @@ export function renderLine(answers: TurnCardAnswers, questions?: QuestionSpec[])
 	const activity = label("activity", "activity");
 	if (activity) parts.push(activity);
 
-	const status = label("status", "status");
-	if (status) parts.push(status);
+	// The card's outcome. "working" is a runtime fact (a turn is running), never a
+	// model judgement, so a card only ever says done / unfinished / blocked.
+	const blocked = answers.blocked?.value === "yes";
+	const done = answers.work_done?.value === "yes";
+	if (blocked) parts.push("blocked");
+	else if (done) parts.push("done");
+	else if (answers.work_done) parts.push("unfinished");
 
 	const artifact = label("artifact", "artifact");
 	if (artifact) parts.push(artifact);

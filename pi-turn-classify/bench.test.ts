@@ -113,8 +113,8 @@ describe("sample loading", () => {
 				samples.map((entry) => entry.expect.project).filter((id): id is string => typeof id === "string" && id !== "other")
 			),
 		].map((id) => ({ id }));
-		const questions = buildQuestions(candidates);
 		for (const entry of samples) {
+			const questions = buildQuestions(candidates, { hasError: Boolean(entry.digest.error) });
 			expect(entry.id).toBeTruthy();
 			expect(typeof entry.digest.cwd).toBe("string");
 			// every expectation must name a real answer id in the schema

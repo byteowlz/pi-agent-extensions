@@ -33,13 +33,20 @@ Seven questions, asked in one request. Ids are persisted, so they are stable.
 | question | kind | answers |
 | --- | --- | --- |
 | `project` | choice | the candidate projects + `other` + `unclear` (dropped when no candidates are known) |
-| `project_mismatch` | yes/no | `yes` / `no` — the work belongs to a different project than the cwd suggests |
+| `project_mismatch` | yes/no | work belongs to a different project than the cwd suggests |
 | `activity` | choice | `implement` `debug` `test` `review` `research` `plan` `refactor` `ops` `docs` `setup` `chat` |
-| `status` | choice | `exploring` `implementing` `verifying` `blocked` `done` |
+| `work_done` | yes/no | is the requested work complete? |
+| `blocked` | yes/no | is it blocked on something external? |
 | `attention` | choice | `none` `decision` `approval` `missing_info` `review` |
 | `risk` | score (0-4) | `none` `low` `medium` `high` `critical` |
 | `artifact` | choice | `code` `test` `doc` `config` `issue` `data` `none` |
 | `scope` | choice | `single` `multi` `noncode` |
+| `error_kind` | choice | **only on failed turns**: `provider_overloaded` `rate_limited` `auth` `context_overflow` `network` `content_filter` `invalid_request` `bad_response` `tool_failed` `cancelled` `unclear` |
+| `error_transient` | yes/no | **only on failed turns**: would a plain retry plausibly work? |
+
+`work_done` + `blocked` replaced the old five-way `status`: the display line needs
+`<working|idle|blocked> <reason>`, `working` is a runtime fact rather than a model
+judgement, and "how far along" measured worst (50% on d3).
 
 `project` is the one dynamic question: candidates come from `projects` in the
 config, the cwd basename and the git remotes. `project_mismatch` is what makes
@@ -78,6 +85,62 @@ branch (like other sidecars), and they cost nothing per turn in tokens.
 `confidence` and `probabilities` are always kept, even when the rendered value
 was demoted to `unclear`. That is intentional: recalibration needs the raw
 scores, never the rounded ones.
+
+## Errors are classified, not just flagged
+
+Provider error strings are the most churn-prone text in the whole system ("529
+overloaded", "stream ended without finish_reason", "invalid_api_key",
+"context_length_exceeded", "ECONNRESET"), and hand-written regexes rot. Mapping
+that moving surface onto a small stable taxonomy is exactly what a decision model
+is good at.
+
+So a failed turn keeps the **verbatim error message** in the digest (`error:
+{source, message, tool?}`, up to 1200 chars, never truncated away by the budget),
+and two questions are added *only* for such turns:
+
+- `error_kind` — what kind of failure was it
+- `error_transient` — would a plain retry plausibly work
+
+The card renders it: `ops · blocked · error rate limited (retryable)`.
+
+Where the error comes from: the assistant message's `errorMessage` when
+`stopReason` is `error`, an abort, or a tool result that failed **and after which
+the turn produced no answer**. A recovered `ls: no such file` mid-turn is not a
+failed turn — measuring that distinction took the false-positive rate from 40% to
+7% of real turns.
+
+## Background dataset (the corpus that builds itself)
+
+Calibration needs labelled real traffic, and reconstructing it later mostly does
+not happen. If configured, every finished turn is appended to a JSONL corpus:
+
+```json
+{
+  "dataset": {
+    "path": "~/.local/share/pi-turn-classify/dataset.jsonl",
+    "maxBytes": 20971520,
+    "errorsOnly": false
+  }
+}
+```
+
+Each record holds the digest exactly as it was classified, the model's answers
+**with raw probabilities**, the error text, and session/turn provenance. Failed
+classifications are recorded too (with `classification: null` and the reason), so
+a model outage still leaves a usable corpus.
+
+The file is directly usable two ways:
+
+```bash
+# score the model against human labels already joined into the dataset
+bun run pi-turn-classify/bench.ts --samples <dataset.jsonl> ...
+
+# or label the very traffic the model saw (including error text) in the UI
+bun run pi-turn-classify/labeler/extract.ts --from-dataset ~/.local/share/pi-turn-classify/dataset.jsonl
+```
+
+Model predictions are never treated as ground truth: only records with human
+`labels` become scoring samples.
 
 ## Confidence handling
 
@@ -193,44 +256,44 @@ See [labeler/README.md](./labeler/README.md). It asks the v2 questions
 The point of a decision model is cheap decisions, so the harness reports what
 lets you trust one: accuracy, **ECE**, high-confidence accuracy, and latency.
 
-### Measured (2026-10-29, 14 hand-labelled turns)
+### Measured (2026-10-29, 16 hand-labelled turns incl. 6 failed)
 
-Both models reached through the EAVS gateway (`/<provider>/v1/systemone`), 7
-projects as candidates, one request per turn:
+Through the EAVS gateway, 7 candidate projects, one request per turn:
 
 | | `vllm-sr/d3-lite` | `jev-1.14.0` |
 | --- | --- | --- |
-| accuracy | **78.6%** | 75.5 – 76.5% |
-| mean confidence | 66.5% | 80.3% |
-| ECE (lower is better) | 0.194 | **0.057 – 0.066** |
-| high-confidence (≥0.80) share | 34.7% | 64.3% |
-| accuracy at high confidence | 100% | 92.1% |
-| latency mean / p95 | 768 / 1027 ms | **230 / 459 ms** |
+| accuracy | 75.6 – 81.0% | 74.4 – 78.2% |
+| ECE (lower better) | 0.107 – 0.129 | **0.055 – 0.070** |
+| latency mean | ~900 ms | **~230 ms** |
 
-Per question (accuracy, worst first):
+Per question (accuracy):
 
 | question | d3-lite | jev |
 | --- | --- | --- |
-| `project` | 92.9% | **100%** |
-| `project_mismatch` | 85.7% | **100%** |
-| `activity` | **92.9%** | 92.9% |
-| `status` | 50.0% | 85.7% |
-| `attention` | 78.6% | 42.9% |
-| `artifact` | 64.3% | **78.6%** |
-| `scope` | **85.7%** | 35.7% |
+| `project` | 93.8% | **100%** |
+| `project_mismatch` | 81.3% | **100%** |
+| `error_kind` (n=6) | 83.3% | **100%** |
+| `error_transient` (n=6) | **100%** | 83.3% |
+| `activity` | **87.5%** | 87.5% |
+| `work_done` | 87.5% | **93.8%** |
+| `blocked` | 75.0% | **81.3%** |
+| `artifact` | 62.5% | **75.0%** |
+| `attention` | **75.0%** | 37.5% |
+| `scope` | **81.3%** | 43.8% |
+| `risk` | 25.0% | 37.5% |
 
-Readings that matter more than the totals:
+Readings:
 
-- **`project` and `project_mismatch` are the reliable part** (86-100%), which is
-  the question this extension exists for. Identifying *which* project — including
-  when the cwd lies — is learnable at 0.8B.
-- **jev is the better-calibrated and much faster model here** (ECE 0.06 vs 0.19,
-  230 ms vs 768 ms); d3-lite is systematically under-confident, so its cards will
-  say "unclear" more often than its accuracy warrants.
-- **`status` and `scope` are weak** (50% / 36-86%) — they are the first candidates
-  to drop or reframe (a "how far" question is genuinely ambiguous mid-turn).
-- 14 samples is a *smoke* bench, not calibration data. The point is the harness:
-  label your own turns, re-run, then fit cutoffs.
+- **Error classification works** on both, at a level a regex fleet would struggle
+  to keep up with — and the raw message is what makes it work.
+- **`risk` is broken as a five-level score** (25% / 37.5%, i.e. worse than a
+  constant guess). It should become a yes/no "did this take an irreversible or
+  destructive action?".
+- `attention` and `scope` disagree wildly between models with overlapping
+  intervals: at n=16 those numbers are noise, not a ranking.
+- Accuracy on v2 + errors is *up* versus the v1 schema at equal sample count,
+  while d3's ECE improved from 0.194 to ~0.11: asking fewer, sharper questions
+  helped more than a better model would have.
 
 ```bash
 bun run pi-turn-classify/bench.ts \

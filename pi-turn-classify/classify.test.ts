@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as http from "node:http";
@@ -71,9 +71,17 @@ beforeAll(async () => {
 					model: "vllm-sr/d3-lite",
 					answers: {
 						project: { type: "choice", choice: mentionsEavs ? "eavs" : "pi-agent-extensions", confidence: 0.87 },
+						// Only sent for failed turns, mirroring the real question set.
+						...(payload.error
+							? {
+									error_kind: { type: "choice", choice: "provider_overloaded", confidence: 0.86 },
+									error_transient: { type: "noul", noul: 0.9, confidence: 0.85 },
+								}
+							: {}),
 						project_mismatch: { type: "noul", noul: mentionsEavs ? 0.9 : 0.05, confidence: 0.85 },
 						activity: { type: "choice", choice: "implement", confidence: 0.92 },
-						status: { type: "choice", choice: "implementing", confidence: 0.71 },
+						work_done: { type: "noul", noul: 0.2, confidence: 0.8 },
+						blocked: { type: "noul", noul: 0.1, confidence: 0.8 },
 						attention: { type: "choice", choice: "review", confidence: 0.63 },
 						risk: { type: "score", score: 1.1, legend: { 0: "none", 1: "low" }, confidence: 0.7 },
 						artifact: { type: "choice", choice: "code", confidence: 0.8 },
@@ -96,6 +104,7 @@ afterAll(async () => {
 test("a finished turn is classified and stored as a card", { timeout: 60_000 }, async () => {
 	const extensionPath = path.resolve(import.meta.dir, "index.ts");
 	const home = fs.mkdtempSync("/tmp/pi-turn-");
+	const datasetPath = path.join(home, "dataset.jsonl");
 	fs.mkdirSync(path.join(home, "agent"), { recursive: true });
 	fs.writeFileSync(
 		path.join(home, "agent", "turn-classify.json"),
@@ -105,15 +114,19 @@ test("a finished turn is classified and stored as a card", { timeout: 60_000 }, 
 			model: "vllm-sr/d3-lite",
 			api: "systemone",
 			statusLine: true,
+			dataset: { path: datasetPath },
 		})
 	);
 
 	const script = `
 import extension from ${JSON.stringify(extensionPath)};
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 const events = new Map();
 const commands = new Map();
+// What the extension actually sent to the decision server, for assertions.
+const requests = [];
 const appended = [];
 const notifications = [];
 const statuses = [];
@@ -155,7 +168,7 @@ await events.get('tool_execution_start')({ toolName: 'bash', args: { command: 'b
 await events.get('tool_execution_end')({ toolName: 'bash', isError: false }, ctx);
 await events.get('tool_execution_start')({ toolName: 'edit', args: { path: 'src/index.ts' } }, ctx);
 await events.get('agent_end')(
-  { message: { role: 'assistant', content: [{ type: 'text', text: 'Added the classifier with tests.' }], stopReason: 'end_turn' } },
+  { messages: [{ role: 'assistant', content: [{ type: 'text', text: 'Added the classifier with tests.' }], stopReason: 'stop' }] },
   ctx
 );
 
@@ -169,11 +182,13 @@ assert.equal(card.source.api, 'systemone');
 assert.equal(card.source.model, 'vllm-sr/d3-lite');
 assert.equal(card.answers.project.value, 'pi-agent-extensions');
 assert.equal(card.answers.activity.value, 'implement');
-assert.equal(card.answers.status.value, 'implementing');
+assert.equal(card.answers.work_done.value, 'no');
+assert.equal(card.answers.blocked.value, 'no');
 assert.equal(card.answers.risk.value, 'low');
 assert.equal(card.answers.project_mismatch.value, 'no');
 assert.ok(card.line.length > 0, 'line is rendered');
 assert.ok(card.line.startsWith('pi-agent-extensions · implement'), 'line starts with project and activity: ' + card.line);
+assert.ok(card.line.includes('unfinished'), 'line carries the v2 outcome: ' + card.line);
 assert.ok(card.line.includes('needs review'), 'attention shows: ' + card.line);
 assert.equal(statuses.at(-1).key, 'turn');
 assert.equal(statuses.at(-1).value, card.line);
@@ -181,7 +196,7 @@ assert.equal(statuses.at(-1).value, card.line);
 // --- a turn whose work belongs to another project ------------------------
 await events.get('input')({ source: 'interactive', text: 'fix the eavs gateway routing bug' }, ctx);
 await events.get('agent_end')(
-  { message: { role: 'assistant', content: [{ type: 'text', text: 'Fixed it in the eavs repo.' }], stopReason: 'end_turn' } },
+  { messages: [{ role: 'assistant', content: [{ type: 'text', text: 'Fixed it in the eavs repo.' }], stopReason: 'stop' }] },
   ctx
 );
 assert.equal(appended.length, 2, 'second card stored');
@@ -191,22 +206,49 @@ assert.equal(second.answers.project.value, 'eavs');
 assert.equal(second.answers.project_mismatch.value, 'yes');
 assert.ok(second.line.includes('(cwd differs)'), 'mismatch is visible: ' + second.line);
 
-// --- the server failing must not break the turn --------------------------
-await events.get('input')({ source: 'interactive', text: 'one more thing' }, ctx);
-await events.get('agent_end')({ message: { role: 'assistant', content: 'done', stopReason: 'end_turn' } }, ctx);
-assert.ok(
-  notifications.some((n) => n.level === 'warning' && /turn-classify/.test(n.message)),
-  'failure is reported as a warning'
+// --- a failed turn: the error text reaches the model, error questions are asked --
+await commands.get('classify')('on', ctx);
+notifications.length = 0;
+await events.get('input')({ source: 'interactive', text: 'use the glm model for this refactor please' }, ctx);
+await events.get('agent_end')(
+  {
+    messages: [
+      {
+        role: 'assistant',
+        content: [],
+        stopReason: 'error',
+        errorMessage: 'EAVS request rejected with HTTP 502 by the gateway or upstream.',
+      },
+    ],
+  },
+  ctx
 );
+
+const failedCard = appended.at(-1).data;
+assert.equal(failedCard.answers.error_kind.value, 'provider_overloaded', 'error classified: ' + JSON.stringify(failedCard.answers.error_kind));
+assert.equal(failedCard.answers.error_transient.value, 'yes');
+assert.ok(failedCard.line.includes('error provider overloaded'), 'line names the error: ' + failedCard.line);
+assert.ok(failedCard.line.includes('retryable'), 'line marks retryability: ' + failedCard.line);
+
+// --- the background dataset captured every turn ---------------------------
+const datasetText = readFileSync(process.env.FIXTURE_DATASET, 'utf8').trim().split('\\n');
+assert.equal(datasetText.length, 3, 'three turns recorded, including the failed one');
+const failedRecord = datasetText.map((line) => JSON.parse(line)).find((record) => record.state.error);
+assert.ok(failedRecord, 'the failed turn is in the corpus');
+assert.equal(failedRecord.state.error.source, 'provider');
+assert.ok(failedRecord.classification.answers.error_kind.value, 'the model answer is stored with it');
 
 // --- /classify show and schema ------------------------------------------
 notifications.length = 0;
 await commands.get('classify')('show', ctx);
-assert.ok(notifications[0].message.includes('pi-agent-extensions · implement'), 'show prints the card');
+// The latest card is the failed turn (its error text even mentions EAVS, which is
+// why that project came back), so the show command must surface the error line.
+assert.ok(notifications[0].message.includes('error provider overloaded'), 'show prints the failed card: ' + notifications[0].message);
+assert.ok(notifications[0].message.includes('error_kind'), 'show lists the per-question answers');
 
 notifications.length = 0;
 await commands.get('classify')('schema', ctx);
-assert.ok(notifications[0].message.includes('7 questions'), 'schema lists the questions: ' + notifications[0].message.split('\\n')[0]);
+assert.ok(notifications[0].message.includes('9 questions'), 'schema lists the questions: ' + notifications[0].message.split('\\n')[0]);
 assert.ok(notifications[0].message.includes('project_mismatch'), 'schema names the questions');
 
 // --- /classify off stops classification ---------------------------------
@@ -214,7 +256,7 @@ notifications.length = 0;
 await commands.get('classify')('off', ctx);
 const before = appended.length;
 await events.get('input')({ source: 'interactive', text: 'while disabled' }, ctx);
-await events.get('agent_end')({ message: { role: 'assistant', content: 'ignored', stopReason: 'end_turn' } }, ctx);
+await events.get('agent_end')({ messages: [{ role: 'assistant', content: 'ignored', stopReason: 'stop' }] }, ctx);
 assert.equal(appended.length, before, 'no card while disabled');
 
 console.log('turn-classify verified');
@@ -224,14 +266,18 @@ console.log('turn-classify verified');
 	fs.mkdirSync(cwd, { recursive: true });
 	fs.writeFileSync(`${home}/fixture.ts`, script);
 	try {
-		// Fail the first classification attempt so the warning path is exercised
-		// on the third turn; server returns 503 exactly once.
-		failuresRemaining = 1;
+		failuresRemaining = 0;
 		// Async spawn, not spawnSync: the decision server lives in THIS process, so
 		// blocking the event loop would deadlock the request the child makes.
-		const _result = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
+		const result = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
 			const child = spawn(process.execPath, [`${home}/fixture.ts`], {
-				env: { ...process.env, HOME: home, PI_CODING_AGENT_DIR: path.join(home, "agent"), FIXTURE_CWD: cwd },
+				env: {
+					...process.env,
+					HOME: home,
+					PI_CODING_AGENT_DIR: path.join(home, "agent"),
+					FIXTURE_CWD: cwd,
+					FIXTURE_DATASET: datasetPath,
+				},
 			});
 			let stdout = "";
 			let stderr = "";
@@ -243,6 +289,23 @@ console.log('turn-classify verified');
 			});
 			child.on("close", (status) => resolve({ status, stdout, stderr }));
 		});
+
+		expect({ status: result.status, error: result.stderr, output: result.stdout }).toEqual({
+			status: 0,
+			error: "",
+			output: "turn-classify verified\n",
+		});
+
+		// The failed turn must have sent its verbatim error text and been offered the
+		// error taxonomy; a clean turn must not have been asked those questions.
+		const failedRequest = received.find((entry) => JSON.stringify(entry.body.state ?? {}).includes("HTTP 502"));
+		expect(failedRequest).toBeDefined();
+		const failedQuestions = (failedRequest?.body.questions ?? {}) as Record<string, unknown>;
+		expect(Object.keys(failedQuestions)).toContain("error_kind");
+		expect(Object.keys(failedQuestions)).toContain("error_transient");
+		expect(JSON.stringify(failedQuestions.error_kind)).toContain("provider_overloaded");
+		const cleanRequest = received.find((entry) => !JSON.stringify(entry.body.state ?? {}).includes("HTTP 502"));
+		expect(Object.keys((cleanRequest?.body.questions ?? {}) as Record<string, unknown>)).not.toContain("error_kind");
 	} finally {
 		fs.rmSync(home, { recursive: true, force: true });
 	}

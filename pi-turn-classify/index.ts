@@ -27,6 +27,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+import { appendRecord, buildRecord, shouldRecord } from "./dataset.js";
 import { type DecisionClientConfig, DecisionError, classify, demoteLowConfidence } from "./decision-client.js";
 import { type ToolUse, type TurnDigest, extractText, localProjectHints, renderState, toolDetail } from "./digest.js";
 import {
@@ -139,9 +140,7 @@ export function mergeConfig(base: TurnClassifyConfig, raw: Record<string, unknow
 		if (typeof path === "string" && path.trim()) {
 			next.dataset = {
 				path: path.trim(),
-				...(typeof raw.dataset.maxBytes === "number" && raw.dataset.maxBytes > 0
-					? { maxBytes: raw.dataset.maxBytes }
-					: {}),
+				...(typeof raw.dataset.maxBytes === "number" && raw.dataset.maxBytes > 0 ? { maxBytes: raw.dataset.maxBytes } : {}),
 				...(raw.dataset.errorsOnly === true ? { errorsOnly: true } : {}),
 			};
 		}
@@ -271,7 +270,8 @@ export default function piTurnClassify(pi: ExtensionAPI): void {
 
 	/** Classify one turn. Never throws: failures are reported, not propagated. */
 	async function classifyTurn(ctx: ExtensionContext, digest: TurnDigest): Promise<TurnCard | undefined> {
-		const questions: QuestionSpec[] = buildQuestions(candidatesFor(config, digest));
+		// Error questions only exist when there is an error to explain.
+		const questions: QuestionSpec[] = buildQuestions(candidatesFor(config, digest), { hasError: Boolean(digest.error) });
 		const state = renderState(digest);
 		const startedTurn = ++turnCount;
 
@@ -281,6 +281,9 @@ export default function piTurnClassify(pi: ExtensionAPI): void {
 		} catch (error) {
 			const message = error instanceof DecisionError ? error.message : String(error);
 			notify(ctx, `turn-classify: ${message}`, "warning");
+			// Still keep the turn in the corpus: a digest plus "the classifier was
+			// down" is worth more later than nothing at all.
+			recordDataset(ctx, digest, startedTurn, undefined, undefined, message);
 			return undefined;
 		}
 
@@ -313,7 +316,53 @@ export default function piTurnClassify(pi: ExtensionAPI): void {
 			// Persistence is best effort; the in-memory card still shows.
 		}
 		applyStatus(ctx);
+		recordDataset(ctx, digest, startedTurn, card, result.answers);
 		return card;
+	}
+
+	/**
+	 * Append the turn to the background corpus, when one is configured.
+	 *
+	 * This is the only place the raw digest leaves the process, so it is opt-in
+	 * (no dataset path = no writes) and failure is silent-by-design: a corpus is
+	 * never worth a warning on every turn.
+	 */
+	function recordDataset(
+		ctx: ExtensionContext,
+		digest: TurnDigest,
+		turn: number,
+		card: TurnCard | undefined,
+		answers: AnswerMap | undefined,
+		classificationError?: string
+	): void {
+		const dataset = config.dataset;
+		if (!dataset) return;
+		if (
+			!shouldRecord(
+				{
+					path: dataset.path,
+					...(dataset.maxBytes ? { maxBytes: dataset.maxBytes } : {}),
+					...(dataset.errorsOnly ? { errorsOnly: true } : {}),
+				},
+				digest
+			)
+		) {
+			return;
+		}
+		const sessionId = safe(() => ctx.sessionManager.getSessionId(), "");
+		const sessionFile = safe<string | undefined>(() => ctx.sessionManager.getSessionFile(), undefined);
+		const sessionName = safe<string | undefined>(() => ctx.sessionManager.getSessionName(), undefined);
+		appendRecord(
+			{ path: dataset.path, ...(dataset.maxBytes ? { maxBytes: dataset.maxBytes } : {}) },
+			buildRecord({
+				digest,
+				turn,
+				session: { id: sessionId, ...(sessionFile ? { file: sessionFile } : {}), ...(sessionName ? { name: sessionName } : {}) },
+				...(card ? { card } : {}),
+				...(answers ? { answers } : {}),
+				...(classificationError ? { classificationError } : {}),
+			})
+		);
 	}
 
 	// --- event wiring -------------------------------------------------------
@@ -352,7 +401,6 @@ export default function piTurnClassify(pi: ExtensionAPI): void {
 	pi.on("tool_execution_end", async (event, _ctx) => {
 		const result = event as unknown as { isError?: boolean; toolName?: string; result?: unknown };
 		if (result.isError) {
-			buffer.errored = true;
 			const message = toolErrorMessage(result.result);
 			if (message) buffer.toolError = `${result.toolName ?? "tool"}: ${message}`;
 			const last = buffer.tools.at(-1);
@@ -373,18 +421,24 @@ export default function piTurnClassify(pi: ExtensionAPI): void {
 			(message): message is { content?: unknown; stopReason?: string; errorMessage?: string } =>
 				Boolean(message) && typeof message === "object" && (message as { role?: string }).role === "assistant"
 		);
-		const closing = assistantMessages.at(-1);
-		const assistantText = [...assistantMessages].reverse().map((message) => extractText(message.content)).find((text) => text.trim()) ?? "";
+		const assistantText =
+			[...assistantMessages]
+				.reverse()
+				.map((message) => extractText(message.content))
+				.find((text) => text.trim()) ?? "";
 		if (!buffer.userText && !assistantText) return;
 
 		// The error is the interesting part of a failed turn: keep its verbatim text.
 		const failed = assistantMessages.find((message) => message.stopReason === "error" && message.errorMessage);
 		const aborted = assistantMessages.some((message) => message.stopReason === "aborted");
+		// A tool error only fails the turn when the turn never produced an answer.
+		// A recovered `ls: no such file` in the middle of a successful turn is not
+		// a failed turn, and labelling it as one poisons the corpus.
 		const error: TurnError | undefined = failed?.errorMessage
 			? { source: "provider", message: failed.errorMessage }
 			: aborted
 				? { source: "aborted", message: "the turn was interrupted (user abort or session switch)" }
-				: buffer.toolError
+				: buffer.toolError && !assistantText.trim()
 					? { source: "tool", message: buffer.toolError }
 					: undefined;
 
@@ -399,7 +453,7 @@ export default function piTurnClassify(pi: ExtensionAPI): void {
 			...(safe<string | undefined>(() => ctx.sessionManager.getSessionName(), undefined)
 				? { sessionName: safe<string | undefined>(() => ctx.sessionManager.getSessionName(), undefined) }
 				: {}),
-			...((buffer.errored || error || closing?.stopReason === "error") ? { errored: true } : {}),
+			...(error ? { errored: true } : {}),
 			...(error ? { error } : {}),
 			...(buffer.startedAt ? { durationMs: Date.now() - buffer.startedAt } : {}),
 		};
