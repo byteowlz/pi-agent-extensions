@@ -39,7 +39,17 @@ function ctx() {
     mode,
     hasUI,
     ui: {
-      setWidget: (key, content, options) => widgets.push({ key, content, options }),
+      setWidget: (key, content, options) => {
+        if (typeof content === 'function') {
+          const component = content({ requestRender: () => {} }, {
+            fg: (_color, text) => text,
+            bg: (_color, text) => text,
+          });
+          widgets.push({ key, content: component.render(80), options, component });
+          return;
+        }
+        widgets.push({ key, content, options });
+      },
       notify: (message, level) => notes.push({ message, level }),
       getEditorText: () => editor,
       setEditorText: (text) => { editor = text; },
@@ -84,16 +94,20 @@ await events.get('session_start')({ reason: 'startup' }, ctx());
 const first = widgets.at(-1);
 assert.equal(first.key, 'last-question');
 assert.equal(first.options.placement, 'aboveEditor');
-assert.ok(first.content.length <= 2, 'at most two lines');
-assert.ok(first.content[0].includes('how do I rotate the deploy key'), 'shows the question');
-assert.ok(first.content.at(-1).includes('⌥Q'), 'truncated strip advertises the expand shortcut');
+const rows = first.content.filter((line) => line.trim().length > 0);
+assert.ok(rows.length <= 3, 'header plus at most two question lines');
+assert.ok(rows[1].includes('how do I rotate the deploy key'), 'shows the question');
+assert.ok(rows[0].includes('⌥Q expand'), 'header advertises the expand shortcut');
+assert.ok(rows[0].includes('/'), 'header carries the timestamp');
+assert.equal(new Set(rows.map((line) => line.length)).size, 1, 'card is a rectangle');
 
 // --- 2. a new prompt replaces the strip; a short one needs no marker ------
 entries = [...entries, userEntry('what is the cache TTL?')];
 await events.get('input')({ source: 'interactive', text: 'what is the cache TTL?' }, ctx());
 const second = widgets.at(-1);
-assert.equal(second.content.length, 1, 'short question fits on one line');
-assert.ok(second.content[0].includes('what is the cache TTL?'));
+const shortRows = second.content.filter((line) => line.trim().length > 0);
+assert.equal(shortRows.length, 2, 'header plus one question line');
+assert.ok(shortRows[1].includes('what is the cache TTL?'));
 assert.ok(!second.content.join('').includes('…'), 'no truncation marker when it fits');
 
 // --- 3. expand shortcut → overlay → insert into the editor ----------------

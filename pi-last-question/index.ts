@@ -20,16 +20,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 
-import { WIDGET_KEY, buildStrip, lastQuestion, questionAge } from "./last-question.js";
+import { WIDGET_KEY, lastQuestion, questionStamp } from "./last-question.js";
+import { createLastQuestionCard } from "./widget.js";
 
 /** Nerd Font question mark (nf-fa-question); falls back to a blank cell, never a colour escape. */
 const GLYPH = "\uf128";
-const HINT = "⌥Q";
-
-function label(ctx: ExtensionContext): string {
-	const age = questionAge(ctx.sessionManager.getBranch());
-	return age ? `${GLYPH} ${age}  ` : `${GLYPH} `;
-}
+const SHORTCUT_HINT = "⌥Q";
 
 export default function piLastQuestion(pi: ExtensionAPI): void {
 	let widgetCtx: ExtensionContext | undefined;
@@ -37,15 +33,29 @@ export default function piLastQuestion(pi: ExtensionAPI): void {
 	const render = (ctx: ExtensionContext): void => {
 		if (!ctx.hasUI) return;
 		widgetCtx = ctx;
-		const entries = ctx.sessionManager.getBranch();
-		const question = entries.length > 0 ? lastQuestion(entries) : undefined;
+		const question = lastQuestion(ctx.sessionManager.getBranch());
 		if (!question) {
 			ctx.ui.setWidget(WIDGET_KEY, undefined);
 			return;
 		}
-		const width = terminalWidth(ctx);
-		const lines = buildStrip(question.text, width, { label: label(ctx), hint: HINT }).map((line) => line.text);
-		ctx.ui.setWidget(WIDGET_KEY, lines, { placement: "aboveEditor" });
+		const stamp = questionStamp(ctx.sessionManager.getBranch());
+		// Component form (not string[]): the card needs pi's theme tokens for its
+		// background and colours. Box inside pads every row, so it is a rectangle.
+		ctx.ui.setWidget(
+			WIDGET_KEY,
+			(tui, theme) => {
+				const { box } = createLastQuestionCard({
+					theme,
+					text: question.text,
+					...(stamp ? { stamp } : {}),
+					hint: SHORTCUT_HINT,
+					glyph: GLYPH,
+				});
+				void tui;
+				return box;
+			},
+			{ placement: "aboveEditor" }
+		);
 	};
 
 	const clear = (): void => {
@@ -191,16 +201,4 @@ export default function piLastQuestion(pi: ExtensionAPI): void {
 		clear();
 		widgetCtx = undefined;
 	});
-}
-
-/** Terminal width via the widget host when available, else a conservative default. */
-function terminalWidth(ctx: ExtensionContext): number {
-	try {
-		const columns = process.stdout.columns;
-		if (typeof columns === "number" && columns > 20) return columns;
-	} catch {
-		// not a TTY
-	}
-	void ctx;
-	return 80;
 }

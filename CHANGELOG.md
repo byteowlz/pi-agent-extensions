@@ -4,6 +4,19 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Last question as a pi-styled card (2.37.0)
+
+- **pi-last-question 0.2.0**: the widget above the prompt box is now a card drawn
+  with pi's own primitives — `Box(1, 0, theme.bg("customMessageBg"))` for the
+  padded background rectangle, an `accent` left rule per row, the timestamp in
+  `customMessageLabel`, the question in `customMessageText`, and the shortcut hint
+  right-aligned in `dim`. The hint degrades (`⌥Q expand` → `⌥Q` → omitted) before
+  the timestamp is cut, and every row is padded to the widget width so narrow
+  terminals stay a true rectangle.
+- The age label is replaced by an **absolute local timestamp**
+  (`10/29/2026, 12:00 PM`): the widget only re-renders when the branch changes, so
+  a relative "15s ago" would freeze and misstate the question's age.
+
 ### Last question above the prompt box (2.36.0)
 
 - **pi-last-question 0.1.0**: new extension — pins the most recent user question

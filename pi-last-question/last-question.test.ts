@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { MAX_LINES, buildStrip, flatten, lastQuestion, messageText, questionAge, wrap } from "./last-question";
+import { MAX_LINES, buildStrip, flatten, formatStamp, lastQuestion, messageText, questionStamp, wrap } from "./last-question";
 
 /** A user message entry as it appears in the session branch. */
 function userEntry(text: string, timestamp?: number, id = "u1"): Record<string, unknown> {
@@ -55,17 +55,31 @@ describe("reading the last question", () => {
 	});
 });
 
-describe("age label", () => {
-	test("reports a compact age from the message timestamp", () => {
-		const now = 1_000_000_000;
-		expect(questionAge([userEntry("q", now - 30_000)], now)).toBe("30s ago");
-		expect(questionAge([userEntry("q", now - 300_000)], now)).toBe("5m ago");
-		expect(questionAge([userEntry("q", now - 7_200_000)], now)).toBe("2h ago");
-		expect(questionAge([userEntry("q", now - 172_800_000)], now)).toBe("2d ago");
+describe("absolute timestamp", () => {
+	// Date.UTC + explicit zones: the assertion is about our formatting, never the
+	// host's timezone (a local-time constructor made this test flaky across hosts).
+	const at = Date.UTC(2026, 9, 29, 8, 13);
+
+	test("formats date and time, never a relative age", () => {
+		expect(formatStamp(at, "en-US", "UTC")).toBe("10/29/2026, 8:13 AM");
+		expect(formatStamp(at, "en-US", "Etc/GMT-2")).toBe("10/29/2026, 10:13 AM");
 	});
 
-	test("has no age when the timestamp is missing", () => {
-		expect(questionAge([userEntry("q")], 1_000)).toBeUndefined();
+	test("uses the message timestamp, else the entry's ISO stamp", () => {
+		expect(questionStamp([userEntry("q", at)], { locale: "en-US", timeZone: "UTC" })).toBe("10/29/2026, 8:13 AM");
+
+		const isoEntry = {
+			type: "message",
+			id: "e",
+			timestamp: "2026-10-29T07:13:00.000Z",
+			message: { role: "user", content: [{ type: "text", text: "q" }] },
+		};
+		expect(questionStamp([isoEntry], { locale: "en-US", timeZone: "UTC" })).toBe("10/29/2026, 7:13 AM");
+	});
+
+	test("has no stamp when the session recorded no time", () => {
+		expect(questionStamp([userEntry("q")])).toBeUndefined();
+		expect(questionStamp([])).toBeUndefined();
 	});
 });
 
