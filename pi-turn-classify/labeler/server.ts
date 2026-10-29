@@ -66,26 +66,102 @@ function skippedIds(): Set<string> {
 	return new Set(readJsonl<{ id: string }>(SKIPPED).map((record) => record.id));
 }
 
-/** Validate a label against the schema's answer sets. */
-const ANSWERS: Record<string, string[]> = {
-	activity: ["implement", "debug", "test", "review", "research", "plan", "refactor", "ops", "docs", "setup", "chat"],
-	work_done: ["yes", "no"],
-	blocked: ["yes", "no"],
-	attention: ["none", "decision", "approval", "missing_info", "review"],
-	risk: ["none", "low", "medium", "high", "critical"],
-	artifact: ["code", "test", "doc", "config", "issue", "data", "none"],
-	project: [], // dynamic: checked against candidates when supplied
-};
+/**
+ * The labelling questions. `kind: "project"` is dynamic (from the digest),
+ * `error` questions exist only on failed turns — the same conditional the
+ * extension applies, so the corpus and the runtime agree on what was asked.
+ */
+interface QuestionDef {
+	field: string;
+	label: string;
+	kind: "project" | "choice" | "boolean";
+	options?: string[];
+	errorOnly?: boolean;
+}
 
-function validateLabel(expect: Record<string, unknown>): string | undefined {
-	for (const [field, allowed] of Object.entries(ANSWERS)) {
-		const value = expect[field];
-		if (field === "project") continue;
-		if (typeof value !== "string") return `missing answer for "${field}"`;
-		if (!allowed.includes(value)) return `"${field}" must be one of ${allowed.join("|")}`;
+const QUESTIONS: QuestionDef[] = [
+	{ field: "project", label: "which project is this work about?", kind: "project" },
+	{
+		field: "activity",
+		label: "what kind of work?",
+		kind: "choice",
+		options: ["implement", "debug", "test", "review", "research", "plan", "refactor", "ops", "docs", "setup", "chat"],
+	},
+	{ field: "work_done", label: "is the requested work complete?", kind: "boolean", options: ["yes", "no"] },
+	{ field: "blocked", label: "is it blocked on something else?", kind: "boolean", options: ["yes", "no"] },
+	{
+		field: "attention",
+		label: "does it need the user? what kind?",
+		kind: "choice",
+		options: ["none", "decision", "approval", "missing_info", "review"],
+	},
+	{
+		field: "risk",
+		label: "how consequential were the actions?",
+		kind: "choice",
+		options: ["none", "low", "medium", "high", "critical"],
+	},
+	{
+		field: "artifact",
+		label: "what did it produce?",
+		kind: "choice",
+		options: ["code", "test", "doc", "config", "issue", "data", "none"],
+	},
+	{
+		field: "error_kind",
+		label: "what kind of failure was the error?",
+		kind: "choice",
+		errorOnly: true,
+		options: [
+			"provider_overloaded",
+			"rate_limited",
+			"auth",
+			"context_overflow",
+			"network",
+			"content_filter",
+			"invalid_request",
+			"bad_response",
+			"tool_failed",
+			"cancelled",
+			"unclear",
+		],
+	},
+	{
+		field: "error_transient",
+		label: "would a plain retry plausibly work?",
+		kind: "boolean",
+		errorOnly: true,
+		options: ["yes", "no"],
+	},
+];
+
+/** Answers allowed for a candidate (error questions only when it has an error). */
+function answersFor(state: Record<string, unknown>): Record<string, string[]> {
+	const hasError = Boolean(state.error) || Boolean(state.errored);
+	const table: Record<string, string[]> = {};
+	for (const question of QUESTIONS) {
+		if (question.errorOnly && !hasError) continue;
+		table[question.field] = question.options ?? [];
 	}
-	const project = expect.project;
-	if (project !== undefined && (typeof project !== "string" || !project.trim())) return `"project" must be a string`;
+	return table;
+}
+
+/** The questions to ask for a candidate, in order. */
+function questionsFor(state: Record<string, unknown>): QuestionDef[] {
+	const hasError = Boolean(state.error) || Boolean(state.errored);
+	return QUESTIONS.filter((question) => !question.errorOnly || hasError);
+}
+
+function validateLabel(expect: Record<string, unknown>, allowed: Record<string, string[]>): string | undefined {
+	for (const [field, options] of Object.entries(allowed)) {
+		const value = expect[field];
+		if (field === "project") {
+			if (value !== undefined && (typeof value !== "string" || !value.trim())) return `"project" must be a string`;
+			continue;
+		}
+		if (typeof value !== "string") return `missing answer for "${field}"`;
+		if (!options.includes(value)) return `"${field}" must be one of ${options.join("|")}`;
+	}
 	return undefined;
 }
 
@@ -142,7 +218,8 @@ const server = Bun.serve({
 				candidate,
 				position: rows.indexOf(candidate) + 1,
 				total: rows.length,
-				answers: ANSWERS,
+				answers: answersFor(candidate.state),
+				questions: questionsFor(candidate.state),
 			});
 		}
 
@@ -152,11 +229,10 @@ const server = Bun.serve({
 				return Response.json({ error: "id and expect are required" }, { status: 400 });
 			}
 			const expect = body.expect as Record<string, unknown>;
-			const problem = validateLabel(expect);
-			if (problem) return Response.json({ error: problem }, { status: 400 });
-
 			const candidate = totalCandidates().find((row) => row.id === body.id);
 			if (!candidate) return Response.json({ error: `unknown candidate ${body.id}` }, { status: 404 });
+			const problem = validateLabel(expect, answersFor(candidate.state));
+			if (problem) return Response.json({ error: problem }, { status: 400 });
 			if (labeledIds().has(body.id)) return Response.json({ error: "already labeled", id: body.id }, { status: 409 });
 
 			const record: LabelRecord = {

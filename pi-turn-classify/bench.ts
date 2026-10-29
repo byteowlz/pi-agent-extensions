@@ -191,7 +191,7 @@ export interface RunBenchOptions {
 
 /** Run the whole bench, one request per sample. */
 export async function runBench(options: RunBenchOptions): Promise<BenchReport> {
-	const questions = buildQuestions(options.projects ?? []);
+	const projectCandidates = options.projects ?? [];
 	const results: Array<{ question: string; correct: boolean; confidence?: number }> = [];
 	const latencies: number[] = [];
 	const failureReasons: string[] = [];
@@ -199,6 +199,8 @@ export async function runBench(options: RunBenchOptions): Promise<BenchReport> {
 
 	for (const sample of options.samples) {
 		try {
+			// Error questions exist only for failed turns, matching the runtime.
+			const questions = buildQuestions(projectCandidates, { hasError: Boolean(sample.digest.error) });
 			const state = renderState(sample.digest);
 			const outcome = await classify({
 				client: options.client,
@@ -247,6 +249,17 @@ export function normalizeDigest(raw: Partial<TurnDigest>): TurnDigest {
 		gitRemotes: list(raw.gitRemotes),
 		...(typeof raw.sessionName === "string" ? { sessionName: raw.sessionName } : {}),
 		...(raw.errored ? { errored: true } : {}),
+		// The error text drives the error questions: dropping it here silently
+		// disabled them for every hand-written sample.
+		...(raw.error && typeof raw.error === "object" && typeof raw.error.message === "string"
+			? {
+					error: {
+						source: raw.error.source ?? "provider",
+						message: raw.error.message,
+						...(typeof raw.error.tool === "string" ? { tool: raw.error.tool } : {}),
+					},
+				}
+			: {}),
 		...(typeof raw.durationMs === "number" ? { durationMs: raw.durationMs } : {}),
 	};
 }

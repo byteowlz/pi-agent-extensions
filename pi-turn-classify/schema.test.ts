@@ -6,7 +6,6 @@ import {
 	ATTENTION,
 	RISK,
 	SCOPE,
-	STATUS,
 	UNCLEAR,
 	buildQuestions,
 	isUnclassified,
@@ -26,7 +25,8 @@ describe("schema shape", () => {
 			"project",
 			"project_mismatch",
 			"activity",
-			"status",
+			"work_done",
+			"blocked",
 			"attention",
 			"risk",
 			"artifact",
@@ -97,7 +97,6 @@ describe("schema shape", () => {
 			"setup",
 			"chat",
 		]);
-		expect(STATUS.map((option) => option.id)).toEqual(["exploring", "implementing", "verifying", "blocked", "done"]);
 		expect(ATTENTION.map((option) => option.id)).toEqual(["none", "decision", "approval", "missing_info", "review"]);
 		expect(RISK.map((option) => option.id)).toEqual(["none", "low", "medium", "high", "critical"]);
 		expect(ARTIFACT.map((option) => option.id)).toEqual(["code", "test", "doc", "config", "issue", "data", "none"]);
@@ -178,13 +177,13 @@ describe("the rendered line", () => {
 			{
 				project: { value: "pi-agent-extensions" },
 				activity: { value: "implement" },
-				status: { value: "implementing" },
+				work_done: { value: "no" },
 				artifact: { value: "code" },
 				attention: { value: "review" },
 			},
 			questions
 		);
-		expect(line).toBe("pi-agent-extensions · implement · implementing · code · needs review");
+		expect(line).toBe("pi-agent-extensions · implement · unfinished · code · needs review");
 	});
 
 	test("marks a project mismatch and hides no-signal values", () => {
@@ -193,7 +192,7 @@ describe("the rendered line", () => {
 				project: { value: "eavs" },
 				project_mismatch: { value: "yes" },
 				activity: { value: "debug" },
-				status: { value: "done" },
+				work_done: { value: "yes" },
 				artifact: { value: "none" },
 				attention: { value: "none" },
 			},

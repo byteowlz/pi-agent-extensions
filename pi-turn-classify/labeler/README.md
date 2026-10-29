@@ -26,6 +26,9 @@ bun run pi-turn-classify/labeler/extract.ts --limit 60 --per-session 5
 # 2. serve it (tailnet address only; never 0.0.0.0)
 ./pi-turn-classify/labeler/run.sh 8842 100.64.0.6
 
+# or label the background dataset the extension already collected
+bun run pi-turn-classify/labeler/extract.ts --from-dataset ~/.local/share/pi-turn-classify/dataset.jsonl
+
 # 3. label, then use the corpus
 bun run pi-turn-classify/bench.ts \
   --samples ~/.local/share/pi-turn-classify-labeler/labels.jsonl \
@@ -59,10 +62,15 @@ The labelling schema is the **v2** one (the line the UI is meant to feed):
 | `attention` | none, decision, approval, missing_info, review |
 | `risk` | none, low, medium, high, critical |
 | `artifact` | code, test, doc, config, issue, data, none |
+| `error_kind` | **only on failed turns**: provider_overloaded, rate_limited, auth, context_overflow, network, content_filter, invalid_request, bad_response, tool_failed, cancelled, unclear |
+| `error_transient` | **only on failed turns**: yes / no |
 
 `work_done` + `blocked` + `attention` replace the old five-way `status`, because
 the display line needs `<working|idle|blocked> <reason>`, and "how far along" was
 the least reliable question measured (50% on d3).
+
+A failed turn shows its **verbatim error message** in a red block above the
+answer, because that is the only thing that makes `error_kind` labelable.
 
 `project` is `dir_name` in the UI unless you pick another: that is exactly the
 `[in <target>]` rule — the target is only interesting when it differs from the
@@ -97,6 +105,5 @@ the repository, and nothing is uploaded anywhere.
   the UI consumes canonical tokens (`generated/oqto-web/oqto.css`: palette,
   `radius: 0`, system fonts) instead of inventing a look. Recorded gap: there is
   no approved mock for it.
-- Labels use the v2 fields; `bench.ts` currently scores the v1 schema, so
-  `work_done` / `blocked` are collected but not yet scored. That is the next code
-  step (schema v2 in the extension).
+- The extension's schema is now v2 as well, so `work_done`, `blocked` and the
+  error questions are scored, not just collected.

@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.3.0
+
+- **Errors are classified, not just flagged.** A failed turn keeps the verbatim
+  error message in the digest (`error: {source, message, tool?}`, 1200 chars, never
+  trimmed away) and two questions are added only for such turns: `error_kind`
+  (provider_overloaded, rate_limited, auth, context_overflow, network,
+  content_filter, invalid_request, bad_response, tool_failed, cancelled, unclear)
+  and `error_transient` (would a plain retry work). Provider error text is the
+  most churn-prone surface in the system and is exactly what a decision model is
+  good at; measured 83–100% on the seed set.
+- A tool failure only marks the turn as failed when the turn produced no answer:
+  a recovered `ls: no such file` mid-turn is a hiccup, not a failure. False
+  positives on real sessions dropped from 40% to 7% of turns.
+- Fixed `agent_end` handling: pi passes `messages`, not a single message, so the
+  turn's closing answer and its `errorMessage` are now read from the turn itself.
+- **Background dataset**: configurable `dataset.path` appends every finished turn
+  (digest, model answers with raw probabilities, error text, provenance) to JSONL
+  with size rotation; failed classifications are recorded too, with the reason.
+  `labeler/extract.ts --from-dataset` labels exactly the traffic the model saw,
+  and only human labels ever become scoring samples.
+- **Schema v2**: `work_done` + `blocked` replace the five-way `status`, matching
+  the display line; the card renders `done` / `unfinished` / `blocked`.
+- `bench.ts` asks the error questions only on failed turns and refreshes the seed
+  set (16 turns, 6 with real provider errors, risk labelled).
+- Measured after the change: d3-lite 75.6–81.0% / ECE 0.107–0.129, jev
+  74.4–78.2% / ECE 0.055–0.070. `risk` scores 25% / 37.5% and should become a
+  binary "irreversible action?" question.
+
 ## 0.2.0
 
 - **labeler/**: a web UI for hand-labelling real agent turns, because 14
