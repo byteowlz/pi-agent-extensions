@@ -114,7 +114,7 @@ assert.ok(notifications.some((n) => n.level === 'error' && /does not exist/.test
 notifications.length = 0;
 await cwdCommand(toCwd + ' --force', ctx());
 
-const expectedDir = path.join(agentDir, 'sessions', encode(fs.realpathSync(toCwd)));
+const expectedDir = path.join(agentDir, 'sessions', encode(path.resolve(toCwd)));
 const expectedFile = path.join(expectedDir, path.basename(sessionFile));
 assert.equal(switchedTo, expectedFile, 'switchSession gets the moved file');
 assert.equal(fs.existsSync(sessionFile), false, 'old file is gone');
@@ -122,13 +122,13 @@ assert.equal(fs.existsSync(expectedFile), true, 'file is in the new cwd session 
 
 const lines = fs.readFileSync(expectedFile, 'utf-8').trim().split('\\n');
 assert.equal(lines.length, 3, 'all entries preserved');
-assert.equal(JSON.parse(lines[0]).cwd, fs.realpathSync(toCwd), 'header cwd rewritten');
+assert.equal(JSON.parse(lines[0]).cwd, path.resolve(toCwd), 'header cwd rewritten');
 assert.equal(JSON.parse(lines[0]).id, 'abc', 'session id preserved');
 assert.equal(JSON.parse(lines[2]).name, 'kept name', 'session name preserved');
 
 assert.equal(appended.length, 1, 'one move record appended');
 assert.equal(appended[0].customType, 'pi-session-cwd:move/v1');
-assert.equal(appended[0].data.toCwd, fs.realpathSync(toCwd));
+assert.equal(appended[0].data.toCwd, path.resolve(toCwd));
 assert.equal(appended[0].data.fromFile, sessionFile);
 
 // --- 5. tui mode asks; "Cancel" leaves everything alone -----------------
@@ -157,7 +157,7 @@ assert.equal(switchedTo, null, 'cancel did not switch');
 assert.ok(fs.existsSync(sessionFile2), 'cancel kept the file');
 
 // --- 6. tui mode confirm actually moves ---------------------------------
-const thirdReal = fs.realpathSync(third);
+const thirdReal = path.resolve(third);
 const relativeArg = '../../' + path.basename(third) + ' --force';
 await cwdCommand(relativeArg, ctx({
   cwd: toCwd,
@@ -212,20 +212,20 @@ switchedTo = null;
 notifications.length = 0;
 await moveCommand('foxline --force', thirdCtx());
 const foxPath = path.join(rootWork, 'foxline');
-assert.equal(switchedTo, path.join(agentDir, 'sessions', encode(fs.realpathSync(foxPath)), 'third.jsonl'),
+assert.equal(switchedTo, path.join(agentDir, 'sessions', encode(path.resolve(foxPath)), 'third.jsonl'),
   'unique fuzzy match moved the session');
 assert.equal(fs.existsSync(sess3), false, 'old file removed by /move');
 
 // ambiguous in a TUI: the picker answers, with the query pre-filled
 const sess5 = switchedTo.replace(/third\.jsonl$/, 'fourth.jsonl');
 fs.writeFileSync(sess5, [
-  JSON.stringify({ type: 'session', version: 3, id: 'mno', timestamp: '2026-01-04T00:00:00.000Z', cwd: fs.realpathSync(foxPath) }),
+  JSON.stringify({ type: 'session', version: 3, id: 'mno', timestamp: '2026-01-04T00:00:00.000Z', cwd: path.resolve(foxPath) }),
 ].join('\\n') + '\\n');
 mode = 'tui';
 switchedTo = null;
 let pickerQuery;
 await moveCommand('fox', ctx({
-  cwd: fs.realpathSync(foxPath),
+  cwd: path.resolve(foxPath),
   sessionManager: { getSessionId: () => 'mno', getSessionFile: () => sess5, getEntries: () => [], getBranch: () => [], usesDefaultSessionDir: () => true },
   ui: {
     notify: () => {},
@@ -250,14 +250,14 @@ assert.ok(switchedTo.includes('fox'), 'picked one of the fuzzy matches');
 const explicit = path.join(rootWork, 'foxhole');
 const sess4 = switchedTo.replace(/third\.jsonl$/, 'fourth.jsonl');
 fs.writeFileSync(sess4, [
-  JSON.stringify({ type: 'session', version: 3, id: 'jkl', timestamp: '2026-01-04T00:00:00.000Z', cwd: fs.realpathSync(foxPath) }),
+  JSON.stringify({ type: 'session', version: 3, id: 'jkl', timestamp: '2026-01-04T00:00:00.000Z', cwd: path.resolve(foxPath) }),
 ].join('\\n') + '\\n');
 switchedTo = null;
 await moveCommand(explicit + ' --force', ctx({
-  cwd: fs.realpathSync(foxPath),
+  cwd: path.resolve(foxPath),
   sessionManager: { getSessionId: () => 'jkl', getSessionFile: () => sess4, getEntries: () => [], getBranch: () => [], usesDefaultSessionDir: () => true },
 }));
-assert.equal(switchedTo, path.join(agentDir, 'sessions', encode(fs.realpathSync(explicit)), 'fourth.jsonl'),
+assert.equal(switchedTo, path.join(agentDir, 'sessions', encode(path.resolve(explicit)), 'fourth.jsonl'),
   'a path argument bypasses fuzzy matching');
 
 // no match: clear error with a suggestion

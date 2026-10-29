@@ -395,8 +395,13 @@ export interface TurnCard {
 	sessionFile?: string;
 	/** Working directory of the session. */
 	cwd: string;
-	/** Turn index within this session (1-based). */
+	/** Turn index within this session's branch (1-based). */
 	turn: number;
+	/**
+	 * Session-tree leaf at classification time. Two cards can share a turn number
+	 * after a resume or a branch navigation; the branch disambiguates them.
+	 */
+	branch?: string;
 	/** Which API/model produced it. */
 	source: { api: "systemone" | "decisions"; model: string; endpoint: string; ms: number };
 	answers: TurnCardAnswers;

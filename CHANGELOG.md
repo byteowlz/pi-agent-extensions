@@ -4,6 +4,17 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-last-question: plain ctrl bindings, hint only when expandable (2.39.0)
+
+- **pi-last-question 0.4.0**: shortcuts are now plain `ctrl` bindings — `ctrl+q`
+  expands the last question, `ctrl+n` inserts it into the prompt box (pi's editor
+  already owns a–g, j, k, l, o–p, s–u, w–z).
+- The `ctrl+q expand` hint is shown **only when the question is cut off**; a
+  question that fits both lines renders no shortcut at all, so the card stays
+  quiet when there is nothing hidden. The bindings work either way.
+- Verified in a real pi TUI (pty + terminal emulator): short prompt → no hint,
+  long prompt → full `ctrl+q expand`, card still follows each submission.
+
 ### pi-tui-rpc: bounded event frames (2.38.0)
 
 - **pi-tui-rpc**: forwarded events are projected to their observed shape before
@@ -38,6 +49,35 @@ All notable changes to pi-agent-extensions will be documented in this file.
   Added config schema, real Pi RPC boot and propagation tests, and an optional
   manual age recipient archive helper. Password/YubiKey live-session encryption
   remains unimplemented; sessions are plaintext and the README documents limits.
+
+### Cards survive forks, resumes and branch navigation (2.38.0)
+
+- **pi-turn-classify 0.5.0**: storing a card keyed by `turn` broke twice. Resuming
+  a session restarts pi's turn counter, so the first classification after a resume
+  reused turn 1 and **overwrote** the original card in the sidecar; and a fork has a
+  new session id, so its timeline started at the fork and ignored every card it
+  inherited on its branch. Turn numbers now come from the branch, a timeline entry
+  is identified by its timestamp (so a revisited turn never overwrites history), a
+  fork seeds its sidecar from the inherited cards, and each card records the
+  session-tree `branch` so diverged paths stay distinguishable.
+- The sidecar keeps **every** turn rather than a truncated window: full parses are
+  rare and the point is seeing a session change over time. `maxBytes` (8 MB) is now
+  a safety valve only, and timeline entries carry the fields that move.
+
+### pi-last-question: blue card, and it actually updates (2.38.0)
+
+- **pi-last-question 0.3.0**: the card now uses pi's blue user-message family
+  (`userMessageBg` background, `border` rule, `mdLink` timestamp,
+  `userMessageText` question) instead of the violet extension-block tokens, since
+  it shows the user's own message; the Nerd Font icon is gone.
+- Fixed the reported "it does not update" bug: pi emits `input` (and `turn_start`)
+  **before** the user message is on the session branch, so the card rendered the
+  previous question and never refreshed. The submitted text is shown immediately
+  and reconciled with the branch on `message_end`/`turn_end`/`agent_end`.
+- Fixed the `⌥Q expand` hint being cut in real terminals: padding was measured
+  with string `.length` on ANSI-styled text and on the double-width `⌥`; widths
+  now come from pi-tui's `visibleWidth` and rows are cut with `truncateToWidth`.
+  Verified in a real pi TUI via pty + terminal emulator (100x40).
 
 ### Last question as a pi-styled card (2.37.0)
 
@@ -1112,7 +1152,6 @@ All notable changes to pi-agent-extensions will be documented in this file.
 ### oqto-todos: store todos under pi's session directory
 
 - Todos now default to `<pi-session-dir>/todos/` (derived from `ctx.sessionManager.getSessionDir()`) instead of `./.pi/todos`, so they live with pi's session state rather than the project. Set `storagePath` to override; falls back to `./.pi/todos` when no session directory is available.
-
 
 
 - **Root cause.** The node:sqlite opener passed `undefined` options explicitly
