@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- The labeler no longer asks the removed `risk` question either (it kept asking a
+  question the extension had dropped).
+
 ## 0.4.0
 
 - **Removed the `risk` question.** As a five-level score it measured 25% (d3) and
