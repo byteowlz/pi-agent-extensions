@@ -96,6 +96,55 @@ describe("writing", () => {
 		}
 	});
 
+	test("history keeps one line per turn even after full cards roll out", () => {
+		const dir = tmp();
+		try {
+			const options = { cardsDir: dir, keep: 3, historyLimit: 50 };
+			for (let turn = 1; turn <= 6; turn += 1) {
+				writeSessionCard(options, card({ turn, line: `turn ${turn}` }));
+			}
+			const document = readSessionCards(options, "sess-1");
+			// full detail is bounded…
+			expect(document?.turns.map((entry) => entry.turn)).toEqual([4, 5, 6]);
+			// …but the scrollback is complete, in order, and compact
+			expect(document?.history.map((entry) => entry.turn)).toEqual([1, 2, 3, 4, 5, 6]);
+			expect(document?.history[0]?.line).toBe("turn 1");
+			expect(Object.keys(document?.history[0] ?? {})).toEqual(["turn", "at", "line"]);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("re-classifying a turn updates its history line instead of duplicating it", () => {
+		const dir = tmp();
+		try {
+			const options = { cardsDir: dir };
+			writeSessionCard(options, card({ turn: 1, line: "first" }));
+			writeSessionCard(options, card({ turn: 2, line: "second" }));
+			writeSessionCard(options, card({ turn: 1, line: "first, re-run" }));
+			const document = readSessionCards(options, "sess-1");
+			expect(document?.history.map((entry) => entry.turn)).toEqual([1, 2]);
+			expect(document?.history[0]?.line).toBe("first, re-run");
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("history is capped so a very long session cannot grow the sidecar without bound", () => {
+		const dir = tmp();
+		try {
+			const options = { cardsDir: dir, keep: 2, historyLimit: 5 };
+			for (let turn = 1; turn <= 9; turn += 1) writeSessionCard(options, card({ turn, line: `t${turn}` }));
+			const document = readSessionCards(options, "sess-1");
+			expect(document?.history.map((entry) => entry.turn)).toEqual([5, 6, 7, 8, 9]);
+			// and the whole document stays small
+			const bytes = fs.statSync(path.join(dir, "sess-1.json")).size;
+			expect(bytes).toBeLessThan(6000);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	test("keeps only the most recent `keep` cards", () => {
 		const dir = tmp();
 		try {
