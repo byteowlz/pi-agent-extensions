@@ -4,7 +4,7 @@ Keeps **your last question visible above the prompt box** as a small card, with
 the full text one shortcut away.
 
 ```
- ▌ 10/29/2026, 12:00 PM                              ⌥Q expand
+ ▌ 10/29/2026, 12:00 PM                            ctrl+q expand
  ▌ how do I rotate the deploy key without breaking the build for the
  ▌ running pods while the old one is cached in the sidecar container…
 ```
@@ -21,8 +21,9 @@ The card is drawn with pi's own primitives, so it belongs rather than intrudes:
 - a left rule (`▌`) in `accent` plus `customMessageLabel` for the timestamp and
   `customMessageText` for the question — the same hierarchy pi uses in message
   headers.
-- the shortcut hint right-aligned in `dim`, and it degrades gracefully: full
-  `⌥Q expand` → `⌥Q` → omitted, before the timestamp is ever cut.
+- the shortcut hint right-aligned in `dim`, shown **only when the question is cut
+  off**, and it degrades gracefully (`ctrl+q expand` → `ctrl+q` → omitted) before
+  the timestamp is ever cut.
 
 On a long session you scroll away from what you actually asked. This pins it.
 
@@ -30,8 +31,15 @@ On a long session you scroll away from what you actually asked. This pins it.
 
 | key | action |
 |---|---|
-| `ctrl+alt+q` | **expand** — full question in an overlay (`↑/↓` scroll, `enter` inserts it, `y` copies, `esc` closes) |
-| `ctrl+alt+j` | **jump** — put the full question straight into the prompt box (appends to a draft) |
+| `ctrl+q` | **expand** — full question in an overlay (`↑/↓` scroll, `enter` inserts it, `y` copies, `esc` closes) |
+| `ctrl+n` | **jump** — put the full question straight into the prompt box (appends to a draft) |
+
+Both are plain `ctrl` bindings: pi's editor already owns a, b, c, d, e, f, g, j, k,
+l, o, p, s, t, u, w, x, y, z, so `q` and `n` are the free ones.
+
+**The hint only appears when there is something to expand.** A question that fits
+both lines shows no shortcut at all — the card then carries just the rule and the
+timestamp, and the bindings still work.
 | `/last-question` | show it as a notification; opens the overlay in the TUI |
 
 Copying and inserting both go through the prompt box on purpose: that is where
