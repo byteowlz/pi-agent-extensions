@@ -10,10 +10,24 @@ import {
 	parseSystemOneAnswers,
 	supportsInstructions,
 } from "./decision-client";
-import { buildQuestions } from "./schema";
+import { type QuestionSpec, buildQuestions } from "./schema";
 
 const projects = [{ id: "pi-agent-extensions" }, { id: "eavs" }];
 const questions = buildQuestions(projects);
+/** The schema has no score question any more; the wire type is still supported. */
+const scoreQuestion: QuestionSpec = {
+	id: "risk",
+	kind: "score",
+	instructions: "How consequential were the actions?",
+	levels: [
+		{ id: "none", label: "none" },
+		{ id: "low", label: "low" },
+		{ id: "medium", label: "medium" },
+		{ id: "high", label: "high" },
+		{ id: "critical", label: "critical" },
+	],
+};
+const questionsWithScore = [...questions, scoreQuestion];
 
 const baseClient: DecisionClientConfig = {
 	endpoint: "http://127.0.0.1:9999",
@@ -61,7 +75,8 @@ describe("request bodies", () => {
 		expect(body.state).toEqual({ cwd: "/x" });
 		const rendered = body.questions as Record<string, { type: string }>;
 		expect(rendered.project_mismatch.type).toBe("noul");
-		expect(rendered.risk.type).toBe("score");
+		expect(rendered.work_done.type).toBe("noul");
+		expect(rendered.activity.type).toBe("choice");
 	});
 
 	test("decisions body uses input and an array of named questions", () => {
@@ -87,7 +102,7 @@ describe("answer parsing — System One", () => {
 					activity: { type: "choice", choice: "debug", confidence: 0.6 },
 				},
 			},
-			questions
+			questionsWithScore
 		);
 		expect(answers.project).toEqual({
 			value: "eavs",
@@ -123,7 +138,7 @@ describe("answer parsing — OpenAI Decisions", () => {
 					{ type: "choice", name: "project", value: "eavs" },
 				],
 			},
-			questions
+			questionsWithScore
 		);
 		expect(answers.activity?.value).toBe("implement");
 		expect(answers.project_mismatch?.value).toBe("no");
@@ -160,7 +175,7 @@ describe("classify — end to end against a fake server", () => {
 
 		expect(calls[0]?.url).toBe("http://127.0.0.1:9999/v1/systemone");
 		const sent = calls[0]?.body as { questions: Record<string, { instructions?: string }> };
-		expect(sent.questions.risk.instructions).toBeUndefined();
+		expect(sent.questions.work_done.instructions).toBeUndefined();
 		expect(result.answers.activity?.value).toBe("implement");
 		expect(result.usage).toEqual({ inputTokens: 120, outputTokens: 7 });
 		expect(result.ms).toBeGreaterThanOrEqual(0);

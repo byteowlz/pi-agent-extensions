@@ -62,6 +62,10 @@
       "default": true,
       "description": "Show the latest card in the TUI status line."
     },
+    "cardsDir": {
+      "type": "string",
+      "description": "Override the card sidecar directory. Default: <agentDir>/turn-classify/cards, one small JSON file per session, so list views never read whole transcripts."
+    },
     "projects": {
       "type": "array",
       "description": "Known projects for the 'which project' question. Derived from cwd and git remotes when omitted.",

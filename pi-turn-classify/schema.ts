@@ -80,14 +80,21 @@ export const ATTENTION: ChoiceOption[] = [
 	{ id: "review", label: "review", hint: "work is complete and awaiting a human look" },
 ];
 
-/** How consequential the turn's actions were. */
-export const RISK: ChoiceOption[] = [
-	{ id: "none", label: "none", hint: "only reads, discussion or local edits" },
-	{ id: "low", label: "low", hint: "reversible local changes" },
-	{ id: "medium", label: "medium", hint: "commits, config changes, installs" },
-	{ id: "high", label: "high", hint: "deploys, deletions, migrations, remote servers" },
-	{ id: "critical", label: "critical", hint: "production, secrets, credentials, destructive commands" },
-];
+/*
+ * There is deliberately no `risk` question.
+ *
+ * It was a five-level score ("how consequential were the actions?") and it
+ * measured 25% (d3) / 37.5% (jev) on labelled turns — worse than a constant
+ * guess, for both models. The reason is structural: consequence is a property of
+ * what an action *does* to the world, not of the turn's text, and a small model
+ * reading a summary cannot know whether a `git push` went to a scratch branch or
+ * to main.
+ *
+ * If a triage signal is needed later, ask a binary the evidence can support —
+ * "did this turn perform an irreversible or destructive action?" — not a five-way
+ * severity judgement. `approval` in ATTENTION already covers the case where the
+ * turn itself says a go-ahead is needed.
+ */
 
 /** What the turn produced. */
 export const ARTIFACT: ChoiceOption[] = [
@@ -209,12 +216,6 @@ export function buildQuestions(projects: ProjectCandidate[], options: BuildOptio
 			kind: "choice",
 			instructions: "Does this turn need the user, and what kind of input?",
 			options: ATTENTION,
-		},
-		{
-			id: "risk",
-			kind: "score",
-			instructions: "How consequential were the actions taken in this turn?",
-			levels: RISK,
 		},
 		{
 			id: "artifact",
@@ -380,7 +381,6 @@ export interface TurnCardAnswers extends AnswerMap {
 	activity?: AnswerValue;
 	status?: AnswerValue;
 	attention?: AnswerValue;
-	risk?: AnswerValue;
 	artifact?: AnswerValue;
 	scope?: AnswerValue;
 }
@@ -444,9 +444,6 @@ export function renderLine(answers: TurnCardAnswers, questions?: QuestionSpec[])
 
 	const artifact = label("artifact", "artifact");
 	if (artifact) parts.push(artifact);
-
-	const risk = label("risk", "risk");
-	if (risk && risk !== "none" && risk !== "low") parts.push(`risk ${risk}`);
 
 	const attention = label("attention", "attention");
 	if (attention) parts.push(`needs ${attention}`);
