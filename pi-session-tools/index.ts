@@ -89,14 +89,26 @@ import { STATUS_QUERY, type StatusQuery } from "../pi-introspection/contribution
 import { openTmuxSide, resolveRoute } from "./backend.js";
 import {
 	CAPTAIN_ENTRY_TYPE,
+	type CaptainAction,
 	type CaptainClaim,
+	addAction,
 	clearClaim,
+	findAction,
+	formatActions,
 	formatCaptainStatus,
+	formatDuration,
+	formatInterval,
 	judgeClaim,
+	markActionRun,
 	parseAgentList,
+	parseInterval,
 	projectSessions,
+	readActions,
 	readCaptainEntry,
 	readClaim,
+	removeAction,
+	setActionEnabled,
+	skdlrExportCommand,
 	summarizeCaptain,
 	writeClaim,
 } from "./captain.js";
@@ -2567,6 +2579,15 @@ export default function sessionTools(pi: ExtensionAPI) {
 		observedSettings = undefined;
 		observedSession = undefined;
 		settingsChange(ctx);
+		// Adopt this project's scheduled captain actions when this session holds
+		// the claim. Kept in the existing session_start handler: one handler per
+		// event keeps Map-based test fakes and real pi behaviour identical.
+		// Single-shot print/json sessions must not retain timers.
+		if (isLiveSession(ctx.hasUI, ctx.mode)) armCaptainTimers(ctx);
+		else {
+			disarmCaptainTimers();
+			captainStatusLine(ctx);
+		}
 		unsubscribeStatus?.();
 		const sessionId = ctx.sessionManager.getSessionId();
 		unsubscribeStatus = pi.events?.on(STATUS_QUERY, (data: unknown) => {
@@ -2605,7 +2626,43 @@ export default function sessionTools(pi: ExtensionAPI) {
 		});
 	});
 
+	pi.on("session_before_compact", async () => {
+		captainCompacting = true;
+		return undefined;
+	});
+
+	const settleCaptainCompaction = (): void => {
+		if (!captainCompacting) return;
+		captainCompacting = false;
+		const queued = captainParked;
+		captainParked = [];
+		const ctx = captainCtx;
+		if (!ctx) return;
+		for (const text of queued) {
+			try {
+				if (ctx.isIdle()) pi.sendUserMessage(text);
+				else pi.sendUserMessage(text, { deliverAs: "followUp" });
+			} catch {
+				// Dropped rather than retried forever; the next tick runs it again.
+			}
+		}
+	};
+
+	pi.on("session_compact", async () => {
+		settleCaptainCompaction();
+		return undefined;
+	});
+
+	pi.on("session_compact_failed", async () => {
+		settleCaptainCompaction();
+		return undefined;
+	});
+
 	pi.on("session_shutdown", async () => {
+		disarmCaptainTimers();
+		captainCtx = undefined;
+		captainParked = [];
+		captainCompacting = false;
 		stopNotifyTimer();
 		stopEventSubscriber();
 		unsubscribeStatus?.();
@@ -3381,6 +3438,89 @@ export default function sessionTools(pi: ExtensionAPI) {
 	const captainSummary = (ctx: ExtensionContext): ReturnType<typeof summarizeCaptain> =>
 		summarizeCaptain(ctx.cwd, ctx.sessionManager.getSessionId());
 
+	// --- captain action scheduler (standalone, in-session) -----------------
+	// Only the claim owner arms timers: actions are project-scoped, but a single
+	// live session must run them. Every tick re-checks ownership so a handover
+	// disarms the previous captain instead of double-running the project.
+	const captainTimers = new Map<string, ReturnType<typeof setInterval>>();
+	let captainCtx: ExtensionContext | undefined;
+	let captainParked: string[] = [];
+	let captainCompacting = false;
+
+	const disarmCaptainTimers = (): void => {
+		for (const timer of captainTimers.values()) clearInterval(timer);
+		captainTimers.clear();
+	};
+
+	const captainStatusLine = (ctx: ExtensionContext): void => {
+		try {
+			const claim = readClaim(ctx.cwd);
+			const mine = claim?.sessionId === ctx.sessionManager.getSessionId();
+			if (!claim || !mine) {
+				ctx.ui.setStatus("captain", undefined);
+				return;
+			}
+			const actions = readActions(ctx.cwd);
+			const active = actions.filter((action) => action.enabled).length;
+			const project = path.basename(ctx.cwd) || "project";
+			ctx.ui.setStatus("captain", active > 0 ? `${project} \u00b7${active}` : project);
+		} catch {
+			// status is cosmetic
+		}
+	};
+
+	const deliverCaptainAction = (action: CaptainAction): void => {
+		const ctx = captainCtx;
+		if (!ctx) return;
+		const text = action.text;
+		if (captainCompacting) {
+			captainParked.push(text);
+			return;
+		}
+		try {
+			if (ctx.isIdle()) pi.sendUserMessage(text);
+			else pi.sendUserMessage(text, { deliverAs: "followUp" });
+		} catch (err) {
+			// pi refuses prompts while compacting; park instead of losing the nudge.
+			if (/compaction is in progress/i.test((err as Error)?.message ?? "")) {
+				captainCompacting = true;
+				captainParked.push(text);
+				return;
+			}
+			ctx.ui.notify(`captain action failed: ${(err as Error)?.message ?? err}`, "error");
+		}
+	};
+
+	const armCaptainTimers = (ctx: ExtensionContext): void => {
+		disarmCaptainTimers();
+		captainCtx = ctx;
+		const sessionId = ctx.sessionManager.getSessionId();
+		const claim = readClaim(ctx.cwd);
+		if (!claim || claim.sessionId !== sessionId) return;
+		const actions = readActions(ctx.cwd).filter((action) => action.enabled);
+		for (const action of actions) {
+			const timer = setInterval(() => {
+				const current = readClaim(ctx.cwd);
+				if (!current || current.sessionId !== sessionId) {
+					// Handover: the project now has a different captain.
+					disarmCaptainTimers();
+					const ctxNow = captainCtx as ExtensionContext | undefined;
+					ctxNow?.ui.notify("captain timers stopped: another session holds the claim.", "info");
+					captainStatusLine(ctxNow as ExtensionContext);
+					return;
+				}
+				// Re-read so edits (pause/remove) apply without re-arming.
+				const live = readActions(ctx.cwd).find((a) => a.id === action.id);
+				if (!live || !live.enabled) return;
+				markActionRun(ctx.cwd, live.id);
+				deliverCaptainAction(live);
+			}, action.intervalMs);
+			timer.unref?.();
+			captainTimers.set(action.id, timer);
+		}
+		captainStatusLine(ctx);
+	};
+
 	const recordCaptainEntry = (claim: CaptainClaim | null): void => {
 		try {
 			pi.appendEntry(
@@ -3415,6 +3555,7 @@ export default function sessionTools(pi: ExtensionAPI) {
 				try {
 					const file = writeClaim(claim);
 					recordCaptainEntry(claim);
+					armCaptainTimers(ctx);
 					// Visibility: the tab label is what the human and /send already show.
 					if (paneId) {
 						void herdr(["pane", "rename", paneId, `★ captain · ${path.basename(ctx.cwd) || "project"}`]).catch(() => {});
@@ -3449,6 +3590,8 @@ export default function sessionTools(pi: ExtensionAPI) {
 				}
 				clearClaim(ctx.cwd);
 				recordCaptainEntry(null);
+				disarmCaptainTimers();
+				captainStatusLine(ctx);
 				const paneId = process.env.HERDR_PANE_ID;
 				if (paneId) void herdr(["pane", "rename", paneId, ""]).catch(() => {});
 				ctx.ui.notify(`Released captain for ${path.resolve(ctx.cwd)}.`, "info");
@@ -3492,6 +3635,112 @@ export default function sessionTools(pi: ExtensionAPI) {
 				} catch (err) {
 					ctx.ui.notify(`Route failed: ${(err as Error)?.message ?? err}`, "error");
 				}
+				return;
+			}
+
+			if (sub === "schedule" || sub === "add") {
+				// /captain schedule hourly "check board"
+				const intervalArg = rest[0] ?? "";
+				const text = rest
+					.slice(1)
+					.join(" ")
+					.replace(/^"(.*)"$/s, "$1")
+					.trim();
+				if (!intervalArg || !text) {
+					ctx.ui.notify('Usage: /captain schedule <interval> "<prompt>"  (e.g. hourly "check board again")', "warning");
+					return;
+				}
+				const parsed = parseInterval(intervalArg);
+				if ("error" in parsed) {
+					ctx.ui.notify(`captain: ${parsed.error}`, "error");
+					return;
+				}
+				const { action } = addAction(ctx.cwd, { text, intervalMs: parsed.intervalMs });
+				armCaptainTimers(ctx);
+				captainStatusLine(ctx);
+				const mine = snapshot.claim?.sessionId === ctx.sessionManager.getSessionId();
+				ctx.ui.notify(
+					`Scheduled every ${formatInterval(action.intervalMs)}: ${text}\n  id: ${action.id}${mine ? `\n  next check in ${formatDuration(action.intervalMs)}` : "\n  runs once this session is the captain (/captain claim)"}`,
+					"info"
+				);
+				return;
+			}
+
+			if (sub === "actions" || sub === "list") {
+				ctx.ui.notify(formatActions(readActions(ctx.cwd)), "info");
+				return;
+			}
+
+			if (sub === "unschedule" || sub === "remove") {
+				const selector = rest.join(" ").trim();
+				if (!selector) {
+					ctx.ui.notify("Usage: /captain unschedule <n|id>  (see /captain actions)", "warning");
+					return;
+				}
+				const { removed } = removeAction(ctx.cwd, selector);
+				if (!removed) {
+					ctx.ui.notify(`captain: no action matches "${selector}"`, "error");
+					return;
+				}
+				armCaptainTimers(ctx);
+				captainStatusLine(ctx);
+				ctx.ui.notify(`Unscheduled: ${removed.label ?? removed.text}`, "info");
+				return;
+			}
+
+			if (sub === "pause" || sub === "resume") {
+				const selector = rest.join(" ").trim();
+				const enabled = sub === "resume";
+				if (!selector) {
+					// No selector: pause/resume every action of this project.
+					for (const action of readActions(ctx.cwd)) setActionEnabled(ctx.cwd, action.id, enabled);
+					armCaptainTimers(ctx);
+					captainStatusLine(ctx);
+					ctx.ui.notify(`All captain actions ${enabled ? "resumed" : "paused"}.`, "info");
+					return;
+				}
+				const { action } = setActionEnabled(ctx.cwd, selector, enabled);
+				if (!action) {
+					ctx.ui.notify(`captain: no action matches "${selector}"`, "error");
+					return;
+				}
+				armCaptainTimers(ctx);
+				captainStatusLine(ctx);
+				ctx.ui.notify(`${enabled ? "Resumed" : "Paused"}: ${action.label ?? action.text}`, "info");
+				return;
+			}
+
+			if (sub === "run") {
+				const selector = rest.join(" ").trim();
+				const actions = readActions(ctx.cwd);
+				const action = selector ? findAction(actions, selector) : actions[0];
+				if (!action) {
+					ctx.ui.notify("Usage: /captain run <n|id>  (see /captain actions)", "warning");
+					return;
+				}
+				markActionRun(ctx.cwd, action.id);
+				deliverCaptainAction(action);
+				ctx.ui.notify(`Ran now: ${action.label ?? action.text}`, "info");
+				return;
+			}
+
+			if (sub === "export") {
+				const actions = readActions(ctx.cwd);
+				if (actions.length === 0) {
+					ctx.ui.notify("No captain actions to export.", "info");
+					return;
+				}
+				const lines = actions.map((action) => skdlrExportCommand(ctx.cwd, action));
+				ctx.ui.notify(
+					[
+						"Headless equivalents (skdlr). Each runs a separate `pi -p` in this project,",
+						"so it cannot share this session's state; keep the in-session timer unless",
+						"the work belongs headless:",
+						"",
+						...lines,
+					].join("\n"),
+					"info"
+				);
 				return;
 			}
 

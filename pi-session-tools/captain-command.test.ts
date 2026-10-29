@@ -52,6 +52,7 @@ const events = new Map();
 const commands = new Map();
 const notes = [];
 const entries = [];
+const messages = [];
 
 function makeCtx(overrides = {}) {
   return {
@@ -77,6 +78,7 @@ extension({
   registerTool: () => {},
   registerShortcut: () => {},
   appendEntry: (customType, data) => entries.push({ type: 'custom', customType, data }),
+  sendUserMessage: (text) => messages.push({ text }),
   events: { on: () => () => {}, emit: () => {} },
   sendMessage: () => {},
 });
@@ -159,6 +161,67 @@ assert.equal(fs.existsSync(claimPath), false);
 await new Promise((r) => setTimeout(r, 300));
 const finalCalls = fs.readFileSync(path.join(home, 'herdr-calls.log'), 'utf8');
 assert.match(finalCalls, /pane rename w1:p1 \\n/);
+
+// --- 7. scheduled actions: claim, schedule, fire, pause ----------------
+notes.length = 0;
+await captain('claim recon', makeCtx());
+notes.length = 0;
+await captain('schedule 10s "check board again"', makeCtx());
+assert.match(notes.at(-1).message, /Scheduled every 10s: check board again/);
+const storePath = path.join(home, '.pi/agent/captain', '--work-alpha--.actions.json');
+const store = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+assert.equal(store.actions.length, 1);
+assert.equal(store.actions[0].id, 'check-board-again');
+assert.equal(store.actions[0].intervalMs, 10000);
+
+notes.length = 0;
+await captain('actions', makeCtx());
+assert.ok(notes.at(-1).message.includes("1. [10s] check board again"), 'listing shows the action');
+
+// Drive the timer with a short interval written straight into the store: the
+// 10s floor is a CLI guard (parseInterval), the runtime honours the store.
+store.actions[0].intervalMs = 250;
+fs.writeFileSync(storePath, JSON.stringify(store));
+await captain('claim recon', makeCtx()); // re-arm with the new interval
+
+const before = messages.length;
+await new Promise((r) => setTimeout(r, 900));
+assert.ok(messages.length > before, 'scheduled action delivered a prompt');
+assert.ok(messages.some((m) => m.text === 'check board again'), 'delivered the action text');
+assert.ok(JSON.parse(fs.readFileSync(storePath, 'utf8')).actions[0].lastRunAt, 'run recorded');
+
+// pause stops it
+await captain('pause', makeCtx());
+const pausedCount = messages.length;
+await new Promise((r) => setTimeout(r, 700));
+assert.equal(messages.length, pausedCount, 'paused action does not fire');
+
+// resume fires again; handover then disarms this session
+await captain('resume', makeCtx());
+const resumedFrom = messages.length;
+await new Promise((r) => setTimeout(r, 700));
+assert.ok(messages.length > resumedFrom, 'resumed action fires again');
+
+const claimNow = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
+fs.writeFileSync(claimPath, JSON.stringify({ ...claimNow, sessionId: 'sess-other' }));
+await new Promise((r) => setTimeout(r, 600));
+const handedOver = messages.length;
+await new Promise((r) => setTimeout(r, 700));
+assert.equal(messages.length, handedOver, 'former captain stops firing after handover');
+
+// unschedule removes it
+await captain('unschedule 1', makeCtx());
+assert.equal(JSON.parse(fs.readFileSync(storePath, 'utf8')).actions.length, 0);
+
+// export offers the headless skdlr equivalent instead of silently replacing it
+await captain('schedule hourly "check board"', makeCtx());
+notes.length = 0;
+await captain('export', makeCtx());
+const exportText = notes.at(-1).message;
+assert.ok(exportText.includes("skdlr add"), 'export emits a skdlr command');
+assert.ok(exportText.includes("--schedule '1h'"), 'export carries the interval');
+assert.ok(exportText.includes("--workdir '/work/alpha'"), 'export carries the project dir');
+assert.ok(exportText.includes('cannot share this session'), 'export warns about state');
 
 console.log('captain verified');
 `;
