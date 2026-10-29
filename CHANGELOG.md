@@ -4,6 +4,39 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Fuzzy project switching (2.31.0)
+
+- **pi-session-cwd 0.2.0**: `/move` moves a session to a project by fuzzy name
+  (`/move foxline`), or opens a picker over configured roots when called bare.
+  An ambiguous query (`/move fox` matching foxline and foxhole) asks with a
+  pre-filtered picker instead of guessing; exact/clear-prefix matches move
+  immediately; RPC/print error with the candidate list. Roots are configurable
+  via `.pi/session-cwd.json` or `~/.pi/agent/session-cwd.json`
+  (`roots`, `depth`, `includeSessionDirs`), defaulting to `~/work` and
+  `~/byteowlz` with a safe fallback when the file is missing or malformed.
+  `/move` also accepts literal paths. Replaces `/mvcwd`. The move already ends
+  in the new session: `switchSession` re-homes the runtime, so pi reports
+  "Resumed session" and later turns resolve the new project.
+
+### Turn classification with a decision model (2.32.0)
+
+- **pi-turn-classify 0.1.0**: new extension — classifies every finished turn with
+  a decision model (Jeff / D3 / Clef) instead of a chat model, and stores a turn
+  card as a `pi-turn-classify:card/v1` custom entry (never LLM context). Seven
+  closed questions: which project the work really belongs to (with
+  `project_mismatch`, so working in one directory for another project is
+  visible), activity, status, attention needed, risk (score), artifact and scope.
+  The one-line card is composed from answer ids, so it cannot invent content.
+- Speaks both APIs: TypeSafe System One (`/v1/systemone`) and the OpenAI
+  Decisions API (`/v1/decisions`). D3 checkpoints reject `instructions` with 400,
+  so `"instructions": "auto"` omits them for `vllm-sr/d3*` and a 400 mentioning
+  instructions retries once without them.
+- Calibration-aware: choices below `confidenceFloor` render as `unclear`, a 0.5
+  yes/no counts as no answer, raw probabilities are always stored, and `bench.ts`
+  reports accuracy, ECE, high-confidence accuracy and latency over a 14-turn
+  hand-labelled seed set. Off by default; `/classify off` is a no-reload kill
+  switch; classification never blocks or fails a turn.
+
 ### Move a session to another working directory (2.30.0)
 
 - **pi-session-cwd 0.1.0**: new extension — `/cwd <path>` moves the running
