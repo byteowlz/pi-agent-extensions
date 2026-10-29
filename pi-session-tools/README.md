@@ -121,6 +121,9 @@ Loadouts resolve to a set of allowed model ids + spawn kinds, which gates
 
 ## Commands
 
+`/captain` — per-project intake ownership (see [Project captain](#project-captain)):
+`/captain` · `/captain claim [label]` · `/captain release` · `/captain who` · `/captain route <text>`
+
 `/subagent` — config + **per-session** settings + lifecycle:
 
 | command | effect |
@@ -336,6 +339,43 @@ Keybindings in the compose box:
 - **Esc** — cancel
 
 Your own pane is excluded from the target list (via `HERDR_PANE_ID`).
+
+## Project captain
+
+The **working directory is the project**. One session per project can be
+designated the **captain**: the thread responsible for intake, and the natural
+lead for board/routing work.
+
+```
+/captain                    status: project, captain, claim liveness, other sessions
+/captain claim [label]      designate this session as captain for this cwd
+/captain release            release the claim (only the owning session may)
+/captain who                sessions herdr reports inside this project
+/captain route <text>       hand work to the captain (`herdr agent prompt`)
+```
+
+Claim state lives in `~/.pi/agent/captain/<encoded-cwd>.json` — the same
+`--<path>--` encoding pi uses for session directories, so the claim follows
+resume/reload and `/cwd`. Each claim is also appended to the session branch as a
+`pi-session-tools:captain/v1` entry (inspectable history, never LLM context).
+
+Deliberate properties:
+
+- **Advisory, not enforced.** A claim is a visible designation with liveness
+  evidence — not a lock. Exclusive *input* ownership already exists in
+  pi-tui-rpc's lease; duplicating it here would fight that.
+- **Liveness is judged, never assumed.** A claim is `live` only when its pane is
+  in `herdr agent list`, `stale` when the pane or session file is gone, and
+  `unknown` when there is no evidence. Stale claims never capture intake; route
+  refuses and tells you to claim instead.
+- **Visible where you already look.** Claiming renames the herdr pane/tab to
+  `★ captain · <project>`; releasing clears it.
+- **Project-scoped discovery.** `/captain who` reuses `herdr agent list` (which
+  carries each pane's `cwd`), so it works for sessions that never loaded any
+  messaging extension.
+- **No auto-routing.** Intake moves only when you route it (`/captain route`,
+  `/send`, `send_to_session`, or a board post). Auto-capturing every unattributed
+  message would need an ownership rule for "no captain claimed"; not assumed here.
 
 ## Config file
 
