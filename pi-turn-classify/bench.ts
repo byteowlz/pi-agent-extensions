@@ -39,6 +39,8 @@ export interface QuestionReport {
 	correct: number;
 	accuracy: number;
 	meanConfidence: number;
+	/** How many answers actually reported a confidence (0 means bias is unknown). */
+	confidenceScored: number;
 	/** Accuracy minus mean confidence: positive means under-confident. */
 	bias: number;
 }
@@ -57,6 +59,8 @@ export interface BenchReport {
 	highConfidenceShare: number;
 	meanMs: number;
 	p95Ms: number;
+	/** First few failure messages, so a failing run explains itself. */
+	failureReasons?: string[];
 }
 
 function bins(): number[] {
@@ -151,6 +155,7 @@ export function summarize(
 				correct: entry.correct,
 				accuracy,
 				meanConfidence,
+				confidenceScored: entry.confidenceCount,
 				bias: accuracy - meanConfidence,
 			};
 		})
@@ -189,6 +194,7 @@ export async function runBench(options: RunBenchOptions): Promise<BenchReport> {
 	const questions = buildQuestions(options.projects ?? []);
 	const results: Array<{ question: string; correct: boolean; confidence?: number }> = [];
 	const latencies: number[] = [];
+	const failureReasons: string[] = [];
 	let failures = 0;
 
 	for (const sample of options.samples) {
@@ -209,12 +215,40 @@ export async function runBench(options: RunBenchOptions): Promise<BenchReport> {
 					...(value.confidence !== undefined ? { confidence: value.confidence } : {}),
 				});
 			}
-		} catch {
+		} catch (error) {
+			// A failed request is data, not a crash: it is counted and reported.
 			failures += 1;
+			if (failureReasons.length < 3) {
+				failureReasons.push(`${sample.id}: ${error instanceof Error ? error.message : String(error)}`);
+			}
 		}
 	}
 
-	return { ...summarize(results, latencies, options.samples.length, failures), samples: options.samples.length };
+	return {
+		...summarize(results, latencies, options.samples.length, failures),
+		samples: options.samples.length,
+		...(failureReasons.length > 0 ? { failureReasons } : {}),
+	};
+}
+
+/**
+ * Hand-written samples routinely omit fields ("this turn ran commands, no file
+ * edits"), so missing collections become empty rather than crashing the run.
+ */
+export function normalizeDigest(raw: Partial<TurnDigest>): TurnDigest {
+	const list = <T>(value: T[] | undefined): T[] => (Array.isArray(value) ? value : []);
+	return {
+		userText: typeof raw.userText === "string" ? raw.userText : "",
+		assistantText: typeof raw.assistantText === "string" ? raw.assistantText : "",
+		tools: list(raw.tools),
+		filesTouched: list(raw.filesTouched),
+		commands: list(raw.commands),
+		cwd: typeof raw.cwd === "string" ? raw.cwd : process.cwd(),
+		gitRemotes: list(raw.gitRemotes),
+		...(typeof raw.sessionName === "string" ? { sessionName: raw.sessionName } : {}),
+		...(raw.errored ? { errored: true } : {}),
+		...(typeof raw.durationMs === "number" ? { durationMs: raw.durationMs } : {}),
+	};
 }
 
 /** Load samples from JSONL. Throws with the offending line number. */
@@ -237,7 +271,7 @@ export function loadSamples(path: string): BenchSample[] {
 		}
 		samples.push({
 			id: typeof record.id === "string" ? record.id : `line-${index + 1}`,
-			digest: record.state as TurnDigest,
+			digest: normalizeDigest(record.state as Partial<TurnDigest>),
 			expect: record.expect as Record<string, string>,
 		});
 	});
@@ -256,10 +290,17 @@ export function formatReport(report: BenchReport): string {
 		"  per question (worst first):",
 	];
 	for (const question of report.questions) {
+		const confidence =
+			question.confidenceScored > 0
+				? `conf ${pct(question.meanConfidence).padStart(6)} · bias ${question.bias >= 0 ? "+" : ""}${question.bias.toFixed(2)}`
+				: "conf n/a (model reports none)";
 		lines.push(
-			`    ${question.question.padEnd(18)} ${pct(question.accuracy).padStart(6)} of ${String(question.scored).padStart(3)} · ` +
-				`conf ${pct(question.meanConfidence).padStart(6)} · bias ${question.bias >= 0 ? "+" : ""}${question.bias.toFixed(2)}`
+			`    ${question.question.padEnd(18)} ${pct(question.accuracy).padStart(6)} of ${String(question.scored).padStart(3)} · ${confidence}`
 		);
+	}
+	if (report.failureReasons?.length) {
+		lines.push("", "  failed requests:");
+		for (const reason of report.failureReasons) lines.push(`    ${reason.slice(0, 160)}`);
 	}
 	lines.push("", "  reading: bias > 0 means the model is under-confident; ECE is the number to drive down.");
 	return lines.join("\n");
@@ -286,7 +327,7 @@ export async function main(argv: string[]): Promise<number> {
 	const model = args.get("model");
 	if (!samplesPath || !endpoint || !model) {
 		console.error(
-			"usage: bun run bench.ts --samples <file.jsonl> --endpoint <url> --model <id> [--api systemone|decisions] [--key <token>] [--json]"
+			"usage: bun run bench.ts --samples <file.jsonl> --endpoint <url> --model <id> [--api systemone|decisions] [--key <token>] [--projects a,b,c] [--json]"
 		);
 		return 2;
 	}
@@ -302,7 +343,12 @@ export async function main(argv: string[]): Promise<number> {
 	};
 
 	const samples = loadSamples(samplesPath);
-	const report = await runBench({ client, samples });
+	const projects = (args.get("projects") ?? "")
+		.split(",")
+		.map((id) => id.trim())
+		.filter(Boolean)
+		.map((id) => ({ id }));
+	const report = await runBench({ client, samples, projects });
 	if (args.get("json") === "true") console.log(JSON.stringify(report, null, 2));
 	else console.log(formatReport(report));
 	return 0;

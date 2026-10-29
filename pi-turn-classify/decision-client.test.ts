@@ -166,7 +166,7 @@ describe("classify — end to end against a fake server", () => {
 		expect(result.ms).toBeGreaterThanOrEqual(0);
 	});
 
-	test("retries once without instructions when the model rejects them", async () => {
+	test("auto: retries once without instructions when the model rejects them", async () => {
 		let attempt = 0;
 		const { fetchImpl, calls } = fakeFetch((_url, init) => {
 			attempt += 1;
@@ -177,7 +177,8 @@ describe("classify — end to end against a fake server", () => {
 		});
 
 		const result = await classify({
-			client: { ...baseClient, model: "Cloudflare/clef-flash", instructions: "always" },
+			// a model whose name does not suggest D3, so the first attempt includes instructions
+			client: { ...baseClient, model: "Cloudflare/clef-flash" },
 			questions,
 			state: "a ticket",
 			fetchImpl,
@@ -187,6 +188,46 @@ describe("classify — end to end against a fake server", () => {
 		const retried = calls[1]?.body as { questions: Record<string, { instructions?: string }> };
 		expect(retried.questions.activity.instructions).toBeUndefined();
 		expect(result.answers.activity?.value).toBe("review");
+	});
+
+	test("auto: retries WITH instructions when the server requires them (vllm-sr d3-lite)", async () => {
+		// The live vllm-sr System One deployment rejects a request whose questions
+		// lack `instructions`, while a vLLM D3 checkpoint rejects the opposite.
+		let attempt = 0;
+		const { fetchImpl, calls } = fakeFetch((_url, init) => {
+			attempt += 1;
+			const body = JSON.parse(String(init.body)) as { questions: Record<string, { instructions?: string }> };
+			const missing = Object.values(body.questions).some((question) => question.instructions === undefined);
+			if (missing) {
+				return { status: 400, body: { error: { type: "invalid_request", message: "missing wire field instructions" } } };
+			}
+			return { body: { answers: { activity: { type: "choice", choice: "debug", confidence: 0.8 } } } };
+		});
+
+		const result = await classify({
+			// vllm-sr/d3* starts out with instructions omitted
+			client: baseClient,
+			questions,
+			state: { cwd: "/x" },
+			fetchImpl,
+		});
+
+		expect(attempt).toBe(2);
+		const retried = calls[1]?.body as { questions: Record<string, { instructions?: string }> };
+		expect(retried.questions.activity.instructions).toBeTruthy();
+		expect(result.answers.activity?.value).toBe("debug");
+	});
+
+	test("an explicit instructions mode is never flipped", async () => {
+		let attempt = 0;
+		const { fetchImpl } = fakeFetch(() => {
+			attempt += 1;
+			return { status: 400, body: { error: "instructions are not supported by this model" } };
+		});
+		await expect(
+			classify({ client: { ...baseClient, instructions: "always" }, questions, state: {}, fetchImpl })
+		).rejects.toThrow(/instructions/);
+		expect(attempt).toBe(1);
 	});
 
 	test("decisions api: posts to /v1/decisions and normalizes", async () => {

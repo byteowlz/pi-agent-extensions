@@ -116,7 +116,11 @@ describe("rendering to each API", () => {
 			unclear: "cannot tell from the turn",
 		});
 		expect(rendered.project_mismatch.type).toBe("noul");
-		expect(rendered.project_mismatch.criteria).toBeNull();
+		// Both sides always carry text: some servers reject a null criteria.
+		expect(rendered.project_mismatch.criteria).toEqual({
+			true: "the work belongs to a different project than the cwd",
+			false: "the work belongs to the project of the cwd",
+		});
 		expect(rendered.risk.type).toBe("score");
 		expect(rendered.risk.criteria).toEqual(["none", "low", "medium", "high", "critical"]);
 	});
