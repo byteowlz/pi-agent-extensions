@@ -4,13 +4,11 @@ import {
 	ACTIVITY,
 	ARTIFACT,
 	ATTENTION,
-	RISK,
 	SCOPE,
 	UNCLEAR,
 	buildQuestions,
 	isUnclassified,
 	renderLine,
-	scoreLevelId,
 	toDecisionsQuestions,
 	toSystemOneQuestions,
 } from "./schema";
@@ -28,7 +26,6 @@ describe("schema shape", () => {
 			"work_done",
 			"blocked",
 			"attention",
-			"risk",
 			"artifact",
 			"scope",
 		]);
@@ -98,7 +95,6 @@ describe("schema shape", () => {
 			"chat",
 		]);
 		expect(ATTENTION.map((option) => option.id)).toEqual(["none", "decision", "approval", "missing_info", "review"]);
-		expect(RISK.map((option) => option.id)).toEqual(["none", "low", "medium", "high", "critical"]);
 		expect(ARTIFACT.map((option) => option.id)).toEqual(["code", "test", "doc", "config", "issue", "data", "none"]);
 		expect(SCOPE.map((option) => option.id)).toEqual(["single", "multi", "noncode"]);
 	});
@@ -120,8 +116,9 @@ describe("rendering to each API", () => {
 			true: "the work belongs to a different project than the cwd",
 			false: "the work belongs to the project of the cwd",
 		});
-		expect(rendered.risk.type).toBe("score");
-		expect(rendered.risk.criteria).toEqual(["none", "low", "medium", "high", "critical"]);
+		// no score question is left in the schema: risk was removed after measuring
+		// 25%/37.5% accuracy, and nothing else is ordinal
+		expect(Object.values(rendered).some((question) => question.type === "score")).toBe(false);
 	});
 
 	test("System One can omit instructions (D3 rejects them)", () => {
@@ -135,24 +132,9 @@ describe("rendering to each API", () => {
 		expect(byName.get("project")?.type).toBe("choice");
 		expect(byName.get("project")?.choices?.map((choice) => choice.value)).toContain("eavs");
 		expect(byName.get("project_mismatch")?.type).toBe("predicate");
-		expect(byName.get("risk")?.type).toBe("score");
-		expect(byName.get("risk")?.levels?.map((level) => level.label)).toEqual(["none", "low", "medium", "high", "critical"]);
+		expect(byName.has("risk")).toBe(false);
 		// every question is named: answers are matched back by name
 		for (const question of rendered) expect(question.name).toBeTruthy();
-	});
-});
-
-describe("score to level", () => {
-	const risk = buildQuestions([]).find((question) => question.id === "risk");
-
-	test("rounds to the nearest level and clamps", () => {
-		expect(scoreLevelId(risk!, 0)).toBe("none");
-		expect(scoreLevelId(risk!, 0.4)).toBe("none");
-		expect(scoreLevelId(risk!, 0.6)).toBe("low");
-		expect(scoreLevelId(risk!, 2.2)).toBe("medium");
-		expect(scoreLevelId(risk!, 4)).toBe("critical");
-		expect(scoreLevelId(risk!, 9)).toBe("critical");
-		expect(scoreLevelId(risk!, -3)).toBe("none");
 	});
 });
 
@@ -200,13 +182,6 @@ describe("the rendered line", () => {
 		);
 		expect(line).toBe("eavs (cwd differs) · debug · done");
 		expect(line).not.toContain("none");
-	});
-
-	test("escalates risk only when it matters", () => {
-		const low = renderLine({ activity: { value: "implement" }, risk: { value: "low" } }, questions);
-		expect(low).toBe("implement");
-		const high = renderLine({ activity: { value: "ops" }, risk: { value: "high" } }, questions);
-		expect(high).toBe("ops · risk high");
 	});
 
 	test("unclear answers are silent and an empty card is recognisable", () => {

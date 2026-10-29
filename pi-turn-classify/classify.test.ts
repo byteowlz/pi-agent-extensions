@@ -83,7 +83,6 @@ beforeAll(async () => {
 						work_done: { type: "noul", noul: 0.2, confidence: 0.8 },
 						blocked: { type: "noul", noul: 0.1, confidence: 0.8 },
 						attention: { type: "choice", choice: "review", confidence: 0.63 },
-						risk: { type: "score", score: 1.1, legend: { 0: "none", 1: "low" }, confidence: 0.7 },
 						artifact: { type: "choice", choice: "code", confidence: 0.8 },
 						scope: { type: "choice", choice: "single", confidence: 0.75 },
 					},
@@ -184,7 +183,6 @@ assert.equal(card.answers.project.value, 'pi-agent-extensions');
 assert.equal(card.answers.activity.value, 'implement');
 assert.equal(card.answers.work_done.value, 'no');
 assert.equal(card.answers.blocked.value, 'no');
-assert.equal(card.answers.risk.value, 'low');
 assert.equal(card.answers.project_mismatch.value, 'no');
 assert.ok(card.line.length > 0, 'line is rendered');
 assert.ok(card.line.startsWith('pi-agent-extensions · implement'), 'line starts with project and activity: ' + card.line);
@@ -248,7 +246,7 @@ assert.ok(notifications[0].message.includes('error_kind'), 'show lists the per-q
 
 notifications.length = 0;
 await commands.get('classify')('schema', ctx);
-assert.ok(notifications[0].message.includes('9 questions'), 'schema lists the questions: ' + notifications[0].message.split('\\n')[0]);
+assert.ok(notifications[0].message.includes('8 questions'), 'schema lists the questions: ' + notifications[0].message.split('\\n')[0]);
 assert.ok(notifications[0].message.includes('project_mismatch'), 'schema names the questions');
 
 // --- /classify off stops classification ---------------------------------

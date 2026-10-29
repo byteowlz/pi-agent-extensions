@@ -27,6 +27,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+import { pruneCards, readSessionCards, storeStats, writeSessionCard } from "./card-store.js";
 import { appendRecord, buildRecord, shouldRecord } from "./dataset.js";
 import { type DecisionClientConfig, DecisionError, classify, demoteLowConfidence } from "./decision-client.js";
 import { type ToolUse, type TurnDigest, extractText, localProjectHints, renderState, toolDetail } from "./digest.js";
@@ -62,6 +63,12 @@ export interface TurnClassifyConfig {
 	projects: ProjectCandidate[];
 	/** Show the card in the status line. */
 	statusLine: boolean;
+	/**
+	 * Where the classified cards live. Defaults to
+	 * `<agentDir>/turn-classify/cards/<sessionId>.json`; override only if the
+	 * consumer of the cards expects another location.
+	 */
+	cardsDir?: string;
 	/**
 	 * Optional background corpus. When set, every finished turn is appended to this
 	 * JSONL with the model's answers and confidences, so a calibration set builds
@@ -135,6 +142,7 @@ export function mergeConfig(base: TurnClassifyConfig, raw: Record<string, unknow
 		next.confidenceFloor = raw.confidenceFloor;
 	}
 	if (typeof raw.statusLine === "boolean") next.statusLine = raw.statusLine;
+	if (typeof raw.cardsDir === "string" && raw.cardsDir.trim()) next.cardsDir = raw.cardsDir.trim();
 	if (isRecord(raw.dataset)) {
 		const path = raw.dataset.path;
 		if (typeof path === "string" && path.trim()) {
@@ -259,6 +267,8 @@ export default function piTurnClassify(pi: ExtensionAPI): void {
 		}
 	};
 
+	const storeOptions = (): { cardsDir?: string } => (config.cardsDir ? { cardsDir: config.cardsDir } : {});
+
 	const clientConfig = (): DecisionClientConfig => ({
 		endpoint: config.endpoint,
 		model: config.model,
@@ -315,6 +325,9 @@ export default function piTurnClassify(pi: ExtensionAPI): void {
 		} catch {
 			// Persistence is best effort; the in-memory card still shows.
 		}
+		// The sidecar is what a list view reads: one small file per session, so
+		// nobody has to open a 90 MB transcript to render a row.
+		writeSessionCard(storeOptions(), card);
 		applyStatus(ctx);
 		recordDataset(ctx, digest, startedTurn, card, result.answers);
 		return card;
@@ -373,6 +386,20 @@ export default function piTurnClassify(pi: ExtensionAPI): void {
 		turnCount = 0;
 		lastCard = readCards(ctx.sessionManager.getBranch()).at(-1);
 		applyStatus(ctx);
+		// Cheap housekeeping: sidecars whose transcript is gone and that are old.
+		try {
+			pruneCards({ ...storeOptions(), maxAgeDays: 30 });
+		} catch {
+			// never let housekeeping break a session
+		}
+		// If this session already has a sidecar, its last card is the freshest one.
+		if (!lastCard) {
+			const stored = readSessionCards(
+				storeOptions(),
+				safe(() => ctx.sessionManager.getSessionId(), "")
+			);
+			if (stored?.latest) lastCard = stored.latest;
+		}
 	});
 
 	// Track the turn: the user's ask, the tools and the files they touched.
@@ -490,12 +517,14 @@ export default function piTurnClassify(pi: ExtensionAPI): void {
 						return `  ${id}: ${answer.value}${confidence}`;
 					})
 					.join("\n");
+				const stats = storeStats(storeOptions());
 				notify(
 					ctx,
 					[
 						`${card.line || "(no signal)"}`,
 						`  turn ${card.turn} · ${card.source.api}/${card.source.model} · ${card.source.ms} ms`,
 						detail,
+						`  cards: ${stats.dir} (${stats.files} sessions)`,
 					].join("\n"),
 					"info"
 				);

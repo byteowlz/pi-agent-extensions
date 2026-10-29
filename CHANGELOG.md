@@ -4,6 +4,23 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Card sidecar for list views, and no more risk question (2.37.0)
+
+- **pi-turn-classify 0.4.0**: cards are now also written to a per-session sidecar
+  at `<agentDir>/turn-classify/cards/<sessionId>.json` (one small file per session,
+  atomic rename, 0600, last 10 turns plus `latest`). The session file remains the
+  source of truth — cards travel with the session and cannot drift from the
+  transcript — but a list view cannot read transcripts: this machine has 2,865
+  session files and the largest is 94 MB, so rendering 50 rows would read
+  gigabytes. Per-session files mean live sessions never contend, a consumer reads
+  one small file per row, and deleting the directory only costs a re-read. Stale
+  sidecars are pruned on session start; `cardsDir` overrides the location.
+- **The `risk` question is gone.** Five-level severity scored 25% (d3) / 37.5%
+  (jev) — worse than guessing, for both — because consequence is a property of
+  what an action does to the world, not of a turn summary. Removing it lifted
+  overall accuracy (d3 75.6% -> 81.4%). The schema is 8 questions on a clean turn,
+  10 on a failed one.
+
 ### Error classification and a background corpus (2.36.0)
 
 - **pi-turn-classify 0.3.0**: failed turns are now classified, not just flagged.

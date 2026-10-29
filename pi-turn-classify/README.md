@@ -38,7 +38,6 @@ Seven questions, asked in one request. Ids are persisted, so they are stable.
 | `work_done` | yes/no | is the requested work complete? |
 | `blocked` | yes/no | is it blocked on something external? |
 | `attention` | choice | `none` `decision` `approval` `missing_info` `review` |
-| `risk` | score (0-4) | `none` `low` `medium` `high` `critical` |
 | `artifact` | choice | `code` `test` `doc` `config` `issue` `data` `none` |
 | `scope` | choice | `single` `multi` `noncode` |
 | `error_kind` | choice | **only on failed turns**: `provider_overloaded` `rate_limited` `auth` `context_overflow` `network` `content_filter` `invalid_request` `bad_response` `tool_failed` `cancelled` `unclear` |
@@ -141,6 +140,55 @@ bun run pi-turn-classify/labeler/extract.ts --from-dataset ~/.local/share/pi-tur
 
 Model predictions are never treated as ground truth: only records with human
 `labels` become scoring samples.
+
+## Where a card lives
+
+Two places, on purpose.
+
+**1. The session file (source of truth).** Every card is appended as a
+`pi-turn-classify:card/v1` custom entry on the session branch. It travels with the
+session through `/cwd` moves, forks and renames, it can never drift from the
+transcript, and anything that already parses sessions — including Oqto's importer —
+gets it for free.
+
+**2. A per-session sidecar (the index).** Because reading a transcript to render a
+row is not viable: this machine has 2,865 session files and the largest is 94 MB,
+so a 50-row list would mean reading gigabytes to show 50 one-liners.
+
+```
+<agentDir>/turn-classify/cards/<sessionId>.json      # ~/.pi/agent/... by default
+```
+
+```json
+{
+  "version": 1,
+  "sessionId": "01a0cd67-b5e9-72ce-9616-54f4dc5fa2d4",
+  "sessionFile": "/home/wismut/.pi/agent/sessions/--home-wismut-byteowlz-eavs--/...jsonl",
+  "cwd": "/home/wismut/byteowlz/eavs",
+  "latest": { "turn": 7, "line": "eavs · implement · unfinished · code", "answers": { "...": {} } },
+  "turns": [ "…the last 10 cards, oldest first…" ],
+  "updatedAt": "2026-10-29T10:00:00.000Z"
+}
+```
+
+Why this shape:
+
+- **one file per session** → live pi sessions never contend (each writes only its
+  own file, atomically via temp + rename), unlike a shared append-only log that
+  grows forever or SQLite that needs locking and migrations;
+- **keyed by session id** → a consumer that lists sessions reads exactly one small
+  file per row, and can join it to the transcript by `sessionFile`;
+- **beside `sessions/`** → respects `PI_CODING_AGENT_DIR`, so any tool that finds pi
+  sessions finds the cards too. Override with `cardsDir` if a consumer needs it
+  elsewhere;
+- **derived and disposable** → delete the directory and it rebuilds on the next
+  turn; nothing here is the only copy of anything;
+- **private** → `0700` dir, `0600` files; a card carries the cwd and a one-line
+  summary, never prompt text. `dataset` is the only place a digest is stored.
+
+Consumers should prefer `latest` for a list row, `turns` for a small detail view,
+and the session file for anything deeper. `/classify show` prints the path and how
+many sessions have a card.
 
 ## Confidence handling
 
@@ -258,13 +306,14 @@ lets you trust one: accuracy, **ECE**, high-confidence accuracy, and latency.
 
 ### Measured (2026-10-29, 16 hand-labelled turns incl. 6 failed)
 
-Through the EAVS gateway, 7 candidate projects, one request per turn:
+Through the EAVS gateway, 7 candidate projects, one request per turn. 8 questions
+on a clean turn, 10 on a failed one:
 
 | | `vllm-sr/d3-lite` | `jev-1.14.0` |
 | --- | --- | --- |
-| accuracy | 75.6 – 81.0% | 74.4 – 78.2% |
-| ECE (lower better) | 0.107 – 0.129 | **0.055 – 0.070** |
-| latency mean | ~900 ms | **~230 ms** |
+| accuracy | **81.4%** | 77.9% |
+| ECE (lower better) | 0.125 | **0.070** |
+| latency mean | 846 ms | **258 ms** |
 
 Per question (accuracy):
 
@@ -279,21 +328,23 @@ Per question (accuracy):
 | `blocked` | 75.0% | **81.3%** |
 | `artifact` | 62.5% | **75.0%** |
 | `attention` | **75.0%** | 37.5% |
-| `scope` | **81.3%** | 43.8% |
-| `risk` | 25.0% | 37.5% |
+| `scope` | **81.3%** | 37.5% |
 
 Readings:
 
-- **Error classification works** on both, at a level a regex fleet would struggle
-  to keep up with — and the raw message is what makes it work.
-- **`risk` is broken as a five-level score** (25% / 37.5%, i.e. worse than a
-  constant guess). It should become a yes/no "did this take an irreversible or
-  destructive action?".
+- **`risk` was removed**, not tuned. As a five-level score it measured 25% (d3) and
+  37.5% (jev) — worse than a constant guess for both. Consequence is a property of
+  what an action does to the world, not of a turn summary: the model cannot know
+  whether that `git push` went to a scratch branch or to main. Dropping it lifted
+  overall accuracy for both models (d3 75.6 → 81.4%). If triage needs a signal,
+  ask a binary the evidence supports — "did this take an irreversible action?" —
+  not a severity scale.
+- **Error classification works** on both (83-100%) at a level a regex fleet would
+  struggle to maintain, and it is the raw message that makes it work.
+- **`project` and `project_mismatch` are the reliable core** (81-100%), which is
+  what this extension exists for.
 - `attention` and `scope` disagree wildly between models with overlapping
-  intervals: at n=16 those numbers are noise, not a ranking.
-- Accuracy on v2 + errors is *up* versus the v1 schema at equal sample count,
-  while d3's ECE improved from 0.194 to ~0.11: asking fewer, sharper questions
-  helped more than a better model would have.
+  intervals at n=16: noise, not a ranking. The labeler corpus is what settles it.
 
 ```bash
 bun run pi-turn-classify/bench.ts \

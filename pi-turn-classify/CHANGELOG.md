@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.0
+
+- **Removed the `risk` question.** As a five-level score it measured 25% (d3) and
+  37.5% (jev) on labelled turns — worse than a constant guess for both models, and
+  it is not part of the display line. Consequence is a property of what an action
+  does to the world, not of a turn summary. Overall accuracy rose for both models
+  when it went (d3 75.6% -> 81.4%). If triage needs a signal later, the shape is a
+  binary "did this take an irreversible action?", not a severity scale.
+- **Card sidecar** (`card-store.ts`): every card is also written to
+  `<agentDir>/turn-classify/cards/<sessionId>.json` (one small file per session,
+  atomic, 0600, last 10 turns + `latest`). The session file stays the source of
+  truth; the sidecar exists because a list view cannot read 94 MB transcripts —
+  this machine has 2,865 session files and the largest is 94 MB. Sessions never
+  contend since each writes only its own file; stale sidecars (transcript gone and
+  older than 30 days) are pruned on session start; `cardsDir` overrides the
+  location.
+- `/classify show` prints the card directory and how many sessions have one.
+- Bench: 16 turns, 8-10 questions. d3 81.4% / ECE 0.125, jev 77.9% / ECE 0.070.
+
 ## 0.3.0
 
 - **Errors are classified, not just flagged.** A failed turn keeps the verbatim
