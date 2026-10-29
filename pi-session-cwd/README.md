@@ -10,10 +10,17 @@ value. There is no built-in way to move a session between projects; `/resume`
 only lists sessions of the current project.
 
 ```
+/move                   pick a project from your configured roots
+/move foxline           fuzzy-match a project by name and move there
+/move fox               several matches -> asks which one you meant
 /cwd                    show the current working directory and the last move
-/cwd ~/Code/other       move this session (and its file) to that directory
+/cwd ~/Code/other       move to an explicit path
 /cwd ../sibling --force skip the confirmation (required on RPC / print)
 ```
+
+`/move` and `/cwd` share the same move machinery; `/move` is the project-aware
+front door (fuzzy names, picker, configured roots) and `/cwd` takes literal
+paths.
 
 ## What actually moves
 
@@ -48,7 +55,7 @@ history — is preserved, because the file is the session. A
 | --- | --- |
 | `/cwd` | Show the current working directory, the session file, and the last move |
 | `/cwd <path> [--force]` | Move this session. `~` expands, relative paths resolve against the current cwd |
-| `/mvcwd` | Interactive picker over directories that already have sessions |
+| `/move [name] [--force]` | Move to a project found under the configured roots, fuzzy-matched by name |
 | `/cwd-history` | Overlay listing every move of this session |
 
 ## Safety rules
@@ -76,7 +83,52 @@ history — is preserved, because the file is the session. A
 
 ## Configuration
 
-None. No config file, no environment variables beyond what pi itself uses.
+`/move` reads project roots from JSON (first match wins):
+
+1. `./.pi/session-cwd.json` (per project)
+2. `<agent dir>/session-cwd.json` (default `~/.pi/agent/session-cwd.json`)
+
+```json
+{
+  "roots": ["~/work", "~/byteowlz"],
+  "depth": 1,
+  "includeSessionDirs": true
+}
+```
+
+| Key | Meaning |
+| --- | --- |
+| `roots` | Directories whose children are projects. `~` expands. Missing roots are ignored. |
+| `depth` | How many levels below a root count as projects (1 = direct children, max 4). |
+| `includeSessionDirs` | Also offer directories that already contain pi sessions, so you can move back to a project outside your roots. |
+
+Defaults are `roots: ["~/work", "~/byteowlz"]`, `depth: 1`,
+`includeSessionDirs: true`. A missing or malformed file falls back to those
+defaults — it never blocks the command. Hidden directories and build output
+(`node_modules`, `target`, `dist`, …) are never offered as projects.
+
+## Fuzzy matching
+
+`/move <query>` scores every candidate project:
+
+| Match | Example | Behavior |
+| --- | --- | --- |
+| exact | `foxline` → `foxline` | moves without asking |
+| prefix, clear winner | `foxl` → `foxline` | moves without asking |
+| prefix, several hits | `fox` → `foxline`, `foxhole` | asks with a pre-filtered picker |
+| subsequence | `fxl` → `foxline` | matches (weakest tier) |
+| nothing | `zzz` | error naming the closest projects |
+
+"Unsure" means: no exact/prefix-quality match, or another candidate scores
+nearly as well. On RPC/print there is no picker, so an ambiguous query is an
+error that lists the candidates instead of guessing.
+
+## After the move
+
+The session you are looking at **is** the moved session: `switchSession`
+re-homes the live runtime, so pi reports `Resumed session` in the new directory
+and every following turn resolves project files from there. No separate resume
+step.
 
 ## Limits
 

@@ -13,6 +13,9 @@
  * See move.ts for the mechanics and the documented limits.
  */
 
+import { readFileSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 
@@ -28,6 +31,8 @@ import {
 	resolveTargetCwd,
 	shortenPath,
 } from "./move.js";
+import { type PickRow, pickProject } from "./picker.js";
+import { type Project, discoverProjects, expandHome, loadConfig, resolveMoveQuery } from "./projects.js";
 
 /** Directories pi itself reports as existing session roots (for the picker). */
 const RECENT_TOOLTIP = "path may be relative to the current cwd; ~ expands to your home";
@@ -198,30 +203,124 @@ export default function piSessionCwd(pi: ExtensionAPI): void {
 
 	// A readable picker for the common case: choose among directories pi already
 	// knows about (session roots) instead of typing a path.
-	pi.registerCommand("mvcwd", {
-		description: "Pick a working directory to move this session to from directories with existing sessions",
-		handler: async (_args: string, ctx: ExtensionCommandContext) => {
-			if (ctx.mode !== "tui" || typeof ctx.ui.select !== "function") {
-				notify(ctx, "cwd: the directory picker needs an interactive terminal; use /cwd <path> [--force]", "warning");
+	pi.registerCommand("move", {
+		description:
+			"Move this session to a project by fuzzy name: /move foxline, or /move (no argument) to pick from your configured project roots",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			const tokens = args.trim().split(/\s+/).filter(Boolean);
+			const force = tokens.includes("--force");
+			const query = tokens
+				.filter((token) => token !== "--force")
+				.join(" ")
+				.trim();
+
+			// An explicit path is a path, not a project name.
+			if (isPathArgument(query)) {
+				await moveToPath(ctx, query, force);
 				return;
 			}
-			const candidates = await knownSessionCwds(ctx);
-			if (candidates.length === 0) {
-				notify(ctx, "cwd: no other directories with sessions found; use /cwd <path>", "info");
-				return;
-			}
-			const labels = candidates.map((cwd) => shortenPath(cwd, 70));
-			const choice = await ctx.ui.select("Move this session to which working directory?", labels);
-			if (!choice) return;
-			const target = candidates[labels.indexOf(choice)];
-			if (!target) return;
-			try {
-				await performMove(ctx, target, false);
-			} catch (error) {
-				notify(ctx, `cwd: ${error instanceof Error ? error.message : String(error)}`, "error");
-			}
+			await moveToProject(ctx, query, force);
 		},
 	});
+
+	/** Move to a literal directory (the `/cwd` behavior, reachable from `/move`). */
+	async function moveToPath(ctx: ExtensionCommandContext, query: string, force: boolean): Promise<void> {
+		let target: string;
+		try {
+			target = resolveTargetCwd(query, ctx.cwd);
+		} catch (error) {
+			notify(ctx, `move: ${error instanceof Error ? error.message : String(error)}`, "error");
+			return;
+		}
+		if (!isDirectory(target)) {
+			notify(ctx, `move: target directory does not exist: ${shortenPath(target, 60)}`, "error");
+			return;
+		}
+		try {
+			await performMove(ctx, target, force);
+		} catch (error) {
+			notify(ctx, `move: ${error instanceof Error ? error.message : String(error)}`, "error");
+		}
+	}
+
+	/** Resolve a project name against the configured roots, asking when unsure. */
+	async function moveToProject(ctx: ExtensionCommandContext, query: string, force: boolean): Promise<void> {
+		const config = loadConfig({ cwd: ctx.cwd, agentDir: agentDirOf(ctx) });
+		const rows = withSessionDirs(ctx, config, discoverProjects(config));
+
+		if (rows.length === 0) {
+			const roots = config.roots.map((root) => shortenPath(expandHome(root), 40)).join(", ");
+			const file = shortenPath(join(agentDirOf(ctx), "session-cwd.json"), 50);
+			notify(ctx, `move: no projects found under ${roots}. Configure roots in ${file} or use /cwd <path>.`, "warning");
+			return;
+		}
+
+		if (!query) {
+			if (ctx.mode !== "tui") {
+				const names = rows
+					.slice(0, 8)
+					.map((row) => row.name)
+					.join(", ");
+				notify(ctx, `move: the picker needs an interactive terminal; use /move <name> [--force]. Projects: ${names}`, "info");
+				return;
+			}
+			const chosen = await pickProject(ctx.ui as never, { title: "Move this session to…", rows });
+			if (!chosen) {
+				notify(ctx, "move cancelled", "info");
+				return;
+			}
+			await applyChosen(ctx, chosen.path, force);
+			return;
+		}
+
+		const resolution = resolveMoveQuery(query, rows);
+		if (resolution.kind === "unique") {
+			await applyChosen(ctx, resolution.match.path, force);
+			return;
+		}
+		if (resolution.kind === "ambiguous") {
+			await handleAmbiguous(ctx, query, resolution.candidates, force);
+			return;
+		}
+		const suggestions = resolution.suggestions.map((candidate) => candidate.name).filter(Boolean);
+		const hint = suggestions.length > 0 ? ` — did you mean ${suggestions.join(", ")}?` : "";
+		notify(ctx, `move: no project matches "${query}"${hint}`, "error");
+	}
+
+	/** Several plausible projects: ask, with the typed query pre-filled. */
+	async function handleAmbiguous(
+		ctx: ExtensionCommandContext,
+		query: string,
+		candidates: PickRow[],
+		force: boolean
+	): Promise<void> {
+		if (ctx.mode !== "tui") {
+			const names = candidates
+				.slice(0, 8)
+				.map((candidate) => candidate.name)
+				.join(", ");
+			notify(ctx, `move: "${query}" matches several projects: ${names}. Be more specific.`, "warning");
+			return;
+		}
+		const chosen = await pickProject(ctx.ui as never, {
+			title: `Which project did you mean by "${query}"?`,
+			rows: candidates,
+			initialQuery: query,
+		});
+		if (!chosen) {
+			notify(ctx, "move cancelled", "info");
+			return;
+		}
+		await applyChosen(ctx, chosen.path, force);
+	}
+
+	async function applyChosen(ctx: ExtensionCommandContext, path: string, force: boolean): Promise<void> {
+		try {
+			await performMove(ctx, path, force);
+		} catch (error) {
+			notify(ctx, `move: ${error instanceof Error ? error.message : String(error)}`, "error");
+		}
+	}
 
 	// Show the move history interactively (it is routing metadata, never context).
 	pi.registerCommand("cwd-history", {
@@ -268,33 +367,102 @@ export default function piSessionCwd(pi: ExtensionAPI): void {
 	});
 }
 
-/** Every distinct cwd that has a session directory under the default sessions root. */
-async function knownSessionCwds(ctx: ExtensionCommandContext): Promise<string[]> {
-	try {
-		const manager = ctx.sessionManager as unknown as {
-			usesDefaultSessionDir?: () => boolean;
-			getSessionDir?: () => string;
-			listAll?: (dir?: string) => Promise<Array<{ cwd?: string }>>;
-		};
-		if (typeof manager.listAll !== "function") return [];
-		const dir =
-			typeof manager.usesDefaultSessionDir === "function" && manager.usesDefaultSessionDir()
-				? undefined
-				: manager.getSessionDir?.();
-		const sessions = await manager.listAll(dir);
-		const seen = new Set<string>();
-		const out: string[] = [];
-		for (const session of sessions) {
-			const cwd = typeof session.cwd === "string" ? session.cwd : "";
-			if (!cwd || seen.has(cwd) || cwd === ctx.cwd) continue;
-			if (!isDirectory(cwd)) continue;
-			seen.add(cwd);
-			out.push(cwd);
+/** A query that names a directory instead of a project. */
+function isPathArgument(query: string): boolean {
+	return query.startsWith("/") || query.startsWith("~/") || query === ".." || query.startsWith("../") || query.startsWith("./");
+}
+
+/** Agent dir pi resolves extensions/config from. */
+function agentDirOf(_ctx: ExtensionCommandContext): string {
+	return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+}
+
+/** Project rows plus (optionally) directories that already hold pi sessions. */
+function withSessionDirs(ctx: ExtensionCommandContext, config: { includeSessionDirs: boolean }, projects: Project[]): PickRow[] {
+	const rows: PickRow[] = projects.map((project) => ({
+		...project,
+		...(project.path === ctx.cwd ? { note: "current" } : {}),
+	}));
+	const known = new Set(rows.map((row) => row.path));
+	const current = ctx.cwd;
+	if (config.includeSessionDirs) {
+		for (const dir of sessionCwdsSync(ctx.sessionManager)) {
+			if (known.has(dir) || dir === current) continue;
+			known.add(dir);
+			rows.push({ name: basename(dir), path: dir, root: dirname(dir), note: "has sessions" });
 		}
-		return out.sort();
+	}
+	return rows.sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path));
+}
+
+/**
+ * cwds that already hold pi sessions, read from the session directory tree.
+ *
+ * Directory names are lossy (`-` for `/`), so the authoritative cwd is taken
+ * from the `cwd` field of a session header instead of being decoded back.
+ * Bounded so a huge history cannot stall the picker.
+ */
+/** Sessions root to scan: the custom session dir when one is configured. */
+function sessionsRootOf(manager: unknown): string | undefined {
+	const typed = manager as { usesDefaultSessionDir?: () => boolean; getSessionDir?: () => string };
+	try {
+		const custom = typeof typed.usesDefaultSessionDir === "function" && !typed.usesDefaultSessionDir();
+		const dir = typeof typed.getSessionDir === "function" ? typed.getSessionDir() : undefined;
+		return custom && dir ? dir : join(agentDirOf(undefined as never), "sessions");
+	} catch {
+		return undefined;
+	}
+}
+
+/** The cwd recorded in a session file's header, if readable. */
+function headerCwd(file: string): string | undefined {
+	try {
+		const line = readFileSync(file, "utf-8").split("\n", 1)[0] ?? "";
+		const header = JSON.parse(line) as { type?: string; cwd?: string };
+		if (header.type === "session" && typeof header.cwd === "string") return header.cwd;
+	} catch {
+		// unreadable session: nothing to learn from it
+	}
+	return undefined;
+}
+
+/**
+ * cwds that already hold pi sessions, read from the session directory tree.
+ *
+ * Directory names are lossy (`-` for `/`), so the authoritative cwd comes from
+ * the header of a session file rather than from decoding the directory name.
+ * Bounded so a huge history cannot stall the picker.
+ */
+function sessionCwdsSync(manager: unknown): string[] {
+	const root = sessionsRootOf(manager);
+	if (!root) return [];
+	let entries: string[];
+	try {
+		entries = readdirSync(root);
 	} catch {
 		return [];
 	}
+	const out: string[] = [];
+	const seen = new Set<string>();
+	for (const entry of entries.slice(0, 300)) {
+		const dir = join(root, entry);
+		let files: string[];
+		try {
+			files = readdirSync(dir).filter((name) => name.endsWith(".jsonl"));
+		} catch {
+			continue;
+		}
+		for (const file of files.slice(0, 3)) {
+			const cwd = headerCwd(join(dir, file));
+			if (!cwd) continue;
+			if (!seen.has(cwd) && isDirectory(cwd)) {
+				seen.add(cwd);
+				out.push(cwd);
+			}
+			break;
+		}
+	}
+	return out.sort();
 }
 
 /** All move records on a branch, oldest first. */

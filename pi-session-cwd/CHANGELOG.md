@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.0
+
+- Add `/move`: fuzzy project switching driven by configured roots. `/move`
+  opens a picker over your projects, `/move foxline` matches by name, and an
+  ambiguous query (`/move fox` → foxline + foxhole) asks with a pre-filtered
+  picker instead of guessing. Non-interactive surfaces error with the candidate
+  list. Exact and clear-prefix matches move straight away.
+- Project roots are configurable via `.pi/session-cwd.json` (project) or
+  `~/.pi/agent/session-cwd.json` (global): `roots`, `depth`, and
+  `includeSessionDirs` (also offer directories that already hold sessions).
+  A missing or malformed config falls back to `~/work` + `~/byteowlz`, never
+  blocking the command. Hidden and build directories are skipped.
+- `/move` accepts literal paths too (`/move ~/x/y`), delegating to the `/cwd`
+  path logic, so one command covers "by name" and "by path".
+- Replace `/mvcwd` with `/move` (same intent, project-aware and configurable).
+
 ## 0.1.0
 
 - Initial release: `/cwd <path>` moves the running session to another working
