@@ -166,18 +166,48 @@ so a 50-row list would mean reading gigabytes to show 50 one-liners.
   "sessionFile": "/home/wismut/.pi/agent/sessions/--home-wismut-byteowlz-eavs--/...jsonl",
   "cwd": "/home/wismut/byteowlz/eavs",
   "latest": { "turn": 7, "line": "eavs · implement · unfinished · code", "answers": { "...": {} } },
-  "turns": [ "…the last 20 full cards, oldest first…" ],
-  "history": [ { "turn": 1, "at": "…", "line": "…" }, "…one line per turn, up to 500…" ],
+  "turns": [ "…full cards that fit the size budget, oldest first…" ],
+  "history": [ { "turn": 1, "at": "…", "line": "…" }, "…one line per turn, up to 5000…" ],
   "updatedAt": "2026-10-29T10:00:00.000Z"
 }
 ```
 
-Two tiers, because the sizes are very different: a **full card is ~1 kB**
-(probabilities included) while a **line-only entry is ~75 B**. Keeping every full
-card would cost ~208 kB for a 200-turn session — the opposite of what a cheap list
-wants. So full detail is bounded (`keep`, default 20) and the scrollback is kept as
-lines (`historyLimit`, default 500 → ~37 kB worst case). Nothing is lost
-permanently either way: the session file still holds every full card.
+Keeping every turn is the point: a consumer that wants a row reads `latest` and
+stops, and one that wants the story reads the timeline. Full parses are rare, so
+disk is not the constraint — measured on the 200 largest sessions here, the median
+session is 30 turns (~54 kB) and the largest 661 (~700 kB). `maxBytes` (8 MB) is a
+safety valve against a runaway session, not an everyday budget.
+
+Measured on the 200 largest sessions here: **median 30 turns, mean 79, max 661**;
+a full card is ~1 kB (probabilities included) and a line-only entry ~75 B. So:
+
+`history` is the timeline: one entry per turn with the fields that move
+(`project`, `activity`, `work_done`, `blocked`, `attention`, `error_kind`) plus the
+rendered `line` — roughly 120 B, so change over time is visible without touching
+the full cards. Nothing is lost either way: the session file holds every full card
+too, and `dataset.path` is where digests with probabilities belong when the purpose
+is calibration rather than a list row.
+
+### Forks, resumes and branch navigation
+
+`turn` is **not** an identity. Two cases break that assumption, and both are
+handled:
+
+- **Resume.** pi starts a new process, so a counter would restart at 1 and the
+  first classification after a resume would overwrite the earlier turn 1 card. Turn
+  numbers therefore come from the **branch** (`cards on the branch + 1`), and the
+  identity of a timeline entry is its timestamp, so nothing is ever overwritten.
+- **Fork.** A fork inherits its parent's entries — including cards — but has a new
+  session id and therefore no sidecar. On session start the inherited cards are
+  **seeded** into the new sidecar (only when it has no history, so a resume never
+  duplicates), and numbering continues from the inherited branch.
+- **Branch navigation.** Going back in the tree and taking another route can
+  legitimately produce the same turn number twice. Both are kept, ordered by time,
+  and each entry records the session-tree `branch` (leaf id) it happened on, so a
+  consumer can separate the two paths instead of seeing a corrupted timeline.
+
+Each card also carries that `branch` field in the session file, so the two places
+agree.
 
 Why this shape:
 

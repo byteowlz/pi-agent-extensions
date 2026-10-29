@@ -20,25 +20,51 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 
-import { WIDGET_KEY, lastQuestion, questionStamp } from "./last-question.js";
+import { WIDGET_KEY, formatStamp, lastQuestion, questionStamp } from "./last-question.js";
 import { createLastQuestionCard } from "./widget.js";
 
-/** Nerd Font question mark (nf-fa-question); falls back to a blank cell, never a colour escape. */
-const GLYPH = "\uf128";
-const SHORTCUT_HINT = "⌥Q";
+/** Advertised in the card, only when the question does not fit two lines. */
+const SHORTCUT_HINT = "ctrl+q";
 
 export default function piLastQuestion(pi: ExtensionAPI): void {
 	let widgetCtx: ExtensionContext | undefined;
+	/**
+	 * The prompt just submitted.
+	 *
+	 * pi emits `input` (and even `turn_start`) BEFORE the user message lands on the
+	 * branch, so reading the branch there shows the PREVIOUS question — the card
+	 * then stays one prompt behind because nothing re-renders when the message is
+	 * committed. The submitted text is known immediately, so it is used until the
+	 * branch agrees, then dropped.
+	 */
+	let pending: { text: string; stamp: string } | undefined;
+
+	/** What the card should show right now: the submitted prompt, else the branch. */
+	const current = (ctx: ExtensionContext): { text: string; stamp?: string } | undefined => {
+		if (pending) return pending;
+		const question = lastQuestion(ctx.sessionManager.getBranch());
+		if (!question) return undefined;
+		const stamp = questionStamp(ctx.sessionManager.getBranch());
+		return stamp ? { text: question.text, stamp } : { text: question.text };
+	};
+
+	/** Drop the optimistic text once the branch carries it (or a different one). */
+	const reconcile = (ctx: ExtensionContext): void => {
+		if (!pending) return;
+		const onBranch = lastQuestion(ctx.sessionManager.getBranch());
+		const norm = (value: string): string => value.replace(/\s+/g, " ").trim();
+		if (!onBranch || !norm(onBranch.text).startsWith(norm(pending.text).slice(0, 60))) pending = undefined;
+	};
 
 	const render = (ctx: ExtensionContext): void => {
 		if (!ctx.hasUI) return;
 		widgetCtx = ctx;
-		const question = lastQuestion(ctx.sessionManager.getBranch());
+		const question = current(ctx);
 		if (!question) {
 			ctx.ui.setWidget(WIDGET_KEY, undefined);
 			return;
 		}
-		const stamp = questionStamp(ctx.sessionManager.getBranch());
+		const stamp = question.stamp;
 		// Component form (not string[]): the card needs pi's theme tokens for its
 		// background and colours. Box inside pads every row, so it is a rectangle.
 		ctx.ui.setWidget(
@@ -49,7 +75,6 @@ export default function piLastQuestion(pi: ExtensionAPI): void {
 					text: question.text,
 					...(stamp ? { stamp } : {}),
 					hint: SHORTCUT_HINT,
-					glyph: GLYPH,
 				});
 				void tui;
 				return box;
@@ -81,7 +106,7 @@ export default function piLastQuestion(pi: ExtensionAPI): void {
 			showInNotification(ctx);
 			return;
 		}
-		const question = lastQuestion(ctx.sessionManager.getBranch());
+		const question = current(ctx);
 		if (!question) {
 			ctx.ui.notify("No question yet in this session.", "info");
 			return;
@@ -154,7 +179,7 @@ export default function piLastQuestion(pi: ExtensionAPI): void {
 	};
 
 	const showInNotification = (ctx: ExtensionContext): void => {
-		const question = lastQuestion(ctx.sessionManager.getBranch());
+		const question = current(ctx);
 		if (!question) {
 			ctx.ui.notify("No question yet in this session.", "info");
 			return;
@@ -163,7 +188,7 @@ export default function piLastQuestion(pi: ExtensionAPI): void {
 	};
 
 	const jump = (ctx: ExtensionContext): void => {
-		const question = lastQuestion(ctx.sessionManager.getBranch());
+		const question = current(ctx);
 		if (!question) {
 			ctx.ui.notify("No question yet in this session.", "info");
 			return;
@@ -171,12 +196,14 @@ export default function piLastQuestion(pi: ExtensionAPI): void {
 		insertIntoEditor(ctx, question.text);
 	};
 
-	pi.registerShortcut(Key.ctrlAlt("q"), {
+	// Plain ctrl bindings: a, b, c, d, e, f, g, j, k, l, o, p, s, t, u, w, x, y, z
+	// are already taken by pi's editor/app, so q (expand) and n (insert) are free.
+	pi.registerShortcut(Key.ctrl("q"), {
 		description: "Expand your last question (enter inserts it into the prompt box)",
 		handler: (ctx) => openExpanded(ctx),
 	});
 
-	pi.registerShortcut(Key.ctrlAlt("j"), {
+	pi.registerShortcut(Key.ctrl("n"), {
 		description: "Put your last question into the prompt box",
 		handler: (ctx) => jump(ctx),
 	});
@@ -190,14 +217,53 @@ export default function piLastQuestion(pi: ExtensionAPI): void {
 	});
 
 	// One handler per event, matching real pi and Map-based test doubles.
-	pi.on("session_start", async (_event, ctx) => render(ctx));
+	//
+	// Do NOT re-render on `input`: that event fires before the prompt is submitted,
+	// so the branch still holds the previous question and the card would show stale
+	// text with nothing to refresh it afterwards (reported as "it never updates").
+	// `turn_start` is the prompt being picked up in the agent loop, and
+	// `message_end` for a user message fires when that message is committed.
+	pi.on("session_start", async (_event, ctx) => {
+		pending = undefined;
+		render(ctx);
+	});
+
+	// The submitted prompt is the only place the new question is known before pi
+	// appends it to the branch, so show it optimistically right away.
 	pi.on("input", async (event, ctx) => {
-		// A submitted prompt is exactly the moment the strip must change.
-		if (event.source === "interactive" || event.source === "rpc") render(ctx);
+		const text = typeof event.text === "string" ? event.text.trim() : "";
+		if (!text) return undefined;
+		pending = { text, stamp: formatStamp(Date.now()) };
+		render(ctx);
 		return undefined;
 	});
-	pi.on("session_tree", async (_event, ctx) => render(ctx));
+
+	// Once the message is on the branch, prefer the branch (it survives resume and
+	// reflects edits/transforms); turn_end and agent_end always get here.
+	pi.on("message_end", async (event, ctx) => {
+		const message = event.message as { role?: string } | undefined;
+		if (message?.role === "user" || message?.role === "assistant") {
+			reconcile(ctx);
+			render(ctx);
+		}
+		return undefined;
+	});
+	pi.on("turn_end", async (_event, ctx) => {
+		reconcile(ctx);
+		render(ctx);
+		return undefined;
+	});
+	pi.on("agent_end", async (_event, ctx) => {
+		reconcile(ctx);
+		render(ctx);
+		return undefined;
+	});
+	pi.on("session_tree", async (_event, ctx) => {
+		pending = undefined;
+		render(ctx);
+	});
 	pi.on("session_shutdown", async () => {
+		pending = undefined;
 		clear();
 		widgetCtx = undefined;
 	});

@@ -34,16 +34,21 @@ import type { TurnCard } from "./schema.js";
 
 export const CARD_STORE_VERSION = 1;
 /**
- * How many *full* cards to keep per session.
+ * Safety valve, not a budget.
  *
- * Measured: a full card is ~1.0 kB (option probabilities included), a line-only
- * entry ~75 B. Keeping every full card for a 200-turn session costs ~208 kB; the
- * sidecar exists to make listing cheap, so full detail is bounded and the history
- * is kept as lines instead.
+ * Keeping every turn is the point: a consumer that wants a row reads `latest` and
+ * stops, and a consumer that wants the story reads the timeline. The occasional
+ * full read of a long session is cheap — measured here, the 200 largest sessions
+ * average 79 turns and peak at 661, so even the extreme case is a few hundred kB.
+ *
+ * So this limit exists only so a runaway session cannot write an unbounded file;
+ * it is deliberately far above anything observed (8 MB ≈ 8000 full cards).
  */
-export const DEFAULT_KEEP = 20;
-/** How many line-only history entries to keep (complete scrollback, ~75 B each). */
-export const DEFAULT_HISTORY_LIMIT = 500;
+export const DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
+/** Under pressure, keep at least this many full cards no matter what. */
+export const MIN_FULL_CARDS = 5;
+/** Hard stop for the timeline, far above any observed session (max 661). */
+export const DEFAULT_HISTORY_LIMIT = 8000;
 
 /** One session's sidecar document. */
 export interface SessionCardFile {
@@ -57,11 +62,52 @@ export interface SessionCardFile {
 	/** Recent cards, oldest first, oldest dropped beyond `keep`. */
 	turns: TurnCard[];
 	/**
-	 * Every turn's one-liner (oldest first), so a scrollback stays complete without
-	 * storing probabilities for turns nobody will inspect again.
+	 * The timeline: one entry per turn, oldest first.
+	 *
+	 * This is what makes "how did this session change over time" answerable without
+	 * parsing full cards — the few fields that move between turns, plus the rendered
+	 * line. ~120 B per turn, so a 661-turn session is ~80 kB.
 	 */
-	history: Array<{ turn: number; at: string; line: string }>;
+	history: TimelineEntry[];
 	updatedAt: string;
+}
+
+/** One point in a session's timeline. */
+export interface TimelineEntry {
+	turn: number;
+	/**
+	 * When the classification happened. This — not `turn` — is the identity of the
+	 * entry: a resumed session restarts its turn counter, and a branch navigation can
+	 * legitimately produce the same turn number twice on different paths.
+	 */
+	at: string;
+	/** Session-tree leaf at classification time, when known (separates diverged branches). */
+	branch?: string;
+	/** Rendered one-liner for that turn. */
+	line: string;
+	/** The answers that carry the story; absent when not asked or not answered. */
+	project?: string;
+	activity?: string;
+	work_done?: string;
+	blocked?: string;
+	attention?: string;
+	error_kind?: string;
+}
+
+/** Build a timeline entry from a card. */
+export function timelineEntry(card: TurnCard): TimelineEntry {
+	const value = (id: keyof TurnCard["answers"]): string | undefined => card.answers[id]?.value;
+	const entry: TimelineEntry = {
+		turn: card.turn,
+		at: card.at,
+		...(card.branch ? { branch: card.branch } : {}),
+		line: card.line,
+	};
+	for (const field of ["project", "activity", "work_done", "blocked", "attention", "error_kind"] as const) {
+		const answer = value(field);
+		if (answer !== undefined && answer !== "unclear") entry[field] = answer;
+	}
+	return entry;
 }
 
 export interface CardStoreOptions {
@@ -69,10 +115,12 @@ export interface CardStoreOptions {
 	agentDir?: string;
 	/** Explicit override for the cards directory. */
 	cardsDir?: string;
-	/** Cards kept per session (full detail). */
+	/** Explicit cap on full cards; normally the byte budget decides. */
 	keep?: number;
 	/** Line-only history entries kept per session. */
 	historyLimit?: number;
+	/** Size budget for the document (default DEFAULT_MAX_BYTES). */
+	maxBytes?: number;
 }
 
 export function defaultAgentDir(): string {
@@ -112,27 +160,34 @@ export function readSessionCards(options: CardStoreOptions, sessionId: string): 
  * undefined when the write was impossible (a sidecar is never worth a failure).
  */
 export function writeSessionCard(options: CardStoreOptions, card: TurnCard): SessionCardFile | undefined {
-	const keep = Math.max(1, options.keep ?? DEFAULT_KEEP);
-	const historyLimit = Math.max(keep, options.historyLimit ?? DEFAULT_HISTORY_LIMIT);
+	const keep = options.keep ? Math.max(1, options.keep) : Number.POSITIVE_INFINITY;
+	const historyLimit = Math.max(1, options.historyLimit ?? DEFAULT_HISTORY_LIMIT);
+	const maxBytes = Math.max(4096, options.maxBytes ?? DEFAULT_MAX_BYTES);
 	const dir = cardsDirectory(options);
 	try {
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
 		const existing = readSessionCards(options, card.sessionId);
 		const previous = existing?.turns ?? [];
-		// Same session + same turn = the same row, re-classified.
-		const withoutDuplicates = previous.filter((entry) => entry.turn !== card.turn);
-		const turns = [...withoutDuplicates, card].sort((a, b) => a.turn - b.turn).slice(-keep);
+		// The same classification event is the same row. `turn` is NOT an identity:
+		// resuming a session restarts the counter, and a branch can revisit a turn.
+		const withoutDuplicates = previous.filter((entry) => !(entry.turn === card.turn && entry.at === card.at));
+		const allTurns = [...withoutDuplicates, card]
+			.sort((a, b) => (a.at === b.at ? a.turn - b.turn : a.at < b.at ? -1 : 1))
+			.slice(-keep);
 
 		// The history keeps one line per turn, including turns whose full card has
 		// already rolled out of `turns`.
 		const history = [
-			...(existing?.history ?? []).filter((entry) => entry.turn !== card.turn),
-			{ turn: card.turn, at: card.at, line: card.line },
+			...(existing?.history ?? []).filter((entry) => !(entry.turn === card.turn && entry.at === card.at)),
+			timelineEntry(card),
 		]
-			.sort((a, b) => a.turn - b.turn)
+			.sort((a, b) => (a.at === b.at ? a.turn - b.turn : a.at < b.at ? -1 : 1))
 			.slice(-historyLimit);
 
-		const document: SessionCardFile = {
+		// Keep every full card that fits the budget; the oldest ones fall out first
+		// (their lines remain in `history`, so nothing about the story is lost).
+		let turns = allTurns;
+		const makeDocument = (): SessionCardFile => ({
 			version: CARD_STORE_VERSION,
 			sessionId: card.sessionId,
 			...(card.sessionFile ? { sessionFile: card.sessionFile } : {}),
@@ -141,7 +196,12 @@ export function writeSessionCard(options: CardStoreOptions, card: TurnCard): Ses
 			turns,
 			history,
 			updatedAt: new Date().toISOString(),
-		};
+		});
+		let document = makeDocument();
+		while (turns.length > MIN_FULL_CARDS && JSON.stringify(document, null, 2).length > maxBytes) {
+			turns = turns.slice(Math.ceil((turns.length - MIN_FULL_CARDS) / 2) || 1);
+			document = makeDocument();
+		}
 
 		const path = join(dir, cardFileName(card.sessionId));
 		const staged = `${path}.tmp-${process.pid}`;
@@ -151,6 +211,23 @@ export function writeSessionCard(options: CardStoreOptions, card: TurnCard): Ses
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Seed a session's sidecar from cards that already exist on its branch.
+ *
+ * A fork inherits its parent's entries, including cards, but has a new session id
+ * and therefore no sidecar. Without this the fork's timeline would begin at the
+ * fork, hiding everything it inherited. Only used when the sidecar has no history
+ * yet, so a resume never re-seeds (and never duplicates).
+ */
+export function seedSessionCards(options: CardStoreOptions, sessionId: string, cards: TurnCard[]): SessionCardFile | undefined {
+	const existing = readSessionCards(options, sessionId);
+	if (existing?.history?.length) return existing;
+	if (cards.length === 0) return undefined;
+	let document: SessionCardFile | undefined;
+	for (const card of cards) document = writeSessionCard(options, { ...card, sessionId });
+	return document;
 }
 
 /** Every session sidecar in the store, newest first (for a global list view). */

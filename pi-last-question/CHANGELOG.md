@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.4.0
+
+- Shortcuts are plain `ctrl` bindings: **`ctrl+q`** expands the question and
+  **`ctrl+n`** inserts it into the prompt box. (pi's editor owns a–g, j, k, l, o,
+  p, s, t, u, w, x, y, z; `q` and `n` are free.) The old `ctrl+alt` pair is gone.
+- **The hint only shows when the question is actually cut off.** A question that
+  fits both lines renders no shortcut at all, so the card stays quiet unless
+  there is something hidden; the bindings keep working either way.
+- Verified in a real pi TUI (pty + terminal emulator): a short prompt shows no
+  hint, a long one shows `ctrl+q expand`, and the card still follows submissions.
+
+## 0.3.0
+
+- **Blue instead of violet, and no icon.** The card now borrows pi's user-message
+  family — `userMessageBg` background, `border` rule, `mdLink` timestamp,
+  `userMessageText` question — because it describes *your* message, not an
+  extension note. The Nerd Font question mark is gone; the rule and timestamp
+  carry the header.
+- **Fixed: the card was one prompt behind.** pi emits `input` (and even
+  `turn_start`) before the user message is appended to the session branch, so
+  reading the branch there returned the previous question and nothing re-rendered
+  once the message was committed (reported as "it does not update"). The submitted
+  text is now shown optimistically and reconciled with the branch on
+  `message_end`/`turn_end`/`agent_end`.
+- **Fixed: the hint disappeared in a real terminal.** Padding was measured with
+  `.length` on ANSI-styled strings and again on `⌥` (double-width), so the row
+  overflowed and truncation ate the hint. Widths now come from pi-tui's
+  `visibleWidth`, and rows are cut with `truncateToWidth`.
+- Verified in a real pi TUI (pty + terminal emulator, 100x40): the card renders,
+  follows a new prompt immediately, keeps the full `⌥Q expand` hint and the
+  absolute timestamp.
+
 ## 0.2.0
 
 - The strip is now a **pi-styled card**: `Box(1, 0, theme.bg("customMessageBg"))`

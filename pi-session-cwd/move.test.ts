@@ -125,7 +125,7 @@ describe("planMove and applyMove", () => {
 		try {
 			const source = writeSession(path.join(agent, "sessions", encodeCwdSegment(home)), "session.jsonl", home);
 			const plan = planMove({ sessionFile: source, currentCwd: home, targetCwd: target });
-			expect(plan.toCwd).toBe(fs.realpathSync(target));
+			expect(plan.toCwd).toBe(path.resolve(target));
 			expect(plan.to).toBe(path.join(agent, "sessions", encodeCwdSegment(target), "session.jsonl"));
 
 			const newFile = applyMove(plan);
@@ -135,7 +135,7 @@ describe("planMove and applyMove", () => {
 			const lines = fs.readFileSync(newFile, "utf-8").trim().split("\n");
 			expect(lines).toHaveLength(2);
 			const header = JSON.parse(lines[0] as string);
-			expect(header.cwd).toBe(fs.realpathSync(target));
+			expect(header.cwd).toBe(path.resolve(target));
 			expect(header.type).toBe("session");
 			// history is intact
 			expect(JSON.parse(lines[1] as string).message.content[0].text).toBe("hello");
@@ -156,7 +156,7 @@ describe("planMove and applyMove", () => {
 		const newFile = applyMove(plan);
 		expect(newFile).toBe(source);
 		const lines = fs.readFileSync(newFile, "utf-8").trim().split("\n");
-		expect(JSON.parse(lines[0] as string).cwd).toBe(fs.realpathSync(target));
+		expect(JSON.parse(lines[0] as string).cwd).toBe(path.resolve(target));
 		// history survives the in-place rewrite
 		expect(JSON.parse(lines[1] as string).message.content[0].text).toBe("hello");
 	});

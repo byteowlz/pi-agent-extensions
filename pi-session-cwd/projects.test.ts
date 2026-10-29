@@ -25,7 +25,7 @@ function mk(root: string, ...names: string[]): string[] {
 	for (const name of names) {
 		const dir = path.join(root, name);
 		fs.mkdirSync(dir, { recursive: true });
-		out.push(fs.realpathSync(dir));
+		out.push(path.resolve(dir));
 	}
 	return out;
 }
@@ -74,7 +74,7 @@ describe("discovery", () => {
 		mk(root, "alpha", "beta", "node_modules", ".git", "target");
 		const projects = discoverProjects({ roots: [root], depth: 1, includeSessionDirs: false });
 		expect(projects.map((p) => p.name).sort()).toEqual(["alpha", "beta"]);
-		expect(projects.every((p) => p.root === fs.realpathSync(root))).toBe(true);
+		expect(projects.every((p) => p.root === path.resolve(root))).toBe(true);
 	});
 
 	test("depth 2 includes grandchildren", () => {

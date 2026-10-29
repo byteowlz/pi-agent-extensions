@@ -222,16 +222,8 @@ export function planCard(text: string, width: number, options: { stamp?: string;
 	const usable = Math.max(6, total - gutter);
 	const flat = flatten(text);
 
-	// Header: glyph + timestamp on the left, hint on the right when it fits.
-	const head = [options.glyph, options.stamp].filter((part) => part && part.length > 0).join(" ");
-	const hint = options.hint ? `${options.hint} expand` : "";
-	const compactHint = options.hint ?? "";
-	const fitsFull = head.length + hint.length + 2 <= usable;
-	const fitsCompact = head.length + compactHint.length + 2 <= usable;
-	const right = fitsFull ? hint : fitsCompact ? compactHint : "";
-	const headerLeft = fitsFull || fitsCompact ? head : head.slice(0, Math.max(0, usable));
-
-	// Body: wrap, then clamp to the line budget with an ellipsis on the last row.
+	// Body first: whether the card is expandable decides whether the shortcut is
+	// advertised at all. A hint on a fully visible question is noise.
 	const wrapped = wrap(flat, usable);
 	const rows = wrapped.slice(0, MAX_LINES);
 	const truncated = wrapped.length > MAX_LINES;
@@ -240,6 +232,17 @@ export function planCard(text: string, width: number, options: { stamp?: string;
 		const cut = Math.max(1, usable - 1);
 		rows[MAX_LINES - 1] = `${last.slice(0, cut).trimEnd()}…`;
 	}
+
+	// Header: glyph + timestamp on the left, hint on the right when it fits AND
+	// there is more text to reveal.
+	const head = [options.glyph, options.stamp].filter((part) => part && part.length > 0).join(" ");
+	const hint = truncated && options.hint ? `${options.hint} expand` : "";
+	const compactHint = truncated ? (options.hint ?? "") : "";
+	const fitsFull = head.length + hint.length + (hint ? 2 : 0) <= usable;
+	const fitsCompact = head.length + compactHint.length + (compactHint ? 2 : 0) <= usable;
+	const right = fitsFull ? hint : fitsCompact ? compactHint : "";
+	const headerLeft = fitsFull || fitsCompact ? head : head.slice(0, Math.max(0, usable));
+
 	return { header: { left: headerLeft, right }, body: rows.length > 0 ? rows : [""], truncated };
 }
 

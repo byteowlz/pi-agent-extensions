@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.5.0
+
+- **Forks, resumes and branch navigation are correct now.** `turn` was used as the
+  identity of a stored card, which broke twice: resuming a session restarts the
+  turn counter, so the first classification after a resume overwrote the original
+  turn 1 card in the sidecar; and a fork starts with a new session id, so its
+  timeline silently began at the fork and ignored every card it inherited.
+  - turn numbers now come from the **branch** (cards on the branch + 1), not a
+    per-process counter;
+  - a timeline entry's identity is its **timestamp**, so a revisited turn number
+    never overwrites history, and a branch navigation keeps both paths;
+  - a fork **seeds** its sidecar from the cards it inherited (only when the sidecar
+    has no history, so a resume cannot duplicate);
+  - each card and timeline entry records the session-tree `branch` (leaf id), so
+    diverged paths can be told apart.
+- The sidecar keeps **every turn**: full parses are rare, and seeing a session
+  change over time is the point. `maxBytes` (8 MB) is now only a safety valve
+  against a runaway session, not a budget.
+- `history` entries carry the fields that move (`project`, `activity`,
+  `work_done`, `blocked`, `attention`, `error_kind`) so a timeline view needs no
+  full cards.
+
+## 0.4.3
+
+- The sidecar is bounded by **bytes, not a card count**. Measurements on the 200
+  largest sessions here (median 30 turns, mean 79, max 661; a full card ~1 kB, a
+  line ~75 B) showed the earlier "last 20" was unnecessary: an ordinary session
+  keeps every turn (~54 kB). The document now stops growing at `maxBytes`
+  (default 512 kB), shedding the oldest full cards first while `history` keeps one
+  line per turn up to 5000 — so a 700-turn session keeps ~269 full cards and its
+  complete scrollback. What the budget actually bounds is the per-row read and the
+  full-document rewrite on every turn.
+
 ## 0.4.2
 
 - The card sidecar keeps **two tiers** instead of a flat "last 10": the last

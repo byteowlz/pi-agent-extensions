@@ -10,6 +10,7 @@ import {
 	listSessionCards,
 	pruneCards,
 	readSessionCards,
+	seedSessionCards,
 	storeStats,
 	writeSessionCard,
 } from "./card-store";
@@ -109,7 +110,8 @@ describe("writing", () => {
 			// …but the scrollback is complete, in order, and compact
 			expect(document?.history.map((entry) => entry.turn)).toEqual([1, 2, 3, 4, 5, 6]);
 			expect(document?.history[0]?.line).toBe("turn 1");
-			expect(Object.keys(document?.history[0] ?? {})).toEqual(["turn", "at", "line"]);
+			// the timeline carries the fields a change-over-time view needs
+			expect(document?.history[0]).toMatchObject({ turn: 1, at: "2026-10-29T10:00:00.000Z", line: "turn 1" });
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
@@ -145,14 +147,114 @@ describe("writing", () => {
 		}
 	});
 
-	test("keeps only the most recent `keep` cards", () => {
+	test("an ordinary session keeps every turn (the budget only binds pathological ones)", () => {
+		const dir = tmp();
+		try {
+			const options = { cardsDir: dir };
+			// 30 turns is the median session here.
+			for (let turn = 1; turn <= 30; turn += 1) writeSessionCard(options, card({ turn }));
+			const document = readSessionCards(options, "sess-1");
+			expect(document?.turns).toHaveLength(30);
+			expect(document?.turns.map((entry) => entry.turn)).toEqual(Array.from({ length: 30 }, (_, index) => index + 1));
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("a very long session keeps every turn: the limit is a safety valve, not a budget", () => {
+		const dir = tmp();
+		try {
+			const fat = card({
+				...card(),
+				answers: Object.fromEntries(
+					Array.from({ length: 8 }, (_, index) => [
+						`q${index}`,
+						{ value: "v", confidence: 0.9, probabilities: { alpha: 0.5, beta: 0.5 } },
+					])
+				),
+			});
+			for (let turn = 1; turn <= 400; turn += 1) {
+				writeSessionCard({ cardsDir: dir }, { ...fat, turn, line: `t${turn}` });
+			}
+			const document = readSessionCards({ cardsDir: dir }, "sess-1");
+			// 400 fat cards is ~500 kB: kept in full, because a full read is rare and
+			// the story is the point.
+			expect(document?.turns).toHaveLength(400);
+			expect(document?.history).toHaveLength(400);
+			expect(fs.statSync(path.join(dir, "sess-1.json")).size).toBeLessThan(8 * 1024 * 1024);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("the safety valve still bounds an absurd explicit budget", () => {
+		const dir = tmp();
+		try {
+			const options = { cardsDir: dir, maxBytes: 8192 };
+			for (let turn = 1; turn <= 200; turn += 1) writeSessionCard(options, card({ turn, line: `t${turn}` }));
+			const document = readSessionCards(options, "sess-1");
+			// full cards are shed down to the floor…
+			expect(document?.turns.length).toBeLessThanOrEqual(5);
+			expect(document?.latest.turn).toBe(200);
+			// …and the timeline is never trimmed by the valve: it is the point of the store
+			expect(document?.history).toHaveLength(200);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("timeline entries carry the fields that change over time", () => {
+		const dir = tmp();
+		try {
+			writeSessionCard(
+				{ cardsDir: dir },
+				card({
+					turn: 1,
+					line: "eavs · implement · unfinished",
+					answers: {
+						project: { value: "eavs" },
+						activity: { value: "implement" },
+						work_done: { value: "no" },
+						blocked: { value: "yes" },
+						attention: { value: "decision" },
+					},
+				})
+			);
+			writeSessionCard(
+				{ cardsDir: dir },
+				card({
+					turn: 2,
+					line: "eavs · debug · done",
+					answers: { project: { value: "eavs" }, activity: { value: "debug" }, work_done: { value: "yes" } },
+				})
+			);
+			const document = readSessionCards({ cardsDir: dir }, "sess-1");
+			expect(document?.history[0]).toEqual({
+				turn: 1,
+				at: "2026-10-29T10:00:00.000Z",
+				line: "eavs · implement · unfinished",
+				project: "eavs",
+				activity: "implement",
+				work_done: "no",
+				blocked: "yes",
+				attention: "decision",
+			});
+			// a later turn that answers less is still a valid point on the timeline
+			expect(document?.history[1]).toMatchObject({ turn: 2, activity: "debug", work_done: "yes" });
+			expect(document?.history[1]?.blocked).toBeUndefined();
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("an explicit keep still wins when a caller wants a hard cap", () => {
 		const dir = tmp();
 		try {
 			const options = { cardsDir: dir, keep: 3 };
 			for (let turn = 1; turn <= 6; turn += 1) writeSessionCard(options, card({ turn }));
 			const document = readSessionCards(options, "sess-1");
 			expect(document?.turns.map((entry) => entry.turn)).toEqual([4, 5, 6]);
-			expect(document?.latest.turn).toBe(6);
+			expect(document?.history.map((entry) => entry.turn)).toEqual([1, 2, 3, 4, 5, 6]);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
@@ -238,6 +340,96 @@ describe("pruning", () => {
 			expect(readSessionCards(options, "gone")).toBeUndefined();
 			// no transcript recorded: we cannot prove it is dead, so keep it
 			expect(readSessionCards(options, "no-file-field")).toBeDefined();
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("forking, resuming and branching", () => {
+	test("resuming a session does not overwrite earlier turns that share a number", () => {
+		const dir = tmp();
+		try {
+			const options = { cardsDir: dir };
+			writeSessionCard(options, card({ turn: 1, at: "2026-10-29T09:00:00.000Z", line: "original first turn" }));
+			writeSessionCard(options, card({ turn: 2, at: "2026-10-29T09:05:00.000Z", line: "second turn" }));
+			// A resumed process restarts its counter: the next event is "turn 1" again.
+			writeSessionCard(options, card({ turn: 1, at: "2026-10-29T11:00:00.000Z", line: "after resume" }));
+
+			const document = readSessionCards(options, "sess-1");
+			// both events survive: the identity is the classification, not the counter
+			expect(document?.turns.map((entry) => entry.line)).toEqual(["original first turn", "second turn", "after resume"]);
+			expect(document?.history.map((entry) => entry.line)).toEqual(["original first turn", "second turn", "after resume"]);
+			expect(document?.latest.line).toBe("after resume");
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("re-classifying the same turn and time replaces it instead of duplicating", () => {
+		const dir = tmp();
+		try {
+			const options = { cardsDir: dir };
+			writeSessionCard(options, card({ turn: 4, at: "2026-10-29T09:00:00.000Z", line: "first pass" }));
+			writeSessionCard(options, card({ turn: 4, at: "2026-10-29T09:00:00.000Z", line: "second pass" }));
+			const document = readSessionCards(options, "sess-1");
+			expect(document?.turns).toHaveLength(1);
+			expect(document?.turns[0]?.line).toBe("second pass");
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("a fork adopts the cards it inherited before writing its own", () => {
+		const dir = tmp();
+		try {
+			const options = { cardsDir: dir };
+			// the parent session's two turns
+			const inherited = [
+				card({ sessionId: "parent", turn: 1, at: "2026-10-29T09:00:00.000Z", line: "inherited 1" }),
+				card({ sessionId: "parent", turn: 2, at: "2026-10-29T09:05:00.000Z", line: "inherited 2" }),
+			];
+			// a fork has a new session id and no sidecar of its own
+			expect(readSessionCards(options, "fork")).toBeUndefined();
+			const seeded = seedSessionCards(options, "fork", inherited);
+			expect(seeded?.sessionId).toBe("fork");
+			expect(seeded?.history.map((entry) => entry.line)).toEqual(["inherited 1", "inherited 2"]);
+
+			// its next turn continues from the inherited numbering
+			writeSessionCard(options, card({ sessionId: "fork", turn: 3, at: "2026-10-29T10:00:00.000Z", line: "after fork" }));
+			const document = readSessionCards(options, "fork");
+			expect(document?.history.map((entry) => entry.turn)).toEqual([1, 2, 3]);
+			expect(document?.latest.line).toBe("after fork");
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("seeding never duplicates on a resume", () => {
+		const dir = tmp();
+		try {
+			const options = { cardsDir: dir };
+			const cards = [card({ turn: 1, at: "2026-10-29T09:00:00.000Z", line: "one" })];
+			seedSessionCards(options, "sess-1", cards);
+			// resuming calls seed again with the same branch
+			seedSessionCards(options, "sess-1", cards);
+			expect(readSessionCards(options, "sess-1")?.history).toHaveLength(1);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("a branch navigation can revisit a turn number without losing either path", () => {
+		const dir = tmp();
+		try {
+			const options = { cardsDir: dir };
+			writeSessionCard(options, card({ turn: 3, at: "2026-10-29T09:00:00.000Z", branch: "leaf-a", line: "path A turn 3" }));
+			// user navigates the tree back and takes a different route
+			writeSessionCard(options, card({ turn: 3, at: "2026-10-29T09:30:00.000Z", branch: "leaf-b", line: "path B turn 3" }));
+
+			const document = readSessionCards(options, "sess-1");
+			expect(document?.history.map((entry) => entry.branch)).toEqual(["leaf-a", "leaf-b"]);
+			expect(document?.history.map((entry) => entry.line)).toEqual(["path A turn 3", "path B turn 3"]);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
