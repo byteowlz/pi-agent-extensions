@@ -1,17 +1,26 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { launch } from "./launch.js";
+import { type Profile, launch } from "./launch.js";
+
+export function parsePrivateRequest(raw: string): { profile: Profile; resumeDir?: string } {
+	const args = raw.trim();
+	if (!args) return { profile: "private" };
+	if (args === "nohistory") return { profile: "nohistory" };
+	if (args.startsWith("nohistory resume ") && args.slice("nohistory resume ".length).trim()) {
+		return { profile: "nohistory", resumeDir: args.slice("nohistory resume ".length).trim() };
+	}
+	if (args.startsWith("resume ") && args.slice("resume ".length).trim()) {
+		return { profile: "private", resumeDir: args.slice("resume ".length).trim() };
+	}
+	throw new Error("Usage: /private [nohistory] [resume /absolute/vault/path]");
+}
 
 export default function (pi: ExtensionAPI): void {
 	pi.registerCommand("private", {
-		description: "Start a fresh isolated pi tab; /private nohistory excludes history-search and all other optional extensions",
+		description: "Open or resume an age-sealed Pi vault; nohistory excludes history-search",
 		handler: async (args, ctx) => {
-			const mode = args.trim();
-			if (mode !== "" && mode !== "nohistory") {
-				ctx.ui.notify("Usage: /private [nohistory]", "error");
-				return;
-			}
 			try {
-				ctx.ui.notify(await launch(mode === "nohistory" ? "nohistory" : "private", ctx.cwd), "info");
+				const { profile, resumeDir } = parsePrivateRequest(args);
+				ctx.ui.notify(await launch(profile, ctx.cwd, "auto", undefined, resumeDir), "info");
 			} catch (error) {
 				ctx.ui.notify(String(error), "error");
 			}

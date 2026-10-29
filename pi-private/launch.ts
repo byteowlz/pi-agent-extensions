@@ -1,9 +1,11 @@
-import { execFile as execFileCallback, spawn } from "node:child_process";
+import { execFile as execFileCallback } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { requireAge } from "./age-store.js";
+import { runPrivate } from "./runner-core.js";
 
 const execFile = promisify(execFileCallback);
 export type Profile = "private" | "nohistory";
@@ -11,11 +13,26 @@ export interface Config {
 	sessionRoot?: string;
 	// Only explicitly named, trusted extension entry points. No package discovery.
 	extensions?: Record<string, string>;
+	age?: { recipient: string; identityFile: string };
 }
 const self = fileURLToPath(new URL("./index.ts", import.meta.url));
+const runner = fileURLToPath(new URL("./runner.ts", import.meta.url));
 const builtins = new Set(["builtin:codemode", "builtin:tool-search", "builtin:llama.cpp"]);
 const defaultRoot = () => join(process.env.XDG_DATA_HOME || join(homedir(), ".local/share"), "pi-private", "sessions");
 const configPath = () => join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "pi-private", "config.json");
+
+function validateAgeConfig(value: unknown): void {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid age recipient config");
+	const age = value as Record<string, unknown>;
+	if (
+		Object.keys(age).some((key) => !["recipient", "identityFile"].includes(key)) ||
+		typeof age.recipient !== "string" ||
+		!age.recipient.startsWith("age1") ||
+		typeof age.identityFile !== "string" ||
+		!isAbsolute(age.identityFile)
+	)
+		throw new Error("age requires a public recipient and absolute identity file path");
+}
 
 export function loadConfig(path = configPath()): Config {
 	if (!existsSync(path)) return {};
@@ -31,7 +48,7 @@ export function loadConfig(path = configPath()): Config {
 	const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid pi-private config");
 	const raw = parsed as Record<string, unknown>;
-	if (Object.keys(raw).some((key) => !["sessionRoot", "extensions"].includes(key)))
+	if (Object.keys(raw).some((key) => !["sessionRoot", "extensions", "age"].includes(key)))
 		throw new Error("unknown pi-private config key");
 	if (raw.sessionRoot !== undefined && (typeof raw.sessionRoot !== "string" || !isAbsolute(raw.sessionRoot))) {
 		throw new Error("sessionRoot must be absolute");
@@ -39,6 +56,7 @@ export function loadConfig(path = configPath()): Config {
 	if (raw.extensions !== undefined && (!raw.extensions || typeof raw.extensions !== "object" || Array.isArray(raw.extensions))) {
 		throw new Error("extensions must be an object");
 	}
+	if (raw.age !== undefined) validateAgeConfig(raw.age);
 	const extensions = raw.extensions as Record<string, unknown> | undefined;
 	for (const [name, entry] of Object.entries(extensions || {})) {
 		if (!/^[a-z][a-z0-9-]*$/.test(name) || typeof entry !== "string" || (entry !== `builtin:${name}` && !isAbsolute(entry))) {
@@ -111,8 +129,9 @@ function prepareAtuin(sessionDir: string, resume: boolean): string {
 export function prepare(
 	profile: Profile,
 	config: Config = loadConfig(),
-	resumeDir?: string
-): { args: string[]; env: Record<string, string>; sessionDir: string } {
+	resumeDir?: string,
+	continuing = Boolean(resumeDir)
+): { args: string[]; env: Record<string, string>; sessionDir: string; vaultDir: string; age?: Config["age"] } {
 	if (profile !== "private" && profile !== "nohistory") throw new Error("unknown private profile");
 	const root = resolve(config.sessionRoot || defaultRoot());
 	const normal = resolve(homedir(), ".pi", "agent");
@@ -126,12 +145,23 @@ export function prepare(
 	) {
 		throw new Error("resume directory must be an existing session under this profile's private root");
 	}
-	const sessionDir = resumeDir ? resolve(resumeDir) : mkdtempSync(join(root, `${profile}-`));
+	const vaultDir = resumeDir ? resolve(resumeDir) : mkdtempSync(join(root, `${profile}-`));
 	try {
-		if (resumeDir) secureDirectory(sessionDir);
+		secureDirectory(vaultDir);
+		const sessionDir = join(vaultDir, "active");
+		const sealedDir = join(vaultDir, "sealed");
+		if (resumeDir) {
+			if (!existsSync(sessionDir) || !existsSync(sealedDir))
+				throw new Error("encrypted vault layout missing; old plaintext sessions cannot be resumed");
+			secureDirectory(sessionDir);
+			secureDirectory(sealedDir);
+		} else {
+			mkdirSync(sessionDir, { mode: 0o700 });
+			mkdirSync(sealedDir, { mode: 0o700 });
+		}
 		// Atuin's hook runs in the shell launched by herdr. Give it a private config
 		// filtering *all* commands, instead of relying on shell-history settings alone.
-		const atuin = prepareAtuin(sessionDir, Boolean(resumeDir));
+		const atuin = prepareAtuin(vaultDir, Boolean(resumeDir));
 		const args = [
 			"--no-extensions",
 			"--no-mcp",
@@ -146,11 +176,15 @@ export function prepare(
 			"-e",
 			self,
 		];
-		if (resumeDir) args.push("--continue");
+		if (continuing) args.push("--continue");
 		if (profile === "private") args.push(...extensionArgs(config));
 		return {
 			args,
+			vaultDir,
+			age: config.age,
 			env: {
+				...(process.env.XDG_CONFIG_HOME ? { XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME } : {}),
+				...(process.env.XDG_DATA_HOME ? { XDG_DATA_HOME: process.env.XDG_DATA_HOME } : {}),
 				PI_CODING_AGENT_SESSION_DIR: sessionDir,
 				KOMPRESS_ROLLING: "0",
 				ATUIN_CONFIG_DIR: atuin,
@@ -161,7 +195,7 @@ export function prepare(
 			sessionDir,
 		};
 	} catch (error) {
-		if (!resumeDir) rmSync(sessionDir, { recursive: true, force: true });
+		if (!resumeDir) rmSync(vaultDir, { recursive: true, force: true });
 		throw error;
 	}
 }
@@ -177,6 +211,8 @@ export async function launch(
 	config?: Config,
 	resumeDir?: string
 ): Promise<string> {
+	if (process.platform === "win32") throw new Error("native Windows private launcher is unverified; no unsafe fallback");
+	await requireAge();
 	const plan = prepare(profile, config, resumeDir);
 	const env = { ...process.env, ...plan.env };
 	try {
@@ -203,20 +239,11 @@ export async function launch(
 			const pane = result.result?.root_pane?.pane_id;
 			if (!pane) throw new Error("herdr tab created but no pane ID returned; inspect and close the tab before retrying");
 			try {
-				const started = await execFile("herdr", [
-					"agent",
-					"start",
-					`private-${process.pid}`,
-					"--kind",
-					"pi",
-					"--pane",
-					pane,
-					"--",
-					...plan.args,
-				]);
-				const response = JSON.parse(started.stdout) as { error?: unknown; result?: { agent?: { name?: string } } };
-				if (response.error || !response.result?.agent?.name)
-					throw new Error(`herdr agent start rejected: ${JSON.stringify(response)}`);
+				// Wrapper validates age before starting Pi and seals individual JSONL files on exit.
+				const command = ["bun", runner, profile, plan.vaultDir, cwd, ...(resumeDir ? ["--resume"] : [])].map(quote).join(" ");
+				const started = await execFile("herdr", ["pane", "run", pane, command]);
+				const response = JSON.parse(started.stdout) as { error?: unknown };
+				if (response.error) throw new Error(`herdr pane run rejected: ${JSON.stringify(response.error)}`);
 			} catch (error) {
 				if (result.result?.tab?.tab_id)
 					await execFile("herdr", ["tab", "close", result.result.tab.tab_id]).catch(() => {
@@ -224,7 +251,7 @@ export async function launch(
 					});
 				throw error;
 			}
-			return `Started pi ${profile} in herdr pane ${pane} (${plan.sessionDir})`;
+			return `Opening pi ${profile} in herdr pane ${pane}; resume with vault ${plan.vaultDir}`;
 		}
 		if (mode === "auto" && process.env.TMUX) {
 			// tmux invokes its command via a non-interactive shell; no interactive Atuin hook.
@@ -234,21 +261,16 @@ export async function launch(
 				"-c",
 				cwd,
 				...Object.entries(plan.env).flatMap(([key, value]) => ["-e", `${key}=${value}`]),
-				["exec", "pi", ...plan.args].map(quote).join(" "),
+				["exec", "bun", runner, profile, plan.vaultDir, cwd, ...(resumeDir ? ["--resume"] : [])].map(quote).join(" "),
 			]);
-			return `Started pi ${profile} in a tmux window (${plan.sessionDir})`;
+			return `Opening pi ${profile} in a tmux window; resume with vault ${plan.vaultDir}`;
 		}
 		if (mode !== "plain")
 			throw new Error("No herdr/tmux session available; use the standalone bun pi-private/cli.ts launcher for a plain terminal");
-		const child = spawn("pi", plan.args, { cwd, env, stdio: "inherit" });
-		const code = await new Promise<number>((resolveCode, reject) => {
-			child.once("error", reject);
-			child.once("exit", (status) => resolveCode(status ?? 1));
-		});
-		if (code !== 0) throw new Error(`pi exited with status ${code}`);
-		return plan.sessionDir;
+		await runPrivate(plan, Boolean(resumeDir), cwd, env);
+		return plan.vaultDir;
 	} catch (error) {
 		// Keep the session directory: a launched child may have written data before failure.
-		throw new Error(`Private launch failed (${plan.sessionDir} retained for inspection): ${String(error)}`);
+		throw new Error(`Private launch failed (vault ${plan.vaultDir} retained for inspection): ${String(error)}`);
 	}
 }

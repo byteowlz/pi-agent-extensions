@@ -4,6 +4,17 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### pi-private: per-session-file age sealing (2.31.0)
+
+- **pi-private 0.2.0:** `/private` and `/private nohistory` now require age
+  before Pi starts, encrypt individual JSONL files after clean exit, decrypt
+  on deliberate resume and fail closed on wrong unlock or failed seal. Default
+  mode stores an age passphrase-encrypted identity generated through pipes;
+  optional recipient mode supports age-plugin-yubikey. Plaintext remains on
+  disk while Pi is live and may survive a crash: the README documents this
+  limitation and an explicit recovery command. Age/YubiKey binaries were not
+  installed for real integration tests; unit tests use a mock age executable.
+
 ### pi-private: isolated fresh-session profiles (2.30.0)
 
 - **pi-private 0.1.0 (new):** `/private` starts a fresh session with an explicit
