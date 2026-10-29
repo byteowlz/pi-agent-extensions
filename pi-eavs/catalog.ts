@@ -54,9 +54,23 @@ export function scopedKey(value: unknown): string {
 	return value;
 }
 
+/** Gateway catalogs publish compat in snake_case; Pi models use camelCase. Accept both,
+ *  camelCase first, so a declared capability is not silently dropped between the two. */
+const COMPAT_ALIASES: Record<string, string> = {
+	supports_store: "supportsStore",
+	supports_developer_role: "supportsDeveloperRole",
+	supports_reasoning_effort: "supportsReasoningEffort",
+	supports_usage_in_streaming: "supportsUsageInStreaming",
+	supports_tool_choice: "supportsToolChoice",
+	supports_strict_mode: "supportsStrictMode",
+	supports_images_in_tool_results: "supportsImagesInToolResults",
+	max_tokens_field: "maxTokensField",
+};
+
 function compat(value: unknown): NonNullable<Model<"openai-completions">["compat"]> {
 	const out: Record<string, boolean | string> = {};
 	if (!object(value)) return out;
+	const source = value as Record<string, unknown>;
 	for (const key of [
 		"supportsStore",
 		"supportsDeveloperRole",
@@ -65,10 +79,16 @@ function compat(value: unknown): NonNullable<Model<"openai-completions">["compat
 		"supportsToolChoice",
 		"supportsStrictMode",
 		"supportsImagesInToolResults",
-	])
-		if (typeof value[key] === "boolean") out[key] = value[key];
-	if (value.maxTokensField === "max_tokens" || value.maxTokensField === "max_completion_tokens")
-		out.maxTokensField = value.maxTokensField;
+	]) {
+		const alias = Object.entries(COMPAT_ALIASES).find(([, camel]) => camel === key)?.[0];
+		const raw = typeof source[key] === "boolean" ? source[key] : alias ? source[alias] : undefined;
+		if (typeof raw === "boolean") out[key] = raw;
+	}
+	const field =
+		source.maxTokensField === "max_tokens" || source.maxTokensField === "max_completion_tokens"
+			? source.maxTokensField
+			: source.max_tokens_field;
+	if (field === "max_tokens" || field === "max_completion_tokens") out.maxTokensField = field;
 	return out;
 }
 

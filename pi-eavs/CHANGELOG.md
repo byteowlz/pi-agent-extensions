@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.8
+
+- Provider/model `compat` is now read in both spellings. EAVS catalogs publish
+  `supports_developer_role`, `max_tokens_field` and the other snake_case keys, while Pi
+  models use camelCase, so every declared capability was being dropped and projected
+  models arrived with `compat: {}`. Consumers that gate on `supportsDeveloperRole` /
+  `maxTokensField` (for example kompressor's native admission check) rejected those
+  models even though the gateway declared them correctly. CamelCase still wins when both
+  are present.
+
 ## 0.2.7
 
 - Merged release uniting both 0.2.5 lineages and 0.2.6:
