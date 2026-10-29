@@ -9,6 +9,10 @@ the full text one shortcut away.
  ▌ running pods while the old one is cached in the sidecar container…
 ```
 
+Blue, not violet: the card describes *your* message, so it uses pi's user-message
+family — `userMessageBg` background, `border` rule, `mdLink` timestamp,
+`userMessageText` question. No icon: a bare rule and the timestamp read cleaner.
+
 The card is drawn with pi's own primitives, so it belongs rather than intrudes:
 
 - `Box(1, 0, theme.bg("customMessageBg"))` — the padded background rectangle pi
@@ -38,9 +42,11 @@ you can act on the text (edit, re-send, or yank it with your editor keys).
 - **Two question lines, hard budget.** The card is one header row plus at most
   two question rows; when the text doesn't fit, the last row ends with `…`. No
   marker when it fits.
-- **Tracks the current branch.** Updated on `session_start`, on each submitted
-  prompt, and on `session_tree`, so after `/fork` or a tree jump it shows the
-  question that branch answered.
+- **Updates immediately on submit and reconciles with the branch.** pi emits
+  `input` *before* the user message is on the branch, so reading the branch there
+  shows the previous question. The submitted text is shown right away and replaced
+  by the branch copy once it lands (`message_end`/`turn_end`/`agent_end`), which
+  also keeps it correct after `/fork`, tree jumps and resume.
 - **Absolute timestamp** (`10/29/2026, 12:00 PM`, local time) rather than a
   relative age: the widget only re-renders when the branch changes, so "15s ago"
   would sit there frozen and lie. An absolute stamp stays true with no timer.
