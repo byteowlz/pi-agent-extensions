@@ -96,12 +96,6 @@ const QUESTIONS: QuestionDef[] = [
 		options: ["none", "decision", "approval", "missing_info", "review"],
 	},
 	{
-		field: "risk",
-		label: "how consequential were the actions?",
-		kind: "choice",
-		options: ["none", "low", "medium", "high", "critical"],
-	},
-	{
 		field: "artifact",
 		label: "what did it produce?",
 		kind: "choice",
