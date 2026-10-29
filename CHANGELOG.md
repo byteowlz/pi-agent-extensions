@@ -4,6 +4,18 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Last question above the prompt box (2.36.0)
+
+- **pi-last-question 0.1.0**: new extension — pins the most recent user question
+  in a two-line widget directly above the editor (`ui.setWidget(...,
+  placement:"aboveEditor")`), with an age label and a `… ⌥Q` marker only when the
+  text is cut. `ctrl+alt+q` expands the full question in a scrollable overlay
+  (`enter` inserts it into the prompt box, `y` copies, `esc` closes);
+  `ctrl+alt+j` jumps straight there by putting the full text in the prompt box,
+  appending to a draft; `/last-question` reports it on surfaces without a TUI.
+  Tracks the branch (submit, start/resume, tree navigation) and ignores assistant
+  turns, tool results and custom entries.
+
 ### Card sidecar for list views, and no more risk question (2.37.0)
 
 - **pi-turn-classify 0.4.0**: cards are now also written to a per-session sidecar
