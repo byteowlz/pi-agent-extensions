@@ -121,6 +121,9 @@ Loadouts resolve to a set of allowed model ids + spawn kinds, which gates
 
 ## Commands
 
+`/captain` — per-project intake ownership + scheduled actions (see [Project captain](#project-captain)):
+`/captain` · `claim [label]` · `release` · `who` · `route <text>` · `schedule <interval> "<prompt>"` · `actions` · `pause` · `resume` · `run` · `unschedule` · `export`
+
 `/subagent` — config + **per-session** settings + lifecycle:
 
 | command | effect |
@@ -336,6 +339,85 @@ Keybindings in the compose box:
 - **Esc** — cancel
 
 Your own pane is excluded from the target list (via `HERDR_PANE_ID`).
+
+## Project captain
+
+The **working directory is the project**. One session per project can be
+designated the **captain**: the thread responsible for intake, and the natural
+lead for board/routing work.
+
+```
+/captain                    status: project, captain, claim liveness, other sessions
+/captain claim [label]      designate this session as captain for this cwd
+/captain release            release the claim (only the owning session may)
+/captain who                sessions herdr reports inside this project
+/captain route <text>       hand work to the captain (`herdr agent prompt`)
+
+/captain schedule <interval> "<prompt>"   e.g. /captain schedule hourly "check board"
+/captain actions            list scheduled actions + next run
+/captain pause [n|id]       pause one action (or all)
+/captain resume [n|id]      resume one action (or all)
+/captain run [n|id]         run one now
+/captain unschedule <n|id>  remove an action
+/captain export             print the equivalent headless skdlr commands
+```
+
+### Scheduled actions
+
+Actions are **per project**, not per session: they live in
+`~/.pi/agent/captain/<encoded-cwd>.actions.json`, so a new captain adopts the
+project's standing actions and the old one stops firing as soon as the claim
+changes hands (every tick re-checks ownership).
+
+They are delivered **into the live session** as a normal user message (`steer`
+queueing while streaming), which is the point: the captain keeps its context.
+Delivery parks across compaction instead of dropping the nudge.
+
+Intervals: `30m`, `2h`, `1d`, `every 15 minutes`, `hourly`, `daily`, `weekly`;
+the minimum is 10s. Actions run only while this session holds the claim and the
+session is long-lived (TUI/RPC; print-mode never arms timers).
+
+**skdlr**: not wired in, by design. A skdlr schedule runs a separate
+`pi -p` process, which cannot share this session's live state (context,
+compaction, message queue), so delegation would silently change semantics.
+`/captain export` prints the exact `skdlr add …` command per action for work
+that genuinely belongs headless; adopting skdlr for in-session nudges would need
+a delivery bridge into the running session, which is a separate design.
+
+### Status line
+
+While this session is the captain, it publishes `ctx.ui.setStatus("captain", …)`
+(`<project>` or `<project> ·<n actions>`); releasing clears it. Add the segment
+to your statusline manifest with a Nerd Font glyph, e.g. the anchor
+`\uf13d`:
+
+```json
+{ "id": "captain", "statusKey": "captain", "label": "\uf13d",
+  "color": "accent", "colorValue": true, "position": "right", "order": 15 }
+```
+
+Claim state lives in `~/.pi/agent/captain/<encoded-cwd>.json` — the same
+`--<path>--` encoding pi uses for session directories, so the claim follows
+resume/reload and `/cwd`. Each claim is also appended to the session branch as a
+`pi-session-tools:captain/v1` entry (inspectable history, never LLM context).
+
+Deliberate properties:
+
+- **Advisory, not enforced.** A claim is a visible designation with liveness
+  evidence — not a lock. Exclusive *input* ownership already exists in
+  pi-tui-rpc's lease; duplicating it here would fight that.
+- **Liveness is judged, never assumed.** A claim is `live` only when its pane is
+  in `herdr agent list`, `stale` when the pane or session file is gone, and
+  `unknown` when there is no evidence. Stale claims never capture intake; route
+  refuses and tells you to claim instead.
+- **Visible where you already look.** Claiming renames the herdr pane/tab to
+  `★ captain · <project>`; releasing clears it.
+- **Project-scoped discovery.** `/captain who` reuses `herdr agent list` (which
+  carries each pane's `cwd`), so it works for sessions that never loaded any
+  messaging extension.
+- **No auto-routing.** Intake moves only when you route it (`/captain route`,
+  `/send`, `send_to_session`, or a board post). Auto-capturing every unattributed
+  message would need an ownership rule for "no captain claimed"; not assumed here.
 
 ## Config file
 

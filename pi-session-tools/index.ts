@@ -87,6 +87,19 @@ import { Type } from "typebox";
 import { buildSubagentSessionName } from "../pi-auto-rename/index.js";
 import { STATUS_QUERY, type StatusQuery } from "../pi-introspection/contributions.js";
 import { openTmuxSide, resolveRoute } from "./backend.js";
+import {
+	CAPTAIN_ENTRY_TYPE,
+	type CaptainClaim,
+	clearClaim,
+	formatCaptainStatus,
+	judgeClaim,
+	parseAgentList,
+	projectSessions,
+	readCaptainEntry,
+	readClaim,
+	summarizeCaptain,
+	writeClaim,
+} from "./captain.js";
 import { isLiveSession, shouldReconnect } from "./lifecycle.js";
 import { fitEntries, fitText } from "./output-budget.js";
 import { subagentOutputSchema, subagentResult } from "./output.js";
@@ -2554,6 +2567,9 @@ export default function sessionTools(pi: ExtensionAPI) {
 		observedSettings = undefined;
 		observedSession = undefined;
 		settingsChange(ctx);
+		// Scheduled work lives in pi-schedule (`/schedule`), which reads the claim
+		// file to decide whether project-scoped checks run here.
+		publishCaptainStatus(ctx);
 		unsubscribeStatus?.();
 		const sessionId = ctx.sessionManager.getSessionId();
 		unsubscribeStatus = pi.events?.on(STATUS_QUERY, (data: unknown) => {
@@ -2581,6 +2597,10 @@ export default function sessionTools(pi: ExtensionAPI) {
 							...settingsSnapshot(ctx),
 							trackedSubagents: currentState ? Object.keys(currentState.subagents).length : 0,
 							spawnBackend: route.owner === "herdr" && route.ready ? "herdr" : "unavailable",
+							// Project captain: this session's claim for its cwd, if any. No
+							// liveness probe here (a status query must stay cheap); the claim is
+							// reported as recorded, /captain verifies it.
+							captain: captainSummary(ctx),
 						},
 					};
 				})()
@@ -2589,6 +2609,7 @@ export default function sessionTools(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
+		publishCaptainStatus(undefined);
 		stopNotifyTimer();
 		stopEventSubscriber();
 		unsubscribeStatus?.();
@@ -3322,6 +3343,190 @@ export default function sessionTools(pi: ExtensionAPI) {
 		description: "Alias of /send: copy this agent's last response and forward it to another herdr tab with an optional note.",
 		handler: async (_args, ctx) => {
 			await runSend(ctx, pi);
+		},
+	});
+
+	// -----------------------------------------------------------------------
+	// Project captain: one designated session per project (= cwd) for intake.
+	// Advisory designation with liveness evidence, never a lock: exclusive input
+	// ownership already exists in pi-tui-rpc's lease. Discovery and delivery
+	// reuse this extension's herdr primitives (agent list / agent prompt).
+	// -----------------------------------------------------------------------
+
+	/** Sessions herdr reports, or undefined when herdr is unavailable here. */
+	const captainPanes = async (): Promise<ProjectSession[] | undefined> => {
+		try {
+			return parseAgentList(await herdr(["agent", "list"]));
+		} catch {
+			return undefined;
+		}
+	};
+
+	const captainSnapshot = async (
+		ctx: ExtensionContext
+	): Promise<{ claim?: CaptainClaim; verdict?: ReturnType<typeof judgeClaim>; sessions: ProjectSession[]; backend: string }> => {
+		const claim = readClaim(ctx.cwd);
+		const panes = await captainPanes();
+		const selfPane = process.env.HERDR_PANE_ID;
+		const sessions = panes ? projectSessions(panes, ctx.cwd, selfPane) : [];
+		// Fall back to the branch record when no claim file exists (e.g. the claim
+		// was written in another session and the file was cleaned up).
+		const effective = claim ?? readCaptainEntry(ctx.sessionManager.getBranch());
+		const verdict = effective
+			? judgeClaim(
+					effective,
+					panes?.map((pane) => pane.paneId)
+				)
+			: undefined;
+		const route = await resolveRoute(process.env);
+		return { claim: effective, verdict, sessions, backend: route.owner };
+	};
+
+	const captainSummary = (ctx: ExtensionContext): ReturnType<typeof summarizeCaptain> =>
+		summarizeCaptain(ctx.cwd, ctx.sessionManager.getSessionId());
+
+	const recordCaptainEntry = (claim: CaptainClaim | null): void => {
+		try {
+			pi.appendEntry(
+				CAPTAIN_ENTRY_TYPE,
+				claim ?? { version: 1, project: "", sessionId: "", at: new Date().toISOString(), released: true }
+			);
+		} catch {
+			// Branch history is best-effort; the claim file is the source of truth.
+		}
+	};
+
+	/**
+	 * Status badge: only the claim owner advertises. pi-schedule publishes its own
+	 * "schedule" segment, so the captain badge never encodes scheduled work.
+	 */
+	const publishCaptainStatus = (ctx: ExtensionContext | undefined): void => {
+		if (!ctx) return;
+		try {
+			const claim = readClaim(ctx.cwd);
+			const mine = claim?.sessionId === ctx.sessionManager.getSessionId();
+			ctx.ui.setStatus("captain", mine ? path.basename(ctx.cwd) || "project" : undefined);
+		} catch {
+			// status is cosmetic
+		}
+	};
+
+	pi.registerCommand("captain", {
+		description:
+			"Designate this session as the project captain (intake owner for this working directory): /captain claim [label] · /captain release · /captain who · /captain route <text>",
+		handler: async (args, ctx) => {
+			const [sub = "status", ...rest] = args.trim().split(/\s+/).filter(Boolean);
+			const snapshot = await captainSnapshot(ctx);
+
+			if (sub === "claim") {
+				const label = rest.join(" ").trim() || "captain";
+				const claim: CaptainClaim = {
+					version: 1,
+					project: path.resolve(ctx.cwd),
+					sessionId: ctx.sessionManager.getSessionId(),
+					at: new Date().toISOString(),
+					label,
+				};
+				const sessionFile = ctx.sessionManager.getSessionFile();
+				if (typeof sessionFile === "string" && sessionFile) claim.sessionFile = sessionFile;
+				const paneId = process.env.HERDR_PANE_ID;
+				if (paneId) claim.paneId = paneId;
+				try {
+					const file = writeClaim(claim);
+					recordCaptainEntry(claim);
+					publishCaptainStatus(ctx);
+					// Visibility: the tab label is what the human and /send already show.
+					if (paneId) {
+						void herdr(["pane", "rename", paneId, `★ captain · ${path.basename(ctx.cwd) || "project"}`]).catch(() => {});
+					}
+					const previous = snapshot.claim;
+					const handover =
+						previous && previous.sessionId !== claim.sessionId
+							? `\n  took over from ${previous.sessionId.slice(0, 8)}${previous.paneId ? ` (${previous.paneId})` : ""}`
+							: "";
+					ctx.ui.notify(
+						`You are the captain for ${path.resolve(ctx.cwd)}.\n  claim: ${file}\n  label: ${label}${paneId ? `\n  pane: ${paneId}` : ""}${handover}\nIntake arrives at this session; /captain route <text> hands work to it.`,
+						"info"
+					);
+				} catch (err) {
+					ctx.ui.notify(`Captain claim failed: ${(err as Error)?.message ?? err}`, "error");
+				}
+				return;
+			}
+
+			if (sub === "release" || sub === "off") {
+				const claim = snapshot.claim;
+				if (!claim) {
+					ctx.ui.notify(`No captain claimed for ${path.resolve(ctx.cwd)}.`, "info");
+					return;
+				}
+				if (claim.sessionId !== ctx.sessionManager.getSessionId()) {
+					ctx.ui.notify(
+						`This project's captain is another session (${claim.sessionId.slice(0, 8)}); only it can release the claim.`,
+						"warning"
+					);
+					return;
+				}
+				clearClaim(ctx.cwd);
+				recordCaptainEntry(null);
+				publishCaptainStatus(ctx);
+				const paneId = process.env.HERDR_PANE_ID;
+				if (paneId) void herdr(["pane", "rename", paneId, ""]).catch(() => {});
+				ctx.ui.notify(`Released captain for ${path.resolve(ctx.cwd)}.`, "info");
+				return;
+			}
+
+			if (sub === "who") {
+				if (snapshot.sessions.length === 0) {
+					ctx.ui.notify(`No other sessions in ${path.resolve(ctx.cwd)} (backend: ${snapshot.backend}).`, "info");
+					return;
+				}
+				const rows = snapshot.sessions.map(
+					(session) => `${session.paneId}  ${session.label ?? "(unlabelled)"}${session.state ? ` [${session.state}]` : ""}`
+				);
+				ctx.ui.notify(`Sessions in ${path.resolve(ctx.cwd)}:\n  ${rows.join("\n  ")}`, "info");
+				return;
+			}
+
+			if (sub === "route" || sub === "hand") {
+				const text = rest.join(" ").trim();
+				if (!text) {
+					ctx.ui.notify("Usage: /captain route <text>", "warning");
+					return;
+				}
+				const claim = snapshot.claim;
+				if (!claim) {
+					ctx.ui.notify(`No captain claimed for ${path.resolve(ctx.cwd)}; nothing to route to.`, "warning");
+					return;
+				}
+				if (snapshot.verdict?.status === "stale") {
+					ctx.ui.notify(`Captain claim is stale (${snapshot.verdict.reason}); /captain claim to take over.`, "warning");
+					return;
+				}
+				if (!claim.paneId) {
+					ctx.ui.notify("Captain has no herdr pane; route through the session tools instead.", "warning");
+					return;
+				}
+				try {
+					await herdr(["agent", "prompt", claim.paneId, text], { timeout: 120_000 });
+					ctx.ui.notify(`Routed to captain in ${claim.paneId}.`, "info");
+				} catch (err) {
+					ctx.ui.notify(`Route failed: ${(err as Error)?.message ?? err}`, "error");
+				}
+				return;
+			}
+
+			ctx.ui.notify(
+				formatCaptainStatus({
+					project: ctx.cwd,
+					selfSessionId: ctx.sessionManager.getSessionId(),
+					claim: snapshot.claim,
+					verdict: snapshot.verdict,
+					sessions: snapshot.sessions,
+					backend: snapshot.backend,
+				}),
+				"info"
+			);
 		},
 	});
 }
