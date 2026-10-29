@@ -172,20 +172,42 @@ so a 50-row list would mean reading gigabytes to show 50 one-liners.
 }
 ```
 
-Two tiers, bounded by **bytes** rather than an arbitrary count, because what costs
-is the per-row read and the full-document rewrite on each turn, not disk.
+Keeping every turn is the point: a consumer that wants a row reads `latest` and
+stops, and one that wants the story reads the timeline. Full parses are rare, so
+disk is not the constraint — measured on the 200 largest sessions here, the median
+session is 30 turns (~54 kB) and the largest 661 (~700 kB). `maxBytes` (8 MB) is a
+safety valve against a runaway session, not an everyday budget.
 
 Measured on the 200 largest sessions here: **median 30 turns, mean 79, max 661**;
 a full card is ~1 kB (probabilities included) and a line-only entry ~75 B. So:
 
-- an ordinary session (~30 turns, ~30-54 kB) keeps **every** turn in `turns`;
-- a pathological one stops growing at **512 kB** (`maxBytes`): the oldest *full*
-  cards are shed first (a 700-turn session keeps ~269 of them) while `history`
-  keeps **one line per turn**, up to 5000 — so the story stays complete.
+`history` is the timeline: one entry per turn with the fields that move
+(`project`, `activity`, `work_done`, `blocked`, `attention`, `error_kind`) plus the
+rendered `line` — roughly 120 B, so change over time is visible without touching
+the full cards. Nothing is lost either way: the session file holds every full card
+too, and `dataset.path` is where digests with probabilities belong when the purpose
+is calibration rather than a list row.
 
-Nothing is lost either way: the session file still holds every full card, and
-`dataset.path` is where full digests with probabilities belong when the purpose is
-calibration rather than a list row.
+### Forks, resumes and branch navigation
+
+`turn` is **not** an identity. Two cases break that assumption, and both are
+handled:
+
+- **Resume.** pi starts a new process, so a counter would restart at 1 and the
+  first classification after a resume would overwrite the earlier turn 1 card. Turn
+  numbers therefore come from the **branch** (`cards on the branch + 1`), and the
+  identity of a timeline entry is its timestamp, so nothing is ever overwritten.
+- **Fork.** A fork inherits its parent's entries — including cards — but has a new
+  session id and therefore no sidecar. On session start the inherited cards are
+  **seeded** into the new sidecar (only when it has no history, so a resume never
+  duplicates), and numbering continues from the inherited branch.
+- **Branch navigation.** Going back in the tree and taking another route can
+  legitimately produce the same turn number twice. Both are kept, ordered by time,
+  and each entry records the session-tree `branch` (leaf id) it happened on, so a
+  consumer can separate the two paths instead of seeing a corrupted timeline.
+
+Each card also carries that `branch` field in the session file, so the two places
+agree.
 
 Why this shape:
 
