@@ -1,6 +1,6 @@
 {
   "name": "@byteowlz/pi-last-question",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Show your last question above the prompt box (2 lines, expand or insert with a shortcut)",
   "type": "module",
   "keywords": [

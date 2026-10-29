@@ -148,22 +148,103 @@ export function buildStrip(
 	return out;
 }
 
-/** "asked 3m ago" style age, from the message timestamp when available. */
-export function questionAge(entries: readonly unknown[], now = Date.now()): string | undefined {
+/**
+ * Absolute local timestamp of the question ("10/29/2026, 8:13 AM").
+ *
+ * Deliberately not a relative age: the strip is only re-rendered when the branch
+ * changes, so "15s ago" would sit there frozen and lie about how old the question
+ * is. An absolute stamp stays true without any timer.
+ */
+export function formatStamp(epochMs: number, locale?: string, timeZone?: string): string {
+	const options: Intl.DateTimeFormatOptions = {
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		hour: "numeric",
+		minute: "2-digit",
+	};
+	if (timeZone) options.timeZone = timeZone;
+	return new Intl.DateTimeFormat(locale, options).format(new Date(epochMs));
+}
+
+/** Timestamp of the branch's last user question, when the session recorded one. */
+export function questionStamp(
+	entries: readonly unknown[],
+	options: { locale?: string; timeZone?: string } = {}
+): string | undefined {
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i];
 		if (!isRecord(entry) || entry.type !== "message") continue;
 		const message = entry.message;
 		if (!isRecord(message) || message.role !== "user") continue;
+		// Messages carry epoch milliseconds; fall back to the entry's ISO stamp.
 		const stamp = message.timestamp;
-		if (typeof stamp !== "number" || !Number.isFinite(stamp)) return undefined;
-		const seconds = Math.max(0, Math.round((now - stamp) / 1000));
-		if (seconds < 60) return `${seconds}s ago`;
-		const minutes = Math.round(seconds / 60);
-		if (minutes < 60) return `${minutes}m ago`;
-		const hours = Math.round(minutes / 60);
-		if (hours < 48) return `${hours}h ago`;
-		return `${Math.round(hours / 24)}d ago`;
+		if (typeof stamp === "number" && Number.isFinite(stamp)) return formatStamp(stamp, options.locale, options.timeZone);
+		if (typeof entry.timestamp === "string") {
+			const parsed = Date.parse(entry.timestamp);
+			if (Number.isFinite(parsed)) return formatStamp(parsed, options.locale, options.timeZone);
+		}
+		return undefined;
 	}
 	return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Card layout
+// ---------------------------------------------------------------------------
+
+/** Left rule drawn on every row, the way pi marks its own message blocks. */
+export const RULE = "▌";
+
+export interface CardRow {
+	left: string;
+	right: string;
+}
+
+export interface CardPlan {
+	header: CardRow;
+	/** Question lines: at most MAX_LINES, the last cut with an ellipsis when needed. */
+	body: string[];
+	/** True when the question was cut. */
+	truncated: boolean;
+}
+
+/**
+ * Lay the widget out as rows of (left content, right-aligned hint).
+ *
+ * Kept free of colour so it can be asserted in tests; the component in widget.ts
+ * only adds theme tokens and padding. Budgets: one header row plus at most
+ * MAX_LINES question rows, all within `width` cells including the left rule.
+ */
+export function planCard(text: string, width: number, options: { stamp?: string; hint?: string; glyph?: string } = {}): CardPlan {
+	const total = Math.max(12, width);
+	const gutter = 2; // rule + space
+	const usable = Math.max(6, total - gutter);
+	const flat = flatten(text);
+
+	// Header: glyph + timestamp on the left, hint on the right when it fits.
+	const head = [options.glyph, options.stamp].filter((part) => part && part.length > 0).join(" ");
+	const hint = options.hint ? `${options.hint} expand` : "";
+	const compactHint = options.hint ?? "";
+	const fitsFull = head.length + hint.length + 2 <= usable;
+	const fitsCompact = head.length + compactHint.length + 2 <= usable;
+	const right = fitsFull ? hint : fitsCompact ? compactHint : "";
+	const headerLeft = fitsFull || fitsCompact ? head : head.slice(0, Math.max(0, usable));
+
+	// Body: wrap, then clamp to the line budget with an ellipsis on the last row.
+	const wrapped = wrap(flat, usable);
+	const rows = wrapped.slice(0, MAX_LINES);
+	const truncated = wrapped.length > MAX_LINES;
+	if (truncated) {
+		const last = rows[MAX_LINES - 1] ?? "";
+		const cut = Math.max(1, usable - 1);
+		rows[MAX_LINES - 1] = `${last.slice(0, cut).trimEnd()}…`;
+	}
+	return { header: { left: headerLeft, right }, body: rows.length > 0 ? rows : [""], truncated };
+}
+
+/** Pad a row's right item against its left item, never exceeding `width`. */
+export function joinRow(row: CardRow, width: number): string {
+	const space = Math.max(0, width - row.left.length - row.right.length);
+	return `${row.left}${" ".repeat(space)}${row.right}`.slice(0, Math.max(width, row.left.length));
 }
