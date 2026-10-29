@@ -173,6 +173,21 @@ A yes/no answer that reports `noul` but no `confidence` (both live servers do
 this) gets `confidence = max(p, 1-p)`, so a yes/no is not reported as a
 0-confidence guess.
 
+## Labelling real turns
+
+The seed bench is 14 turns — enough to catch contract bugs, not enough to choose a
+model or calibrate one. `labeler/` is a web UI that labels **your** turns and
+writes the same format the bench reads, so labels feed straight into scoring and a
+calibration fit:
+
+```bash
+bun run pi-turn-classify/labeler/extract.ts --limit 60   # build the queue
+./pi-turn-classify/labeler/run.sh 8842 100.64.0.6        # tailnet-only server
+```
+
+See [labeler/README.md](./labeler/README.md). It asks the v2 questions
+(`work_done`/`blocked` instead of the five-way `status`).
+
 ## Benchmark
 
 The point of a decision model is cheap decisions, so the harness reports what

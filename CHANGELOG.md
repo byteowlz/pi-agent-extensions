@@ -4,6 +4,20 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Turn labelling UI for calibration (2.35.0)
+
+- **pi-turn-classify 0.2.0**: `labeler/` — a web UI for hand-labelling real agent
+  turns, because 14 self-written seed turns cannot decide between d3 and jev or
+  calibrate confidence. `extract.ts` turns the session store into digests
+  (closing answer, tool trail, files, commands, cwd, git remotes; deduplicated
+  across forks; pleasantries dropped) and `server.ts` serves them tailnet-only
+  with seven keyboard-driven questions. `labels.jsonl` is already bench-sample
+  format, so the corpus feeds `bench.ts` and a calibration fit directly.
+  Registered in owlznest as "turn labeler".
+- The labeler asks the **v2** field set (`work_done` + `blocked` + `attention`
+  instead of the five-way `status`), matching the intended display line
+  `<dir> working on <topic>[ in <target>] · <working|idle|blocked> <reason>`.
+
 ### Recurring in-session prompts, decoupled from the captain (2.34.0)
 
 - **pi-schedule 0.1.0**: new extension — `/schedule <interval> "<prompt>"` delivers

@@ -1,6 +1,6 @@
 {
   "name": "@byteowlz/pi-turn-classify",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Classify every finished agent turn with a decision model (Jeff/D3 systemone or OpenAI decisions API)",
   "type": "module",
   "keywords": [
@@ -13,12 +13,13 @@
     "classification"
   ],
   "files": [
-    "*.ts",
     "*.json",
-    "samples",
-    "README.md",
+    "*.ts",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "README.md",
+    "labeler",
+    "samples"
   ],
   "pi": {
     "extensions": [

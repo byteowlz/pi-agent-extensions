@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>turn labeler</title>
+<style>
+  /* Tokens from Design Studio (generated/oqto-web/oqto.css): no invented colours.
+     radius = 0 is the Oqto identity, kept here. */
+  :root {
+    --base00: oklch(0.970 0.005 165); --base01: oklch(0.928 0.006 165); --base02: oklch(0.895 0.012 165);
+    --base03: oklch(0.620 0.015 165); --base04: oklch(0.500 0.012 165); --base05: oklch(0.300 0.010 165);
+    --background: oklch(0.970 0.005 165); --surface: oklch(0.928 0.006 165); --surface-sunken: oklch(0.915 0.009 165);
+    --foreground: oklch(0.300 0.010 165); --muted-foreground: oklch(0.500 0.012 165);
+    --primary: oklch(0.470 0.115 163); --primary-foreground: oklch(0.970 0.005 165);
+    --success: oklch(0.470 0.115 163); --warning: oklch(0.560 0.110 96); --danger: oklch(0.520 0.150 24); --info: oklch(0.520 0.115 252);
+    --border: oklch(0.928 0.006 165); --code-bg: oklch(0.928 0.006 165);
+    --font-sans: ui-sans-serif, system-ui, sans-serif; --font-mono: ui-monospace, SFMono-Regular, monospace;
+    --radius: 0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --base00: #222624; --base01: #2d312f; --base02: #3a3f41; --base03: #6b7974; --base04: #b2b9b5;
+      --background: #222624; --surface: #2d312f; --surface-sunken: #0f1412;
+      --foreground: oklch(0.8008 0.0079 228.8806); --muted-foreground: #b2b9b5;
+      --primary: #3ba77c; --primary-foreground: #0f1412;
+      --success: #3ba77c; --warning: #d4c275; --danger: #b94a48; --info: #5b8fc9;
+      --border: #2d312f; --code-bg: #1a201e;
+    }
+  }
+  * { box-sizing: border-box; border-radius: var(--radius); }
+  html, body { height: 100%; }
+  body {
+    margin: 0; display: grid; grid-template-rows: auto 1fr; height: 100vh;
+    background: var(--background); color: var(--foreground);
+    font: 13px/1.5 var(--font-sans);
+  }
+  header {
+    display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+    border-bottom: 1px solid var(--border); background: var(--surface);
+  }
+  .title { font-weight: 600; letter-spacing: .02em; }
+  .progress { color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+  .bar { flex: 1; height: 4px; background: var(--surface-sunken); }
+  .bar > i { display: block; height: 100%; background: var(--primary); width: 0; transition: width .2s; }
+  .hint { color: var(--muted-foreground); font-size: 12px; }
+  kbd {
+    font: 11px var(--font-mono); padding: 1px 4px; border: 1px solid var(--border);
+    background: var(--surface-sunken); color: var(--foreground);
+  }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; min-height: 0; }
+  .turn { overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
+  .ctx { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .chip {
+    font: 11px var(--font-mono); padding: 2px 6px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--muted-foreground);
+  }
+  .chip.dir { color: var(--foreground); border-color: var(--primary); }
+  .chip.warn { color: var(--warning); border-color: var(--warning); }
+  .chip.err { color: var(--danger); border-color: var(--danger); }
+  section.block { border: 1px solid var(--border); background: var(--surface); }
+  section.block > h2 {
+    margin: 0; padding: 6px 10px; font-size: 11px; font-weight: 600; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--muted-foreground); border-bottom: 1px solid var(--border);
+  }
+  .body { padding: 10px; white-space: pre-wrap; word-break: break-word; max-height: 42vh; overflow-y: auto; }
+  .body.mono { font-family: var(--font-mono); font-size: 12px; }
+  .body.asst { max-height: 34vh; }
+  .empty { color: var(--muted-foreground); font-style: italic; }
+  aside { border-left: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
+  .q { border-bottom: 1px solid var(--border); padding: 10px 12px; }
+  .q.active { background: var(--surface-sunken); box-shadow: inset 3px 0 0 var(--primary); }
+  .q-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .q-name { font-weight: 600; font-size: 12px; }
+  .q-state { font: 11px var(--font-mono); color: var(--muted-foreground); }
+  .q-state.set { color: var(--primary); }
+  .opts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  button.opt {
+    font: 11px var(--font-mono); padding: 3px 7px; cursor: pointer;
+    background: var(--background); color: var(--foreground); border: 1px solid var(--border);
+  }
+  button.opt:hover { border-color: var(--primary); }
+  button.opt.sel { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+  .foot { margin-top: auto; padding: 10px 12px; display: flex; gap: 8px; flex-wrap: wrap; border-top: 1px solid var(--border); }
+  button.action {
+    font: 12px var(--font-sans); padding: 6px 10px; cursor: pointer;
+    background: var(--surface-sunken); color: var(--foreground); border: 1px solid var(--border);
+  }
+  button.action.primary { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); font-weight: 600; }
+  button.action:disabled { opacity: .45; cursor: not-allowed; }
+  .toast { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); padding: 8px 14px; background: var(--surface); border: 1px solid var(--border); }
+  .toast.err { border-color: var(--danger); color: var(--danger); }
+  .done { display: grid; place-items: center; height: 100%; color: var(--muted-foreground); font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="title">turn labeler</span>
+  <span class="progress" id="progress">·</span>
+  <span class="bar"><i id="bar"></i></span>
+  <span class="hint">
+    <kbd>1</kbd>–<kbd>9</kbd> answer &nbsp; <kbd>←</kbd> back &nbsp; <kbd>s</kbd> skip &nbsp; <kbd>Enter</kbd> next
+  </span>
+</header>
+
+<main>
+  <div class="turn" id="turn"><div class="done">loading…</div></div>
+  <aside>
+    <div id="questions"></div>
+    <div class="foot">
+      <button class="action primary" id="next" disabled>next turn</button>
+      <button class="action" id="back">back</button>
+      <button class="action" id="skip">skip</button>
+      <button class="action" id="export">labels.jsonl</button>
+    </div>
+  </aside>
+</main>
+
+<script type="module">
+const QUESTIONS = [
+  { field: "project", label: "which project is this work about?", opts: () => projectOptions() },
+  { field: "activity", label: "what kind of work?", opts: () => ANSWERS.activity },
+  { field: "work_done", label: "is the requested work complete?", opts: () => ANSWERS.work_done },
+  { field: "blocked", label: "is it blocked on something else?", opts: () => ANSWERS.blocked },
+  { field: "attention", label: "does it need the user? what kind?", opts: () => ANSWERS.attention },
+  { field: "risk", label: "how consequential were the actions?", opts: () => ANSWERS.risk },
+  { field: "artifact", label: "what did it produce?", opts: () => ANSWERS.artifact },
+];
+
+let ANSWERS = {};
+let candidate = null;
+let answers = {};
+let focus = 0;
+let startedAt = 0;
+let dirName = "";
+
+const el = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function toast(message, kind) {
+  document.querySelectorAll(".toast").forEach((node) => node.remove());
+  const node = document.createElement("div");
+  node.className = `toast${kind === "err" ? " err" : ""}`;
+  node.textContent = message;
+  document.body.appendChild(node);
+  setTimeout(() => node.remove(), kind === "err" ? 4000 : 1400);
+}
+
+async function refreshState() {
+  const state = await (await fetch("/api/state")).json();
+  const done = state.labeled + state.skipped;
+  el("progress").textContent = `${state.labeled} labeled · ${state.skipped} skipped · ${state.total} total`;
+  el("bar").style.width = state.total ? `${(done / state.total) * 100}%` : "0";
+  return state;
+}
+
+function projectOptions() {
+  // Candidates the extractor already revealed: the cwd name and any repo in the
+  // digest, plus the explicit escape hatches. Order matters: first is the default.
+  const out = [];
+  if (dirName) out.push(dirName);
+  for (const remote of candidate?.state?.gitRemotes ?? []) {
+    const name = String(remote).replace(/\.git$/, "").split(/[/:]/).filter(Boolean).pop();
+    if (name && !out.includes(name)) out.push(name);
+  }
+  for (const extra of ["other", "unclear"]) if (!out.includes(extra)) out.push(extra);
+  return out;
+}
+
+function renderTurn() {
+  const s = candidate.state;
+  dirName = String(s.cwd ?? "").split("/").filter(Boolean).pop() ?? "";
+  const target = answers.project;
+  const showsTarget = target && target !== dirName && target !== "other" && target !== "unclear";
+
+  const chips = [
+    `<span class="chip dir">${esc(dirName)}</span>`,
+    showsTarget ? `<span class="chip warn">in ${esc(target)}</span>` : "",
+    `<span class="chip">${esc(s.cwd)}</span>`,
+    s.errored ? `<span class="chip err">errored</span>` : "",
+    s.sessionName ? `<span class="chip">${esc(s.sessionName)}</span>` : "",
+    candidate.meta?.model ? `<span class="chip">${esc(candidate.meta.model)}</span>` : "",
+    `<span class="chip">${esc(candidate.id)}</span>`,
+  ].join("");
+
+  const list = (items, mono) =>
+    items && items.length
+      ? `<div class="body${mono ? " mono" : ""}">${esc(items.join("\n"))}</div>`
+      : `<div class="body empty">—</div>`;
+
+  const tools = (s.tools ?? []).map((t) => (t.detail ? `${t.name}: ${t.detail}` : t.name));
+
+  el("turn").innerHTML = `
+    <div class="ctx">${chips}</div>
+    <section class="block"><h2>user asked</h2><div class="body">${esc(s.userText) || '<span class="empty">—</span>'}</div></section>
+    <section class="block"><h2>assistant finished with</h2><div class="body asst">${esc(s.assistantText) || '<span class="empty">—</span>'}</div></section>
+    <section class="block"><h2>tools (${(s.tools ?? []).length})</h2>${list(tools, true)}</section>
+    ${(s.filesTouched ?? []).length ? `<section class="block"><h2>files</h2>${list(s.filesTouched, true)}</section>` : ""}
+    ${(s.commands ?? []).length ? `<section class="block"><h2>commands</h2>${list(s.commands, true)}</section>` : ""}
+  `;
+}
+
+function renderQuestions() {
+  const html = QUESTIONS.map((question, index) => {
+    const options = question.opts();
+    const chosen = answers[question.field];
+    const buttons = options
+      .map((option, optionIndex) =>
+        `<button class="opt${chosen === option ? " sel" : ""}" data-field="${question.field}" data-value="${esc(option)}" title="press ${optionIndex + 1}">${optionIndex + 1} ${esc(option)}</button>`
+      )
+      .join("");
+    return `<div class="q${index === focus ? " active" : ""}" data-index="${index}">
+      <div class="q-head"><span class="q-name">${esc(question.label)}</span>
+      <span class="q-state${chosen ? " set" : ""}">${esc(question.field)}${chosen ? " ✓" : ""}</span></div>
+      <div class="opts">${buttons}</div>
+    </div>`;
+  }).join("");
+  el("questions").innerHTML = html;
+  el("next").disabled = !QUESTIONS.every((question) => answers[question.field]);
+}
+
+function render() {
+  renderTurn();
+  renderQuestions();
+}
+
+async function load(after) {
+  const query = after ? `?after=${encodeURIComponent(after)}` : "";
+  const data = await (await fetch(`/api/next${query}`)).json();
+  if (data.done) {
+    candidate = null;
+    el("turn").innerHTML = `<div class="done">all turns labeled — ${el("progress").textContent}</div>`;
+    el("questions").innerHTML = "";
+    return;
+  }
+  ANSWERS = data.answers;
+  candidate = data.candidate;
+  answers = {};
+  focus = 0;
+  startedAt = Date.now();
+  render();
+}
+
+function choose(field, value) {
+  answers[field] = value;
+  const index = QUESTIONS.findIndex((question) => question.field === field);
+  // Advance to the next unanswered question, else stay.
+  const nextUnanswered = QUESTIONS.findIndex((question, at) => at > index && !answers[question.field]);
+  focus = nextUnanswered >= 0 ? nextUnanswered : Math.min(index + 1, QUESTIONS.length - 1);
+  render();
+}
+
+async function submit() {
+  if (!candidate) return;
+  if (!QUESTIONS.every((question) => answers[question.field])) return;
+  const body = { id: candidate.id, expect: answers, ms: Date.now() - startedAt };
+  const response = await fetch("/api/label", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const result = await response.json();
+  if (!response.ok) {
+    toast(result.error ?? "could not save", "err");
+    return;
+  }
+  const previous = candidate.id;
+  await refreshState();
+  await load(previous);
+}
+
+async function skip() {
+  if (!candidate) return;
+  await fetch("/api/skip", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: candidate.id }) });
+  const previous = candidate.id;
+  await refreshState();
+  await load(previous);
+}
+
+function back() {
+  if (focus > 0) {
+    focus -= 1;
+    render();
+    return;
+  }
+  // At the first question: clear the previous answer to redo it.
+  const last = QUESTIONS.filter((question) => answers[question.field]).pop();
+  if (last) {
+    delete answers[last.field];
+    focus = QUESTIONS.indexOf(last);
+    render();
+  }
+}
+
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("button.opt");
+  if (button) {
+    choose(button.dataset.field, button.dataset.value);
+    return;
+  }
+  if (event.target.id === "next") void submit();
+  if (event.target.id === "back") back();
+  if (event.target.id === "skip") void skip();
+  if (event.target.id === "export") window.location.href = "/api/labels.jsonl";
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void submit();
+    return;
+  }
+  if (event.key === "s") return void skip();
+  if (event.key === "Backspace" || event.key === "ArrowLeft") return back();
+  if (event.key === "ArrowDown" || event.key === "Tab") {
+    event.preventDefault();
+    focus = Math.min(focus + 1, QUESTIONS.length - 1);
+    return render();
+  }
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    focus = Math.max(0, focus - 1);
+    return render();
+  }
+  const digit = Number.parseInt(event.key, 10);
+  if (!Number.isNaN(digit) && digit >= 1 && digit <= 9) {
+    const question = QUESTIONS[focus];
+    const options = question.opts();
+    const value = options[digit - 1];
+    if (value) choose(question.field, value);
+  }
+});
+
+try {
+  await refreshState();
+  await load();
+} catch (error) {
+  el("turn").innerHTML = `<div class="done">could not load queue: ${esc(error?.message ?? error)}</div>`;
+}
+</script>
+</body>
+</html>
