@@ -119,6 +119,12 @@ describe("sample loading", () => {
 			expect(typeof entry.digest.cwd).toBe("string");
 			// every expectation must name a real answer id in the schema
 			for (const [questionId, expected] of Object.entries(entry.expect)) {
+				// `needs` is a human label kept to validate the derived action; it is
+				// deliberately not a question the model is asked.
+				if (questionId === "needs") {
+					expect(typeof expected).toBe("string");
+					continue;
+				}
 				const question = questions.find((candidate) => candidate.id === questionId);
 				expect(question).toBeDefined();
 				const pool = question?.options ?? question?.levels;

@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	ACTIVITY,
 	ARTIFACT,
-	ATTENTION,
+	NEEDS,
 	SCOPE,
 	UNCLEAR,
 	buildQuestions,
@@ -25,7 +25,6 @@ describe("schema shape", () => {
 			"activity",
 			"work_done",
 			"blocked",
-			"attention",
 			"artifact",
 			"scope",
 		]);
@@ -94,7 +93,8 @@ describe("schema shape", () => {
 			"setup",
 			"chat",
 		]);
-		expect(ATTENTION.map((option) => option.id)).toEqual(["none", "decision", "approval", "missing_info", "review"]);
+		// actions, not analyst categories: what the user has to *do*
+		expect(NEEDS.map((option) => option.id)).toEqual(["none", "decide", "approve", "answer", "fix_config", "unblock", "review"]);
 		expect(ARTIFACT.map((option) => option.id)).toEqual(["code", "test", "doc", "config", "issue", "data", "none"]);
 		expect(SCOPE.map((option) => option.id)).toEqual(["single", "multi", "noncode"]);
 	});
@@ -154,18 +154,18 @@ describe("the rendered line", () => {
 		};
 	}
 
-	test("composes project · activity · status · artifact · attention", () => {
+	test("composes project · activity · outcome · artifact · action", () => {
 		const line = renderLine(
 			{
 				project: { value: "pi-agent-extensions" },
 				activity: { value: "implement" },
 				work_done: { value: "no" },
 				artifact: { value: "code" },
-				attention: { value: "review" },
 			},
 			questions
 		);
-		expect(line).toBe("pi-agent-extensions · implement · unfinished · code · needs review");
+		// work_done: no -> unfinished, and no action is derived for an unfinished-but-unblocked turn
+		expect(line).toBe("pi-agent-extensions · implement · unfinished · code");
 	});
 
 	test("marks a project mismatch and hides no-signal values", () => {
@@ -176,11 +176,11 @@ describe("the rendered line", () => {
 				activity: { value: "debug" },
 				work_done: { value: "yes" },
 				artifact: { value: "none" },
-				attention: { value: "none" },
+				needs: { value: "none" },
 			},
 			questions
 		);
-		expect(line).toBe("eavs (cwd differs) · debug · done");
+		expect(line).toBe("eavs (cwd differs) · debug · done · needs: review");
 		expect(line).not.toContain("none");
 	});
 

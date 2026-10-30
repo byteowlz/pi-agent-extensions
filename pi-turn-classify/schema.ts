@@ -71,30 +71,30 @@ export const ACTIVITY: ChoiceOption[] = [
 	{ id: "chat", label: "chat", hint: "answering a question, no artifact produced" },
 ];
 
-/** Whether the turn needs the user, and what kind. */
-export const ATTENTION: ChoiceOption[] = [
-	{ id: "none", label: "none", hint: "no input needed, safe to ignore" },
-	{ id: "decision", label: "decision", hint: "a choice between approaches is needed" },
-	{ id: "approval", label: "approval", hint: "a risky or irreversible action needs a go-ahead" },
-	{ id: "missing_info", label: "missing info", hint: "a credential, path, requirement or answer is missing" },
-	{ id: "review", label: "review", hint: "work is complete and awaiting a human look" },
-];
-
-/*
- * There is deliberately no `risk` question.
+/**
+ * What the **user** has to do, phrased as an action.
  *
- * It was a five-level score ("how consequential were the actions?") and it
- * measured 25% (d3) / 37.5% (jev) on labelled turns — worse than a constant
- * guess, for both models. The reason is structural: consequence is a property of
- * what an action *does* to the world, not of the turn's text, and a small model
- * reading a summary cannot know whether a `git push` went to a scratch branch or
- * to main.
+ * This replaced a set of analyst categories (`decision | approval | missing_info |
+ * review`). Reading a list, the question is "what do I do about this?" — so the
+ * answers are verbs you can act on, and the card renders them as `needs: unblock`.
  *
- * If a triage signal is needed later, ask a binary the evidence can support —
- * "did this turn perform an irreversible or destructive action?" — not a five-way
- * severity judgement. `approval` in ATTENTION already covers the case where the
- * turn itself says a go-ahead is needed.
+ * The distinction that was missing: `missing_info` collapsed two very different
+ * situations — "I need an answer from you" and "something is misconfigured, go fix
+ * your settings". Different people, different fix, so they are separate answers now.
  */
+export const NEEDS: ChoiceOption[] = [
+	{ id: "none", label: "nothing", hint: "no action needed, safe to ignore" },
+	{ id: "decide", label: "decide", hint: "choose between approaches or priorities" },
+	{ id: "approve", label: "approve", hint: "a risky or irreversible action needs a go-ahead" },
+	{ id: "answer", label: "answer", hint: "a question or a requirement is missing" },
+	{ id: "fix_config", label: "fix settings", hint: "credentials, permissions, paths, config are wrong or missing" },
+	{
+		id: "unblock",
+		label: "unblock",
+		hint: "an external thing is in the way: a service is down, access denied, a dependency stalled",
+	},
+	{ id: "review", label: "review", hint: "work is finished and wants a human look" },
+];
 
 /** What the turn produced. */
 export const ARTIFACT: ChoiceOption[] = [
@@ -210,12 +210,6 @@ export function buildQuestions(projects: ProjectCandidate[], options: BuildOptio
 			instructions: "Is the turn blocked on something outside itself (a decision, approval, credential or external system)?",
 			yesHint: "cannot proceed without something external",
 			noHint: "nothing external is in the way",
-		},
-		{
-			id: "attention",
-			kind: "choice",
-			instructions: "Does this turn need the user, and what kind of input?",
-			options: ATTENTION,
 		},
 		{
 			id: "artifact",
@@ -341,6 +335,61 @@ export function toDecisionsQuestions(
 }
 
 // ---------------------------------------------------------------------------
+// The action: derived, not asked
+// ---------------------------------------------------------------------------
+
+/**
+ * What the user should do about this turn — computed from answers that measured
+ * well, not asked as its own question.
+ *
+ * Asking a model "what should the user do?" produced the worst result in the whole
+ * schema: 62.5% (d3) and 25% (jev) against a 75% always-`none` baseline, because
+ * most turns need nothing and a seven-way choice on a skewed set invites confident
+ * nonsense. The same information is already implied by `blocked`, `error_kind`,
+ * `error_transient` and `work_done`, which score 75-100%.
+ *
+ * So the card reports the action, and the four answers carry the evidence. The
+ * labeler still collects human `needs` labels, which is how this mapping gets
+ * validated and corrected.
+ */
+export interface NeedsAction {
+	/** Matches the NEEDS ids, so labels and UI stay comparable. */
+	id: string;
+	label: string;
+}
+
+const NEEDS_BY_ID = new Map(NEEDS.map((option) => [option.id, option.label]));
+
+export function deriveNeeds(answers: AnswerMap): NeedsAction {
+	const blocked = answers.blocked?.value === "yes";
+	const done = answers.work_done?.value === "yes";
+	const rawKind = answers.error_kind?.value;
+	const errorKind = rawKind === UNCLEAR ? undefined : rawKind;
+	const transient = answers.error_transient?.value === "yes";
+
+	if (blocked || errorKind) {
+		// Credentials, permissions, paths and config: the user fixes settings.
+		if (errorKind === "auth" || errorKind === "invalid_request") {
+			return { id: "fix_config", label: NEEDS_BY_ID.get("fix_config") ?? "fix settings" };
+		}
+		// Context limits and content policy are also configuration-shaped.
+		if (errorKind === "context_overflow" && !transient) {
+			return { id: "fix_config", label: NEEDS_BY_ID.get("fix_config") ?? "fix settings" };
+		}
+		// Rate limits, overload, network, bad responses: retrying or waiting.
+		if (errorKind) {
+			return transient
+				? { id: "unblock", label: NEEDS_BY_ID.get("unblock") ?? "unblock" }
+				: { id: "unblock", label: NEEDS_BY_ID.get("unblock") ?? "unblock" };
+		}
+		return { id: "answer", label: NEEDS_BY_ID.get("answer") ?? "answer" };
+	}
+
+	if (done) return { id: "review", label: NEEDS_BY_ID.get("review") ?? "review" };
+	return { id: "none", label: NEEDS_BY_ID.get("none") ?? "nothing" };
+}
+
+// ---------------------------------------------------------------------------
 // Interpreting answers
 // ---------------------------------------------------------------------------
 
@@ -380,7 +429,7 @@ export interface TurnCardAnswers extends AnswerMap {
 	project_mismatch?: AnswerValue;
 	activity?: AnswerValue;
 	status?: AnswerValue;
-	attention?: AnswerValue;
+	needs?: AnswerValue;
 	artifact?: AnswerValue;
 	scope?: AnswerValue;
 }
@@ -450,14 +499,15 @@ export function renderLine(answers: TurnCardAnswers, questions?: QuestionSpec[])
 	const artifact = label("artifact", "artifact");
 	if (artifact) parts.push(artifact);
 
-	const attention = label("attention", "attention");
-	if (attention) parts.push(`needs ${attention}`);
-
 	const errorKind = label("error_kind", "error_kind");
 	if (errorKind) {
 		const transient = answers.error_transient?.value === "yes";
 		parts.push(`error ${errorKind}${transient ? " (retryable)" : ""}`);
 	}
+
+	// The action trails the evidence: cause first, then what to do about it.
+	const action = deriveNeeds(answers);
+	if (action.id !== "none") parts.push(`needs: ${action.label}`);
 
 	return parts.join(" · ");
 }

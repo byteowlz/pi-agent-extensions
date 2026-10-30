@@ -90,10 +90,11 @@ const QUESTIONS: QuestionDef[] = [
 	{ field: "work_done", label: "is the requested work complete?", kind: "boolean", options: ["yes", "no"] },
 	{ field: "blocked", label: "is it blocked on something else?", kind: "boolean", options: ["yes", "no"] },
 	{
-		field: "attention",
-		label: "does it need the user? what kind?",
+		// What the user has to *do*, not an analyst category.
+		field: "needs",
+		label: "what does the user need to do?",
 		kind: "choice",
-		options: ["none", "decision", "approval", "missing_info", "review"],
+		options: ["none", "decide", "approve", "answer", "fix_config", "unblock", "review"],
 	},
 	{
 		field: "artifact",
