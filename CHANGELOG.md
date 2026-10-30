@@ -4,6 +4,14 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Remove deprecated remote sudo tool (3.0.0)
+
+- **pi-sudo 3.0.0**: remove `remote_sudo_exec` and its prompt description and
+  guidelines. Remote execution remains available through `sudo_exec` with
+  `host`; existing callers must use that unified tool name. Registration and
+  no-UI local/remote receipt tests cover the remaining contract. Guard
+  escape-hatch instructions remain in errors/docs, not the system prompt.
+
 ### Opt-in host tab-title sync (2.39.1)
 
 - **pi-auto-rename 1.6.2**: outbound Herdr/tmux tab-title sync now defaults to
