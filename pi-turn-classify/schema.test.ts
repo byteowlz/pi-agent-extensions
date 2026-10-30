@@ -4,7 +4,6 @@ import {
 	ACTIVITY,
 	ARTIFACT,
 	NEEDS,
-	SCOPE,
 	UNCLEAR,
 	buildQuestions,
 	isUnclassified,
@@ -26,7 +25,6 @@ describe("schema shape", () => {
 			"work_done",
 			"blocked",
 			"artifact",
-			"scope",
 		]);
 	});
 
@@ -96,7 +94,6 @@ describe("schema shape", () => {
 		// actions, not analyst categories: what the user has to *do*
 		expect(NEEDS.map((option) => option.id)).toEqual(["none", "decide", "approve", "answer", "fix_config", "unblock", "review"]);
 		expect(ARTIFACT.map((option) => option.id)).toEqual(["code", "test", "doc", "config", "issue", "data", "none"]);
-		expect(SCOPE.map((option) => option.id)).toEqual(["single", "multi", "noncode"]);
 	});
 });
 

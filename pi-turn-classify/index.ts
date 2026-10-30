@@ -30,7 +30,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { pruneCards, readSessionCards, seedSessionCards, storeStats, writeSessionCard } from "./card-store.js";
 import { appendRecord, buildRecord, shouldRecord } from "./dataset.js";
 import { type DecisionClientConfig, DecisionError, classify, demoteLowConfidence } from "./decision-client.js";
-import { type ToolUse, type TurnDigest, extractText, localProjectHints, renderState, toolDetail } from "./digest.js";
+import { type ToolUse, type TurnDigest, deriveScope, extractText, localProjectHints, renderState, toolDetail } from "./digest.js";
 import {
 	type AnswerMap,
 	type ProjectCandidate,
@@ -306,6 +306,7 @@ export default function piTurnClassify(pi: ExtensionAPI): void {
 				? { sessionFile: safe<string | undefined>(() => ctx.sessionManager.getSessionFile(), undefined) }
 				: {}),
 			cwd: digest.cwd,
+			scope: deriveScope(digest),
 			turn: startedTurn,
 			...(safe<string | undefined>(() => ctx.sessionManager.getLeafId(), undefined)
 				? { branch: safe<string | undefined>(() => ctx.sessionManager.getLeafId(), undefined) }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { MAX_STATE_CHARS, type TurnDigest, extractText, localProjectHints, renderState, toolDetail } from "./digest";
+import { MAX_STATE_CHARS, type TurnDigest, deriveScope, extractText, localProjectHints, renderState, toolDetail } from "./digest";
 
 function baseDigest(overrides: Partial<TurnDigest> = {}): TurnDigest {
 	return {
@@ -106,5 +106,42 @@ describe("localProjectHints", () => {
 
 	test("handles a non-git directory", () => {
 		expect(localProjectHints(baseDigest({ cwd: "/home/wismut/wiki", gitRemotes: [] }))).toEqual(["wiki"]);
+	});
+});
+
+describe("derived scope", () => {
+	const base = (overrides: Partial<TurnDigest> = {}): TurnDigest => ({
+		userText: "x",
+		assistantText: "y",
+		tools: [],
+		filesTouched: [],
+		commands: [],
+		cwd: "/proj/alpha",
+		gitRemotes: [],
+		...overrides,
+	});
+
+	test("paths inside the cwd are one repo", () => {
+		expect(deriveScope(base({ filesTouched: ["src/a.ts", "src/b.ts"], gitRemotes: ["https://github.com/x/alpha.git"] }))).toBe(
+			"single"
+		);
+		expect(deriveScope(base({ filesTouched: ["/proj/alpha/src/a.ts"] }))).toBe("single");
+	});
+
+	test("a path outside the cwd is another project", () => {
+		expect(deriveScope(base({ filesTouched: ["/proj/beta/src/a.ts"] }))).toBe("multi");
+		// the measured case: editing a shared tool while working in this repo
+		expect(deriveScope(base({ filesTouched: ["/home/x/byteowlz/eavs/src/proxy.rs"] }))).toBe("multi");
+	});
+
+	test("scratch paths do not count as another project", () => {
+		// real turn: /tmp/probe.mjs + a repo file is still one repo
+		expect(deriveScope(base({ filesTouched: ["/tmp/probe4.mjs", "pi-auto-rename/index.ts"] }))).toBe("single");
+		expect(deriveScope(base({ filesTouched: ["/var/folders/xy/T/out.txt"] }))).toBe("single");
+	});
+
+	test("no file edits falls back to whether a repo is involved", () => {
+		expect(deriveScope(base({ gitRemotes: ["https://github.com/x/alpha.git"] }))).toBe("single");
+		expect(deriveScope(base())).toBe("noncode");
 	});
 });

@@ -248,7 +248,7 @@ assert.ok(notifications[0].message.includes('error_kind'), 'show lists the per-q
 
 notifications.length = 0;
 await commands.get('classify')('schema', ctx);
-assert.ok(notifications[0].message.includes('7 questions'), 'schema lists the questions: ' + notifications[0].message.split('\\n')[0]);
+assert.ok(notifications[0].message.includes('6 questions'), 'schema lists the questions: ' + notifications[0].message.split('\\n')[0]);
 assert.ok(notifications[0].message.includes('project_mismatch'), 'schema names the questions');
 
 // --- a resumed session continues the branch numbering, and the sidecar keeps both
