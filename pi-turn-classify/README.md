@@ -38,10 +38,9 @@ Seven questions, asked in one request. Ids are persisted, so they are stable.
 | `work_done` | yes/no | is the requested work complete? |
 | `blocked` | yes/no | is it blocked on something external? |
 | `artifact` | choice | `code` `test` `doc` `config` `issue` `data` `none` |
-| `scope` | choice | `single` `multi` `noncode` |
 
-The **action** (`needs: unblock` / `needs: fix settings`) is *derived*, not asked —
-see below.
+Two fields are **derived** rather than asked: the **action**
+(`needs: unblock` / `needs: fix settings`) and **scope**. See below.
 | `error_kind` | choice | **only on failed turns**: `provider_overloaded` `rate_limited` `auth` `context_overflow` `network` `content_filter` `invalid_request` `bad_response` `tool_failed` `cancelled` `unclear` |
 | `error_transient` | yes/no | **only on failed turns**: would a plain retry plausibly work? |
 
@@ -116,9 +115,30 @@ The same information is already implied by answers that do work
 | `blocked: no`, `work_done: no` | nothing |
 
 Removing the question raised accuracy for both models (jev 76.4% → 83.9%, d3 80.0%
-→ 82.3%) and took the schema to **7 questions** (9 on a failed turn). The labeler
-still records a human `needs` label, which is exactly how this mapping gets
-validated and corrected — it is ground truth, not a model input.
+→ 82.3%). The labeler still records a human `needs` label, which is exactly how
+this mapping gets validated and corrected — it is ground truth, not a model input.
+
+## `scope` is derived too
+
+`scope` (one repo / several / no repo) was the last weak question — 37.5% (jev) /
+81.3% (d3) — while the turn already says it exactly: the paths the tools touched and
+whether a repo is involved.
+
+```
+no file edits, repo involved  -> single
+paths only inside the cwd     -> single
+a path outside the cwd        -> multi   (work in another project)
+no paths, no repo             -> noncode
+scratch paths (/tmp, /var/folders) are ignored
+```
+
+`deriveScope()` agrees with the human labels on **15 of 16** turns — far better than
+either model ever managed on the same question. The one miss is a labelling
+ambiguity rather than a rule error: a pure-research turn that happened *inside* a
+repo (labelled `noncode`, derived `single`).
+
+Dropping it left **6 questions** on a clean turn (8 on a failed one) and jev at
+**89.8%** (ECE 0.049).
 
 ## Errors are classified, not just flagged
 
@@ -434,11 +454,13 @@ lets you trust one: accuracy, **ECE**, high-confidence accuracy, and latency.
 Through the EAVS gateway, 7 candidate projects, one request per turn. 8 questions
 on a clean turn, 10 on a failed one:
 
+Six questions per clean turn, eight on a failed one:
+
 | | `vllm-sr/d3-lite` | `jev-1.14.0` |
 | --- | --- | --- |
-| accuracy | 82.3% | **83.9%** |
-| ECE (lower better) | 0.112 | **0.040** |
-| latency mean | 850 ms (3.5 s under load) | **176 ms** |
+| accuracy | 82.4% | **89.8–90.7%** |
+| ECE (lower better) | 0.075 | **0.040–0.054** |
+| latency mean | 0.85 s idle (3.1–3.5 s under load) | **186 ms** |
 
 Per question (accuracy):
 
@@ -467,8 +489,8 @@ Readings:
   struggle to maintain, and it is the raw message that makes it work.
 - **`project` and `project_mismatch` are the reliable core** (81-100%), which is
   what this extension exists for.
-- **`scope` is the last weak question** (37.5% jev / 81.3% d3) and the obvious next
-  cut: it is arguably already implied by `project` + `project_mismatch`.
+- **`artifact` and `blocked` are now the weakest questions** (62–81%), and the next
+  candidates to reframe or derive.
 
 ```bash
 bun run pi-turn-classify/bench.ts \

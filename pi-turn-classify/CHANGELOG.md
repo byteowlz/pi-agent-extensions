@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.0
+
+- **`scope` cut and derived.** It was the last weak question (37.5% jev / 81.3%
+  d3) and the turn already answers it exactly: paths inside the cwd are one repo, a
+  path outside is another project, no paths and no repo is non-code, and scratch
+  paths (`/tmp`, `/var/folders`) are ignored — that last rule was a measured bug,
+  where a probe script in `/tmp` made a single-repo debugging turn look "multi".
+  `deriveScope()` agrees with human labels on 15/16 turns, versus 37.5%/81.3% for
+  the models. The one miss is a labelling ambiguity (pure research inside a repo).
+- Schema is now **6 questions** on a clean turn, 8 on a failed one. jev 83.9% →
+  **89.8–90.7%** (ECE 0.049), d3 82.3% → 82.4% (ECE 0.112 → 0.075).
+- `artifact` and `blocked` are the weakest remaining questions.
+
 ## 0.7.0
 
 - **The card now ends with an action — derived, not asked**: `needs: unblock`,

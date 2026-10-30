@@ -121,7 +121,7 @@ describe("sample loading", () => {
 			for (const [questionId, expected] of Object.entries(entry.expect)) {
 				// `needs` is a human label kept to validate the derived action; it is
 				// deliberately not a question the model is asked.
-				if (questionId === "needs") {
+				if (questionId === "needs" || questionId === "scope") {
 					expect(typeof expected).toBe("string");
 					continue;
 				}

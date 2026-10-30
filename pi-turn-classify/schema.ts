@@ -107,12 +107,14 @@ export const ARTIFACT: ChoiceOption[] = [
 	{ id: "none", label: "none", hint: "no artifact" },
 ];
 
-/** How much of the workspace the turn spanned. */
-export const SCOPE: ChoiceOption[] = [
-	{ id: "single", label: "single repo" },
-	{ id: "multi", label: "several repos" },
-	{ id: "noncode", label: "no repo", hint: "not a code workspace: notes, infra, chat, ops" },
-];
+/*
+ * There is no `scope` question any more.
+ *
+ * It measured 37.5% (jev) / 81.3% (d3) while adding little: whether a turn touched
+ * one repo or several is already visible in `project`, `project_mismatch` and the
+ * paths the tools touched. It is now *derived* from the digest instead of asked —
+ * the same treatment `risk` and `needs` got — so a UI can still filter on it.
+ */
 
 /** Answer id used when the model cannot tell; also the fallback for bad answers. */
 export const UNCLEAR = "unclear";
@@ -216,12 +218,6 @@ export function buildQuestions(projects: ProjectCandidate[], options: BuildOptio
 			kind: "choice",
 			instructions: "What did this turn produce?",
 			options: ARTIFACT,
-		},
-		{
-			id: "scope",
-			kind: "choice",
-			instructions: "How much of the workspace did this turn touch?",
-			options: SCOPE,
 		}
 	);
 
@@ -431,7 +427,6 @@ export interface TurnCardAnswers extends AnswerMap {
 	status?: AnswerValue;
 	needs?: AnswerValue;
 	artifact?: AnswerValue;
-	scope?: AnswerValue;
 }
 
 export interface TurnCard {
@@ -444,6 +439,8 @@ export interface TurnCard {
 	sessionFile?: string;
 	/** Working directory of the session. */
 	cwd: string;
+	/** Derived, not asked: how much of the workspace the turn spanned. */
+	scope?: string;
 	/** Turn index within this session's branch (1-based). */
 	turn: number;
 	/**

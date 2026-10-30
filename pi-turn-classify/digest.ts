@@ -168,6 +168,40 @@ export function renderState(digest: TurnDigest): Record<string, unknown> {
 	return state;
 }
 
+/**
+ * How much of the workspace a turn spanned — derived, never asked.
+ *
+ * The model answered `scope` at 37.5% (jev) / 81.3% (d3), which is worse than
+ * reading it off the turn: the touched paths and remotes say it exactly.
+ *
+ *   no paths, no repo        -> noncode   (chat, ops, research)
+ *   paths only inside cwd    -> single
+ *   paths outside cwd        -> multi     (another repo/project was edited)
+ */
+export type DerivedScope = "single" | "multi" | "noncode";
+
+/** Scratch locations that say nothing about which project a turn belongs to. */
+const SCRATCH_PREFIXES = ["/tmp/", "/var/tmp/", "/private/tmp/", "/var/folders/", "/dev/shm/"];
+
+export function deriveScope(digest: TurnDigest): DerivedScope {
+	const cwd = (digest.cwd ?? "").replace(/\/+$/, "");
+	const paths = digest.filesTouched ?? [];
+	const remotes = digest.gitRemotes ?? [];
+
+	if (paths.length === 0) {
+		// A repo with no file edits is still one repo; no repo at all is not code work.
+		return remotes.length > 0 ? "single" : "noncode";
+	}
+	for (const path of paths) {
+		// A probe script in /tmp is not a second project (measured: this rule alone
+		// turned a single-repo debugging turn into "multi").
+		if (SCRATCH_PREFIXES.some((prefix) => path.startsWith(prefix))) continue;
+		// An absolute path outside the session cwd means work in another project.
+		if (cwd && path.startsWith("/") && !path.startsWith(`${cwd}/`) && path !== cwd) return "multi";
+	}
+	return "single";
+}
+
 /** Derived project candidates from a digest (cwd name + remote repo names). */
 export function localProjectHints(digest: TurnDigest): string[] {
 	const hints = new Set<string>();
