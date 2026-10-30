@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0
+
+- **Agent wake-ups**: the `sleep` tool ends the agent's turn (`terminate: true`)
+  and delivers a `[wake-up]` message into the same session after a delay — the
+  replacement for long `sleep <n>` bash commands that only burn the tool-timeout
+  budget. Durations reuse the schedule vocabulary (`20m`, `90s`, `1h`); an
+  optional note is carried into the wake-up message.
+- Permission modes via new `pi-schedule.json` (`sleep.mode`): `allow` (default,
+  free use), `ask` (UI confirmation per call, fail-closed without a UI), `off`
+  (tool deactivated). Caps: `minDurationMs` (10s), `maxDurationMs` (24h),
+  `maxPending` (3). Schema and example files included.
+- Wakes persist per session (`schedule/wakes/<sessionId>.json`, pending-only):
+  resume re-arms them, a wake that passed while closed is delivered late and
+  labelled, forks do not inherit, and firing removes the entry.
+- `/sleep` lists pending wake-ups, `/sleep cancel <n|id>` / `clear` cancel them;
+  a `zzz <soonest>` footer segment shows while one is pending.
+
 ## 0.2.0
 
 - **skdlr integration**: `/schedule link <n|id> --schedule "<cron|natural>"`

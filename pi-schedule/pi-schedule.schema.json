@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://byteowlz.com/pi-schedule/schema.json",
+  "title": "pi-schedule",
+  "description": "Configuration for the pi-schedule extension.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "sleep": {
+      "description": "The agent-facing sleep tool: ends the agent's turn and delivers a '[wake-up]' message into the same session after a delay, instead of a long-running bash sleep.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "description": "Who may set wake-ups. 'allow' (default) lets the agent call the tool freely. 'ask' confirms every call through the UI and fails closed without one. 'off' deactivates the tool so the model never sees it. Config is read at session start; changes apply after /reload or resume.",
+          "enum": ["allow", "ask", "off"],
+          "default": "allow"
+        },
+        "minDurationMs": {
+          "description": "Shortest accepted sleep. The CLI parser's own floor of 10s applies regardless.",
+          "type": "number",
+          "minimum": 1000,
+          "default": 10000
+        },
+        "maxDurationMs": {
+          "description": "Longest accepted sleep; bounds how far into the future a wake-up can be pushed.",
+          "type": "number",
+          "minimum": 1000,
+          "default": 86400000
+        },
+        "maxPending": {
+          "description": "Most pending wake-ups at once; caps timer and wake-up-message spam. Additional sleep calls fail until one fires or is cancelled.",
+          "type": "number",
+          "minimum": 1,
+          "default": 3
+        }
+      }
+    }
+  }
+}

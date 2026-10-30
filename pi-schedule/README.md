@@ -1,6 +1,7 @@
 # pi-schedule
 
-Recurring prompts delivered **into a live pi session** — `/schedule`.
+Recurring prompts delivered **into a live pi session** — `/schedule` — plus the
+agent-facing `sleep` tool for one-shot wake-ups.
 
 ```
 /schedule hourly "check the board"            session scope (this session)
@@ -10,10 +11,44 @@ Recurring prompts delivered **into a live pi session** — `/schedule`.
 /schedule run [n|id] [--project]              fire one now
 /schedule remove <n|id> [--project]           delete
 /schedule export                              print headless skdlr equivalents
+/sleep                                        list pending agent wake-ups
+/sleep cancel <n|id> | clear                  cancel one / all
 ```
 
 Intervals: `30m`, `2h`, `1d`, `every 15 minutes`, `hourly`, `daily`, `weekly`.
 Minimum 10s (a CLI guard; the store stays authoritative for hand edits).
+
+## Sleep (agent wake-ups)
+
+The `sleep` tool lets the MODEL set a one-shot wake-up instead of running a
+long `sleep <n>` bash command: the tool arms a timer and returns with
+`terminate: true`, so the agent's turn ends immediately — nothing is blocked,
+no tool-timeout budget is burned — and when the timer fires a
+`[wake-up] Your 20m sleep is over. Note: …` user message is delivered into the
+same session, which starts a new run with full context.
+
+- Who may call it is config (`pi-schedule.json` → `sleep.mode`, searched `./`,
+  `./.pi/`, `~/.pi/agent/`; schema in `pi-schedule.schema.json`):
+
+| mode | behaviour |
+|---|---|
+| `allow` (default) | the agent calls it freely; caps are the guardrails |
+| `ask` | every call is confirmed through the UI; declined calls are blocked, and sessions without a UI fail closed |
+| `off` | the tool is deactivated; the model never sees it |
+
+- Caps (also in the config): `minDurationMs` 10s, `maxDurationMs` 24h,
+  `maxPending` 3. Config is read at session start; changes apply after
+  `/reload` or resume.
+- Wakes are stored per session (`~/.pi/agent/schedule/wakes/<sessionId>.json`),
+  so resume re-arms them; one that passed while the session was closed is
+delivered late on the next start, labelled with its delay. Forks do not inherit
+  wakes (new session id), and firing removes the entry — the delivered message
+  is the record.
+- `/sleep` lists pending wake-ups with countdowns, `/sleep cancel <n|id>` and
+  `/sleep clear` cancel them; the footer shows a `zzz <soonest>` segment while
+  one is pending.
+- Absolute calendar times and wake-ups that must reach a session across machines
+  remain skdlr's job (`/schedule link`); `sleep` is the in-session nap.
 
 ## Why this is not part of the captain
 
