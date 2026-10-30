@@ -13,10 +13,16 @@
  * session; project schedules arm only in the session that holds the project's
  * captain claim, so a project check never fires twice. With no captain claimed
  * they stay dormant and say so.
+ *
+ * The agent-facing sibling is the `sleep` tool (see sleep.ts): the model sets a
+ * one-shot wake-up, its turn ends via `terminate: true`, and the timer delivers
+ * a "[wake-up]" message into this session — no long-running bash sleep. Gated
+ * by `sleep.mode` in pi-schedule.json: "off", "allow" (default), "ask".
  */
 
 import * as path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, defineTool } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 
 import { MAX_QUEUE_AGE_MS, type QueuedDelivery, drainQueue, ensureDeliverer, startInbox } from "./inbox.js";
 import {
@@ -39,6 +45,35 @@ import {
 	statusSummary,
 } from "./schedule.js";
 import { buildLink, parseOwnedSchedules, removeSchedule, runSkdlr } from "./skdlr.js";
+import {
+	DEFAULT_SLEEP_CONFIG,
+	type SleepConfig,
+	addWake,
+	clearWake,
+	formatWakes,
+	loadSleepConfig,
+	readWakes,
+	removeWake,
+	resolveDuration,
+	sleepStatus,
+	wakeMessage,
+} from "./sleep.js";
+
+const SLEEP_TOOL_NAME = "sleep";
+
+interface SleepDetails {
+	id: string;
+	durationMs: number;
+	fireAt: string;
+	note: string;
+}
+
+/** A failed tool result that still explains the fix. */
+const sleepError = (text: string): { content: [{ type: "text"; text: string }]; details: undefined; isError: true } => ({
+	content: [{ type: "text", text }],
+	details: undefined,
+	isError: true,
+});
 
 interface ArmedAction {
 	action: ScheduledAction;
@@ -384,6 +419,191 @@ export default function piSchedule(pi: ExtensionAPI): void {
 		},
 	});
 
+	// ---------------------------------------------------------------------------
+	// Agent wake-ups: the sleep tool (see sleep.ts)
+	// ---------------------------------------------------------------------------
+
+	let sleepConfig: SleepConfig = { ...DEFAULT_SLEEP_CONFIG };
+	/** Live timers for pending wakes, keyed by wake id. */
+	const sleepTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+	const disarmSleeps = (): void => {
+		for (const timer of sleepTimers.values()) clearTimeout(timer);
+		sleepTimers.clear();
+	};
+
+	const publishSleepStatus = (ctx: ExtensionContext | undefined): void => {
+		if (!ctx) return;
+		try {
+			ctx.ui.setStatus("sleep", sleepStatus(readWakes(sessionKey(ctx))));
+		} catch {
+			// status is cosmetic
+		}
+	};
+
+	/** mode "off" hides the tool from the model; takes effect on session start/reload. */
+	const deactivateSleepTool = (): void => {
+		try {
+			const active = pi.getActiveTools();
+			if (active.includes(SLEEP_TOOL_NAME)) pi.setActiveTools(active.filter((name) => name !== SLEEP_TOOL_NAME));
+		} catch {
+			// best effort; execute() still refuses calls when off
+		}
+	};
+
+	const armWake = (ctx: ExtensionContext, key: string, wakeId: string, fireAt: string): void => {
+		const due = Date.parse(fireAt);
+		const delay = Number.isFinite(due) ? Math.max(0, due - Date.now()) : 0;
+		const timer = setTimeout(() => {
+			sleepTimers.delete(wakeId);
+			fireWake(ctx, key, wakeId);
+		}, delay);
+		timer.unref?.();
+		sleepTimers.set(wakeId, timer);
+	};
+
+	/** Re-read the store before firing so a cancel that raced the timer wins. */
+	const fireWake = (ctx: ExtensionContext, key: string, wakeId: string): void => {
+		const wake = readWakes(key).find((candidate) => candidate.id === wakeId);
+		if (!wake) return;
+		clearWake(key, wakeId);
+		deliver(wakeMessage(wake));
+		publishSleepStatus(ctx);
+	};
+
+	/** Re-arm pending wakes on start; one that passed while closed is delivered late, once. */
+	const resumeSleeps = (ctx: ExtensionContext): void => {
+		const key = sessionKey(ctx);
+		const now = Date.now();
+		for (const wake of readWakes(key)) {
+			const fireAt = Date.parse(wake.fireAt);
+			if (!Number.isFinite(fireAt)) {
+				clearWake(key, wake.id);
+				continue;
+			}
+			if (fireAt <= now) {
+				clearWake(key, wake.id);
+				deliver(wakeMessage(wake, now));
+			} else {
+				armWake(ctx, key, wake.id, wake.fireAt);
+			}
+		}
+		publishSleepStatus(ctx);
+	};
+
+	pi.registerTool(
+		defineTool({
+			name: SLEEP_TOOL_NAME,
+			label: "Sleep",
+			description:
+				'End your turn and get woken after a delay. Use this instead of a long-running `sleep` bash command when you are waiting for a build, job or callback and nothing useful can be done meanwhile: the timer holds nothing, your turn ends at once, and a "[wake-up]" user message carrying your note arrives when it fires.',
+			promptGuidelines: [
+				"Prefer the sleep tool over `sleep <n>` bash commands for waits of a minute or more; pass a note saying what to check or continue when you wake.",
+				"After a sleep call that was the turn's only tool call, end your turn; the wake-up arrives as a new message.",
+			],
+			parameters: Type.Object({
+				duration: Type.String({ description: 'How long to sleep, e.g. "20m", "90s", "1h"' }),
+				note: Type.Optional(Type.String({ description: "Delivered to you in the wake-up message: what to check or continue" })),
+			}),
+			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+				if (sleepConfig.mode === "off") return sleepError('sleep is disabled (sleep.mode "off" in pi-schedule.json)');
+				if (!ctx.hasUI && ctx.mode !== "rpc" && ctx.mode !== "tui")
+					return sleepError(
+						"sleep is not available in print/json sessions: the process exits after the run, so nothing could wake it. Use /schedule export for timed headless runs instead."
+					);
+				const parsed = resolveDuration(params.duration, sleepConfig);
+				if ("error" in parsed)
+					return sleepError(`${parsed.error}. Usage: sleep { duration: "20m", note?: "what to check when you wake" }`);
+				const key = sessionKey(ctx);
+				if (readWakes(key).length >= sleepConfig.maxPending)
+					return sleepError(
+						`at most ${sleepConfig.maxPending} wake-up(s) can be pending; wait for one to fire or ask the user to run /sleep cancel`
+					);
+				const note = (params.note ?? "").trim();
+				const { wake } = addWake(key, { note, durationMs: parsed.durationMs });
+				armWake(ctx, key, wake.id, wake.fireAt);
+				publishSleepStatus(ctx);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Sleeping for ${formatInterval(wake.durationMs)} (wake ${wake.id}). Your turn ends now; the "[wake-up]" message${note ? " with your note" : ""} will wake you.`,
+						},
+					],
+					details: { id: wake.id, durationMs: wake.durationMs, fireAt: wake.fireAt, note } satisfies SleepDetails,
+					terminate: true,
+				};
+			},
+		})
+	);
+
+	// mode "ask": confirm every sleep call before it runs; invalid input is
+	// rejected here so the user is never asked to approve a call that cannot work.
+	pi.on("tool_call", async (event, ctx) => {
+		if (event.toolName !== SLEEP_TOOL_NAME) return;
+		const input = event.input as Record<string, unknown>;
+		if (sleepConfig.mode === "off") return { block: true, reason: 'sleep is disabled (sleep.mode "off")' };
+		const raw = typeof input.duration === "string" ? input.duration : "";
+		const parsed = resolveDuration(raw, sleepConfig);
+		if ("error" in parsed) return { block: true, reason: `sleep refused: ${parsed.error}` };
+		if (sleepConfig.mode !== "ask") return;
+		if (!ctx.hasUI)
+			return {
+				block: true,
+				reason:
+					'sleep mode is "ask" and this session has no UI to approve it; set sleep.mode to "allow" in pi-schedule.json to permit it without prompting',
+			};
+		const note = typeof input.note === "string" && input.note.trim() ? ` — ${input.note.trim()}` : "";
+		const approved = await ctx.ui.confirm(
+			"Allow sleep?",
+			`The agent wants to sleep for ${formatInterval(parsed.durationMs)}${note} and end its turn until then.`
+		);
+		if (!approved) return { block: true, reason: "sleep was not approved; continue without waiting" };
+		return;
+	});
+
+	pi.registerCommand("sleep", {
+		description:
+			"Agent wake-ups set with the sleep tool: /sleep lists them, /sleep cancel <n|id> cancels one, /sleep clear cancels all.",
+		handler: async (args, ctx) => {
+			const key = sessionKey(ctx);
+			const [sub = "list", ...tail] = splitArgs(args);
+			if (sub === "list") {
+				ctx.ui.notify(`sleep mode: ${sleepConfig.mode} (sleep.mode in pi-schedule.json)\n${formatWakes(readWakes(key))}`, "info");
+				return;
+			}
+			if (sub === "clear") {
+				const wakes = readWakes(key);
+				for (const wake of wakes) clearWake(key, wake.id);
+				disarmSleeps();
+				publishSleepStatus(ctx);
+				ctx.ui.notify(wakes.length === 0 ? "No pending wake-ups." : `Cancelled ${wakes.length} wake-up(s).`, "info");
+				return;
+			}
+			if (sub === "cancel") {
+				const selector = tail.join(" ").trim();
+				if (!selector) {
+					ctx.ui.notify("Usage: /sleep cancel <n|id>", "warning");
+					return;
+				}
+				const { removed } = removeWake(key, selector);
+				if (!removed) {
+					ctx.ui.notify(`sleep: no wake-up matches "${selector}"`, "error");
+					return;
+				}
+				const timer = sleepTimers.get(removed.id);
+				if (timer) {
+					clearTimeout(timer);
+					sleepTimers.delete(removed.id);
+				}
+				publishSleepStatus(ctx);
+				ctx.ui.notify(`Cancelled: ${removed.id}${removed.note.trim() ? ` — ${removed.note.trim()}` : ""}`, "info");
+				return;
+			}
+			ctx.ui.notify("Usage: /sleep [list|cancel <n|id>|clear]", "warning");
+		},
+	});
+
 	// One handler per event: keep arm/disarm in the existing lifecycle hooks so
 	// Map-based test fakes and real pi behave identically.
 	/** Inbox socket for external schedulers (skdlr) + deliverer script. */
@@ -432,9 +652,13 @@ export default function piSchedule(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		ctxRef = ctx;
+		sleepConfig = loadSleepConfig(ctx.cwd);
+		if (sleepConfig.mode === "off") deactivateSleepTool();
+		publishSleepStatus(ctx);
 		if (!ctx.hasUI && ctx.mode !== "rpc" && ctx.mode !== "tui") {
 			// Single-shot print/json: never keep timers or sockets alive.
 			disarm();
+			disarmSleeps();
 			closeInbox();
 			publishStatus(ctx);
 			return;
@@ -442,6 +666,7 @@ export default function piSchedule(pi: ExtensionAPI): void {
 		openInbox(ctx);
 		drainMissed(ctx);
 		arm(ctx);
+		resumeSleeps(ctx);
 	});
 
 	pi.on("session_before_compact", async () => {
@@ -478,6 +703,7 @@ export default function piSchedule(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async () => {
 		disarm();
+		disarmSleeps();
 		closeInbox();
 		ctxRef = undefined;
 		parked = [];

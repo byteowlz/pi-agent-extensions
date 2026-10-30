@@ -4,6 +4,15 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Agent wake-up tool (3.2.0)
+
+- **pi-schedule 0.3.0**: the `sleep` tool lets the model end its turn and be
+  woken by a `[wake-up]` message in the same session after a delay, instead of
+  holding a long bash sleep. Permission modes (`allow`/`ask`/`off`), duration
+  and pending caps live in the new `pi-schedule.json`; wakes persist per
+  session, deliver late with an age label after a restart, and `/sleep` lists
+  or cancels them. See pi-schedule/CHANGELOG.md for details.
+
 ### Current-capability prompts and on-demand UI reference (3.1.0)
 
 - Replace OpenUI's full profile prompt with 405 characters of tool-scoped

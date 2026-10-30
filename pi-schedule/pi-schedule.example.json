@@ -1,0 +1,9 @@
+{
+  "$schema": "./pi-schedule.schema.json",
+  "sleep": {
+    "mode": "allow",
+    "minDurationMs": 10000,
+    "maxDurationMs": 86400000,
+    "maxPending": 3
+  }
+}

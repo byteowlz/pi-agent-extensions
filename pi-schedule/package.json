@@ -1,6 +1,6 @@
 {
   "name": "@byteowlz/pi-schedule",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Recurring in-session prompts (/schedule): session-scoped, or project-scoped and owned by the project captain",
   "type": "module",
   "keywords": [
