@@ -354,6 +354,10 @@ typecheck:
 check:
     bun run check
 
+# Focused agent-prompt contracts (no live services or privileged commands)
+test-prompts:
+    bun test prompt-metadata.test.ts pi-openui/ pi-kyz/ pi-durable-workflow/ pi-history-search/ pi-ssh-key/access-request.test.ts pi-sudo/registration.test.ts
+
 # List every tool/sub-tool registered by the extensions (naming/nesting audit)
 tools:
     bun run tools:list

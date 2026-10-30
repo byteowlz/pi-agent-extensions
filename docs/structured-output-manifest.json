@@ -22,6 +22,7 @@
     "pi-mmry": { "memory": "implemented" },
     "pi-nym": {},
     "pi-oqto-bridge": {},
+    "pi-openui": { "openui_reference": "implemented" },
     "pi-read-file-guard": {},
     "pi-read-image-guard": {},
     "pi-session-surgeon": { "session_surgery": "implemented" },

@@ -314,7 +314,8 @@ export default function workflowExtension(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "workflow",
 		label: "Workflow",
-		description: `Prepare, inspect and review versioned durable-workflow intent. Proposals ask human Y/N/Edit approval. Interval: ${INTERVAL_FORMAT_HINT} Review does not activate recurrence; unavailable authority/executor adapters fail closed. This is a custom pi-durable-workflow extension, not a Pi builtin.`,
+		description:
+			"Prepare, inspect and review workflow proposals with human Y/N/Edit approval. Review does not activate recurrence; execution is unavailable.",
 		parameters,
 		outputSchema: outputSchema,
 		annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },

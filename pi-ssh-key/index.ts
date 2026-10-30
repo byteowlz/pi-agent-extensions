@@ -1209,7 +1209,7 @@ export default function piSshKey(pi: ExtensionAPI): void {
 		name: "request_ssh_access",
 		label: "Request SSH Access",
 		description:
-			"Ask the human to approve loading an SSH key. Never supplies passphrases. Approval expires separately from access TTL. Proxy sessions fail closed until the grant backend supports cancellation and TTL.",
+			"Request human approval to load an SSH key. Never supplies passphrases. Approval expiry and key access TTL are separate. New key grants are unavailable in proxy sessions.",
 		outputSchema: Type.Object({
 			ok: Type.Literal(true),
 			keyPath: Type.String(),

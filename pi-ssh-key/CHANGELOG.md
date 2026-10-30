@@ -1,5 +1,8 @@
 ## Unreleased
 
+- State current proxy key-grant restrictions in tool metadata without backend
+  roadmap prose. Human approval and separate approval/access expiry remain.
+
 - `request_ssh_access` auto-approves when the requested key (or, without
   `key_path`, any key) is already granted and still live in the agent; no
   prompt, and the existing lifetime is not extended.

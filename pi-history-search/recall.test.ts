@@ -173,9 +173,9 @@ describe("recall contract", () => {
 			"After compaction, use HistorySearch with scope='current-branch' to recover details missing from the summary before re-deriving them.",
 			"Use HistorySearch with scope='current-tree' for related branches. It excludes the active session by default; also search scope='current-branch' when both are relevant.",
 			"Expand HistorySearch evidence with HistoryRead{sessionId, around: msgIndex, matchPosition}, preserving both anchors to reach details deep inside long messages.",
-			"A HistorySearch miss is not proof of absence: check scope, filters, and attempts; use mode='grep' for a literal-first scan that bypasses stale indexes.",
 		]);
-		expect(tools.get("HistorySearch")?.parameters.properties.scope.description).toContain("excludeCurrentSession=false");
+		expect(tools.get("HistorySearch")?.parameters.properties.scope.description).toContain("excluded by default");
+		expect(tools.get("HistorySearch")?.description).toContain("not proof of absence");
 		expect(tools.get("HistoryGrep")?.description).not.toContain("tokenized BM25");
 		const r = await tools.get("HistorySearch")?.execute("test", { query: "KEY=fixtureValue" }, undefined, undefined, ctx);
 		const text = r?.content[0];

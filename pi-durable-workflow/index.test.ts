@@ -80,7 +80,8 @@ describe("workflow proposal and review without granting execution authority", ()
 		const f = fixture();
 		expect(f.schema()).toContain("weekly=7d");
 		expect(f.schema()).toContain("30m");
-		expect(f.schema()).toContain("not a Pi builtin");
+		expect(f.schema()).not.toContain("not a Pi builtin");
+		expect(f.schema().match(/weekly=7d/g)).toHaveLength(1);
 		await f.hooks.get("session_start")?.({}, f.ctx);
 		f.setAnswer("N — Reject");
 		const rejected = await f.call({ ...propose, interval: "weekly" });
