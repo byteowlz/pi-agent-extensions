@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0
+
+- **The card now ends with an action — derived, not asked**: `needs: unblock`,
+  `needs: fix settings`, `needs: answer`, `needs: review`. Asking a model "what does
+  the user need to do?" was the worst question in the schema (62.5% d3 / 25% jev
+  against a 75% always-`none` baseline). `deriveNeeds()` computes it from
+  `blocked` + `error_kind` + `error_transient` + `work_done`, which measure
+  75–100%. Accuracy rose for both models (jev 76.4% → 83.9%, d3 80.0% → 82.3%) and
+  the schema is down to 7 questions (9 on a failed turn).
+- `attention` (analyst categories) is gone, replaced by the derived action. Its
+  `missing_info` bucket conflated two different fixes — "I need an answer" versus
+  "your settings are wrong" — which the derivation now separates.
+- The labeler still records a human `needs` label as ground truth for validating
+  the derivation.
+
 ## 0.6.0
 
 - **kNN prior, measured and deliberately not wired in.** `embeddings.ts` (EmbeddingGemma

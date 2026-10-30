@@ -209,7 +209,7 @@ export function neighbourLabel(entry: { labels: Answers; score?: number }): stri
 	add(entry.labels.activity);
 	if (entry.labels.blocked === "yes") parts.push("blocked");
 	if (entry.labels.work_done === "no") parts.push("unfinished");
-	if (entry.labels.attention && entry.labels.attention !== "none") parts.push(entry.labels.attention);
+	if (entry.labels.needs && entry.labels.needs !== "none") parts.push(entry.labels.needs);
 	if (entry.labels.error_kind) parts.push(entry.labels.error_kind);
 	return parts.length > 0 ? `[${parts.join(" · ")}]` : "";
 }

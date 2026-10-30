@@ -30,7 +30,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, s
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import type { TurnCard } from "./schema.js";
+import { type TurnCard, deriveNeeds } from "./schema.js";
 
 export const CARD_STORE_VERSION = 1;
 /**
@@ -90,7 +90,7 @@ export interface TimelineEntry {
 	activity?: string;
 	work_done?: string;
 	blocked?: string;
-	attention?: string;
+	needs?: string;
 	error_kind?: string;
 }
 
@@ -103,10 +103,13 @@ export function timelineEntry(card: TurnCard): TimelineEntry {
 		...(card.branch ? { branch: card.branch } : {}),
 		line: card.line,
 	};
-	for (const field of ["project", "activity", "work_done", "blocked", "attention", "error_kind"] as const) {
+	for (const field of ["project", "activity", "work_done", "blocked", "error_kind"] as const) {
 		const answer = value(field);
 		if (answer !== undefined && answer !== "unclear") entry[field] = answer;
 	}
+	// The action is derived from those answers rather than asked for.
+	const action = deriveNeeds(card.answers);
+	if (action.id !== "none") entry.needs = action.id;
 	return entry;
 }
 

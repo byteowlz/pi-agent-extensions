@@ -82,7 +82,7 @@ beforeAll(async () => {
 						activity: { type: "choice", choice: "implement", confidence: 0.92 },
 						work_done: { type: "noul", noul: 0.2, confidence: 0.8 },
 						blocked: { type: "noul", noul: 0.1, confidence: 0.8 },
-						attention: { type: "choice", choice: "review", confidence: 0.63 },
+						needs: { type: "choice", choice: "review", confidence: 0.63 },
 						artifact: { type: "choice", choice: "code", confidence: 0.8 },
 						scope: { type: "choice", choice: "single", confidence: 0.75 },
 					},
@@ -188,7 +188,7 @@ assert.equal(card.answers.project_mismatch.value, 'no');
 assert.ok(card.line.length > 0, 'line is rendered');
 assert.ok(card.line.startsWith('pi-agent-extensions · implement'), 'line starts with project and activity: ' + card.line);
 assert.ok(card.line.includes('unfinished'), 'line carries the v2 outcome: ' + card.line);
-assert.ok(card.line.includes('needs review'), 'attention shows: ' + card.line);
+assert.ok(!card.line.includes('needs:'), 'an unfinished, unblocked turn derives no action: ' + card.line);
 assert.equal(statuses.at(-1).key, 'turn');
 assert.equal(statuses.at(-1).value, card.line);
 
@@ -228,6 +228,7 @@ assert.equal(failedCard.answers.error_kind.value, 'provider_overloaded', 'error 
 assert.equal(failedCard.answers.error_transient.value, 'yes');
 assert.ok(failedCard.line.includes('error provider overloaded'), 'line names the error: ' + failedCard.line);
 assert.ok(failedCard.line.includes('retryable'), 'line marks retryability: ' + failedCard.line);
+assert.ok(failedCard.line.includes('needs: unblock'), 'a retryable provider error derives unblock: ' + failedCard.line);
 
 // --- the background dataset captured every turn ---------------------------
 const datasetText = readFileSync(process.env.FIXTURE_DATASET, 'utf8').trim().split('\\n');
@@ -247,7 +248,7 @@ assert.ok(notifications[0].message.includes('error_kind'), 'show lists the per-q
 
 notifications.length = 0;
 await commands.get('classify')('schema', ctx);
-assert.ok(notifications[0].message.includes('8 questions'), 'schema lists the questions: ' + notifications[0].message.split('\\n')[0]);
+assert.ok(notifications[0].message.includes('7 questions'), 'schema lists the questions: ' + notifications[0].message.split('\\n')[0]);
 assert.ok(notifications[0].message.includes('project_mismatch'), 'schema names the questions');
 
 // --- a resumed session continues the branch numbering, and the sidecar keeps both

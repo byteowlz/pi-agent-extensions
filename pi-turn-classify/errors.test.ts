@@ -92,13 +92,15 @@ describe("error questions", () => {
 			{ activity: { value: "implement" }, error_kind: { value: "provider_overloaded" }, error_transient: { value: "yes" } },
 			questions
 		);
-		expect(transient).toBe("implement · error provider overloaded (retryable)");
+		// a retryable provider failure means: nothing to fix, just unblock it
+		expect(transient).toBe("implement · error provider overloaded (retryable) · needs: unblock");
 
 		const permanent = renderLine(
 			{ activity: { value: "ops" }, error_kind: { value: "auth" }, error_transient: { value: "no" } },
 			questions
 		);
-		expect(permanent).toBe("ops · error auth");
+		// an auth failure is a settings problem, not a waiting problem
+		expect(permanent).toBe("ops · error auth · needs: fix settings");
 	});
 
 	test("an unclear error adds nothing to the line", () => {

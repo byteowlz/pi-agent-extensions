@@ -37,9 +37,11 @@ Seven questions, asked in one request. Ids are persisted, so they are stable.
 | `activity` | choice | `implement` `debug` `test` `review` `research` `plan` `refactor` `ops` `docs` `setup` `chat` |
 | `work_done` | yes/no | is the requested work complete? |
 | `blocked` | yes/no | is it blocked on something external? |
-| `attention` | choice | `none` `decision` `approval` `missing_info` `review` |
 | `artifact` | choice | `code` `test` `doc` `config` `issue` `data` `none` |
 | `scope` | choice | `single` `multi` `noncode` |
+
+The **action** (`needs: unblock` / `needs: fix settings`) is *derived*, not asked —
+see below.
 | `error_kind` | choice | **only on failed turns**: `provider_overloaded` `rate_limited` `auth` `context_overflow` `network` `content_filter` `invalid_request` `bad_response` `tool_failed` `cancelled` `unclear` |
 | `error_transient` | yes/no | **only on failed turns**: would a plain retry plausibly work? |
 
@@ -84,6 +86,39 @@ branch (like other sidecars), and they cost nothing per turn in tokens.
 `confidence` and `probabilities` are always kept, even when the rendered value
 was demoted to `unclear`. That is intentional: recalibration needs the raw
 scores, never the rounded ones.
+
+## The action is derived, not asked
+
+A list row should answer "what do I do about this?", so the card ends with an
+action:
+
+```
+ops · blocked · error auth · needs: fix settings
+implement · error provider overloaded (retryable) · needs: unblock
+```
+
+It is **not** a model question. Asking "what does the user need to do?" as a
+seven-way choice produced the worst result in the schema — 62.5% (d3) and 25% (jev)
+against a **75% always-`none` baseline**, because most turns need nothing and a
+skewed choice invites confident nonsense.
+
+The same information is already implied by answers that do work
+(`blocked` 75–81%, `error_kind` 83–100%, `error_transient`, `work_done` 88–94%), so
+`deriveNeeds()` maps them deterministically:
+
+| evidence | action |
+|---|---|
+| `error_kind: auth` or `invalid_request` | `fix settings` |
+| `error_kind: context_overflow`, not transient | `fix settings` |
+| any other error (rate limit, overload, network, bad response) | `unblock` |
+| `blocked: yes` with no error | `answer` |
+| `blocked: no`, `work_done: yes` | `review` |
+| `blocked: no`, `work_done: no` | nothing |
+
+Removing the question raised accuracy for both models (jev 76.4% → 83.9%, d3 80.0%
+→ 82.3%) and took the schema to **7 questions** (9 on a failed turn). The labeler
+still records a human `needs` label, which is exactly how this mapping gets
+validated and corrected — it is ground truth, not a model input.
 
 ## Errors are classified, not just flagged
 
@@ -401,9 +436,9 @@ on a clean turn, 10 on a failed one:
 
 | | `vllm-sr/d3-lite` | `jev-1.14.0` |
 | --- | --- | --- |
-| accuracy | **81.4%** | 77.9% |
-| ECE (lower better) | 0.125 | **0.070** |
-| latency mean | 846 ms | **258 ms** |
+| accuracy | 82.3% | **83.9%** |
+| ECE (lower better) | 0.112 | **0.040** |
+| latency mean | 850 ms (3.5 s under load) | **176 ms** |
 
 Per question (accuracy):
 
@@ -417,7 +452,6 @@ Per question (accuracy):
 | `work_done` | 87.5% | **93.8%** |
 | `blocked` | 75.0% | **81.3%** |
 | `artifact` | 62.5% | **75.0%** |
-| `attention` | **75.0%** | 37.5% |
 | `scope` | **81.3%** | 37.5% |
 
 Readings:
@@ -433,8 +467,8 @@ Readings:
   struggle to maintain, and it is the raw message that makes it work.
 - **`project` and `project_mismatch` are the reliable core** (81-100%), which is
   what this extension exists for.
-- `attention` and `scope` disagree wildly between models with overlapping
-  intervals at n=16: noise, not a ranking. The labeler corpus is what settles it.
+- **`scope` is the last weak question** (37.5% jev / 81.3% d3) and the obvious next
+  cut: it is arguably already implied by `project` + `project_mismatch`.
 
 ```bash
 bun run pi-turn-classify/bench.ts \

@@ -216,7 +216,6 @@ describe("writing", () => {
 						activity: { value: "implement" },
 						work_done: { value: "no" },
 						blocked: { value: "yes" },
-						attention: { value: "decision" },
 					},
 				})
 			);
@@ -237,7 +236,7 @@ describe("writing", () => {
 				activity: "implement",
 				work_done: "no",
 				blocked: "yes",
-				attention: "decision",
+				needs: "answer",
 			});
 			// a later turn that answers less is still a valid point on the timeline
 			expect(document?.history[1]).toMatchObject({ turn: 2, activity: "debug", work_done: "yes" });
