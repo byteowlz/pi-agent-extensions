@@ -1,6 +1,6 @@
 {
   "name": "@byteowlz/pi-auto-rename",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "description": "Auto-Rename Extension for pi",
   "type": "module",
   "keywords": [

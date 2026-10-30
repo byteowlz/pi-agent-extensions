@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.2
+
+- Disable outbound Herdr/tmux tab-title sync by default so session naming does
+  not change host tabs unless explicitly enabled. Inbound sync remains opt-in;
+  `/auto-rename outbound on` restores outbound behavior.
+
 ## 1.6.1
 
 - Fix: the deferred `session_info_changed` history record no longer throws an

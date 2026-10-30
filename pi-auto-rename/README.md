@@ -37,7 +37,9 @@ Then reload pi or restart it.
 
 ## Herdr and tmux tab titles
 
-`syncTabTitle: true` (default) projects Pi's title to the calling Herdr tab or
+Tab-title sync is disabled by default in both directions; automatic Pi session
+naming still works. Set `syncTabTitle: true` (or `/auto-rename outbound on`)
+to project Pi's title to the calling Herdr tab or
 tmux window on session start/resume/fork and session-name changes, including
 manual renames. Pi retains `[sub] Review Selection [mini-okay-soda]` and the tab
 shows `[sub] Review Selection`: the `[sub]` role marker stays visible so
@@ -58,7 +60,7 @@ still stripped. Other bracketed title text is preserved.
 
 ### Inbound sync (host → Pi), opt-in
 
-`syncTabTitleInbound: false` (default) keeps sync strictly one-way. Set it to
+`syncTabTitleInbound: false` (default) leaves host → Pi sync off. Set it to
 `true` to also listen for host tab renames and apply them to the Pi session
 name:
 
@@ -134,7 +136,7 @@ Create `auto-rename.json` in one of these locations (searched in order):
 | `prefixCommand` | string/null | `null` | Shell command to generate dynamic prefix (5s timeout) |
 | `prefixOnly` | boolean | `false` | Skip LLM, use only prefix as full name |
 | `readableIdSuffix` | boolean | `false` | Append `[readable-id]` to generated names |
-| `syncTabTitle` | boolean | `true` | Sync only the title to the owning single-pane Herdr tab/tmux window |
+| `syncTabTitle` | boolean | `false` | Sync only the title to the owning single-pane Herdr tab/tmux window |
 | `syncTabTitleInbound` | boolean | `false` | Also apply host tab renames to the Pi session name, preserving the canonical readable id |
 | `readableIdEnv` | string/null | `"PI_SESSION_READABLE_ID"` | Environment variable that can provide a readable-id suffix override |
 | `maxQueryLength` | integer | `2000` | Max characters of user query sent to LLM prompt. Longer queries have their middle cut out, preserving beginning and end. |
