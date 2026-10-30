@@ -20,7 +20,7 @@ Pi already exposes registered tools to codemode: this is an output-contract impr
 | pi-auto-rename | rename_session | Rename receipt with previous/name; no opaque prose-only success. |
 | pi-xlatch-session | xlatch_later | Action-discriminated parked-item lists, bounded read content, removal receipt. Existing details=null cannot supply the contract. Preserve non-destructive read semantics. |
 | pi-herdr-tools | subagent | Action-discriminated spawn/list/info receipts, stable child identifiers, bounded summaries; do not pretend spawning means completion. |
-| pi-sudo | sudo_exec, remote_sudo_exec | Execution receipt with exit status, bounded stdout/stderr, timeout/termination/truncation indicators; preserve authentication UI and remote authorization. Alias must return the same contract. |
+| pi-sudo | sudo_exec | Local/remote execution receipt with exit status, bounded stdout/stderr, timeout/termination/truncation indicators; preserve authentication UI and remote authorization. |
 | pi-kyz | wrapped bash plus result-redaction hook | Preserve host bash schema and structured values; scrub BOTH text and object values. No secrets in structured fields, nested metadata, error messages or persisted results. |
 | pi-selection | Selection | Already declares outputSchema=Type.Unknown and structuredContent. Replace permissive success schema with operation-specific contracts in coordination with selection owner, preserving revision/CAS checks. |
 | pi-read-file-guard / pi-read-image-guard | tool_result transforms | No new tool needed. Test transformations for compatible bounded structured data or intentional removal when the original no longer matches. |

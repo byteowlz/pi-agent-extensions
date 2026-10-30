@@ -1,6 +1,6 @@
 # pi-sudo
 
-First-class `sudo` support for pi. Gives the agent local and remote sudo tools
+First-class `sudo` support for pi. Gives the agent one local/remote sudo tool
 that prompt for passwords through pi's own masked TUI, cache them in-process per
 machine for the timestamp window, and block naked `sudo` in the bash tool so the
 agent can never hang on an unanswerable password prompt or lock the account via
@@ -26,7 +26,7 @@ account — even though no password was ever typed.
 This extension removes the trigger by:
 
 - Never letting interactive `sudo …` run from the `bash` tool.
-- Detecting obvious `ssh host sudo …` commands and routing the agent to a remote-specific tool.
+- Detecting obvious `ssh host sudo …` commands and routing the agent to `sudo_exec` with `host`.
 - Piping the password on stdin via `sudo -S`, which has no TTY requirement.
 - Prompting the user only once per timestamp window, through pi's native UI.
 
@@ -78,9 +78,8 @@ command author can append the shell comment `# pi-sudo:allow` to bypass the
 guard — the user sees a notification when that happens. The guard's behaviour
 is configurable via `bashGuard` (`block` | `warn` | `off`).
 
-`remote_sudo_exec` still exists as a deprecated alias (it forwards to
-`sudo_exec` with `host`) so sessions loaded before the unification keep
-working; new sessions only see `sudo_exec`.
+Only `sudo_exec` is registered. For remote commands, supply `host`; there is
+no separate remote tool or deprecated alias.
 
 ## Commands
 

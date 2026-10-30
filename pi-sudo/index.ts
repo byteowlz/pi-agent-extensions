@@ -20,7 +20,7 @@
  * Tools:
  *   sudo_exec({ command, host?, sshOptions?, reason?, timeout? })
  *     — run a command under sudo, locally or (with `host`) on a remote
- *       machine over ssh. `remote_sudo_exec` remains as a deprecated alias.
+ *       machine over ssh.
  *
  * Commands:
  *   /sudo-status   — show cache state (has password / TTL remaining).
@@ -755,11 +755,6 @@ export type SudoExecInput = {
 	timeout?: number;
 };
 
-/** Deprecated: kept for sessions that still reference the old tool name. */
-export type RemoteSudoExecInput = SudoExecInput & {
-	host: string;
-};
-
 export default function pisudo(pi: ExtensionAPI): void {
 	config = loadSudoConfig();
 
@@ -849,7 +844,6 @@ export default function pisudo(pi: ExtensionAPI): void {
 		"Use `sudo_exec` for any command that requires root, locally or on a remote machine. Never call `sudo` from the `bash` tool — it will be blocked.",
 		"Local root: omit `host`. Remote root: pass `host` (e.g. `user@example.com`) and only the remote root command in `command`; the remote password is cached separately from the local one.",
 		"Always pass a short human-readable `reason` explaining why root is needed. The reason is shown to the user in the password prompt.",
-		"If the bash guard blocks a command where `sudo` appears only as text (commit messages, docs, grep patterns), append the shell comment `# pi-sudo:allow` to that command line. Never use the token to actually run sudo via bash.",
 	];
 
 	function renderSudoCall(args: Record<string, unknown> | undefined, theme: Theme, label: string): Text {
@@ -1000,38 +994,6 @@ export default function pisudo(pi: ExtensionAPI): void {
 
 		renderCall(args, theme) {
 			return renderSudoCall(args, theme, "sudo");
-		},
-
-		renderResult(result, _options, theme) {
-			return renderSudoResult(result, theme);
-		},
-	});
-
-	// ---- Tool: remote_sudo_exec (deprecated alias) -----------------------
-	let warnedRemoteAlias = false;
-	pi.registerTool({
-		name: "remote_sudo_exec",
-		label: "remote sudo",
-		outputSchema: sudoOutputSchema,
-		description:
-			"Deprecated alias of `sudo_exec` with `host`. Use `sudo_exec({ host, command })` instead. Runs a shell command with sudo on a remote machine over ssh; the remote sudo password is cached separately from local sudo.",
-		promptSnippet: "Deprecated: use sudo_exec with `host` instead",
-		promptGuidelines: ["Prefer `sudo_exec` with `host`. This alias exists only for backward compatibility."],
-		parameters: Type.Object({
-			...sudoParams,
-			host: Type.String({ description: "SSH destination, e.g. `server`, `user@server`, or a Host alias from ~/.ssh/config." }),
-		}),
-
-		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-			if (!warnedRemoteAlias) {
-				warnedRemoteAlias = true;
-				ctx.ui.notify("remote_sudo_exec is deprecated; use sudo_exec with `host` instead.", "info");
-			}
-			return executeSudo(params as SudoExecInput, signal, ctx);
-		},
-
-		renderCall(args, theme) {
-			return renderSudoCall(args, theme, "remote sudo");
 		},
 
 		renderResult(result, _options, theme) {
