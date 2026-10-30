@@ -47,6 +47,13 @@ delivered late on the next start, labelled with its delay. Forks do not inherit
 - `/sleep` lists pending wake-ups with countdowns, `/sleep cancel <n|id>` and
   `/sleep clear` cancel them; the footer shows a `zzz <soonest>` segment while
   one is pending.
+- Status for external consumers: while a wake is pending inside a herdr pane,
+  the extension reports the pane **idle** with a notice — `sleeping 20m —
+  sleep-1 wakes 15:42 · check the build` — via the same `pane report-agent`
+  contract as pi-sudo/pi-selection/pi-ssh-key. It is never `blocked` (herdr's
+  blocked means "needs you"; a sleep does not), and the claim is released on
+  any run start (the wake itself, or a user prompt) and on shutdown, so a
+  stale report can never mask real activity or outlive the session.
 - Absolute calendar times and wake-ups that must reach a session across machines
   remain skdlr's job (`/schedule link`); `sleep` is the in-session nap.
 

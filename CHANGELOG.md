@@ -15,6 +15,14 @@ All notable changes to pi-agent-extensions will be documented in this file.
   pi-tui-rpc get a herdr-typed `/reload` only when idle with an empty input box
   (`--legacy-herdr`, `--wait`).
 
+### Sleep status for herdr (3.3.0)
+
+- **pi-schedule 0.4.0**: a sleeping pane reports `idle` with a notice
+  (`sleeping 20m — sleep-1 wakes 15:42 · note`) to herdr via the shared
+  `pane report-agent` contract — never `blocked`, since herdr's blocked means
+  "needs you". The claim is released on any run start and on shutdown, so it
+  can never mask real activity or outlive the session.
+
 ### Agent wake-up tool (3.2.0)
 
 - **pi-schedule 0.3.0**: the `sleep` tool lets the model end its turn and be

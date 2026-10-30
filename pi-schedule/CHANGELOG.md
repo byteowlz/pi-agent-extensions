@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0
+
+- **herdr state reporting**: while a wake-up is pending in a herdr pane, the
+  extension reports the pane `idle` with a notice (`sleeping 20m — sleep-1
+  wakes 15:42 · note`) over the same `pane report-agent` contract as
+  pi-sudo/pi-selection/pi-ssh-key. Deliberately never `blocked` (herdr's
+  blocked means "needs you"), and the claim is released on any run start —
+  the wake itself or a user prompt — and on shutdown, so a stale idle report
+  can never mask real activity or outlive the session.
+- `sleepNotice` builds the message (soonest wake, local clock, truncated note);
+  pure and tested.
+
 ## 0.3.0
 
 - **Agent wake-ups**: the `sleep` tool ends the agent's turn (`terminate: true`)

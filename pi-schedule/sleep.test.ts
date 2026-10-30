@@ -5,6 +5,7 @@ import * as path from "node:path";
 
 import {
 	DEFAULT_SLEEP_CONFIG,
+	type Wake,
 	addWake,
 	clearWake,
 	findWake,
@@ -14,6 +15,7 @@ import {
 	readWakes,
 	removeWake,
 	resolveDuration,
+	sleepNotice,
 	sleepStatus,
 	wakeMessage,
 	wakeStorePath,
@@ -165,6 +167,42 @@ describe("wake messages and presentation", () => {
 		expect(
 			sleepStatus([{ id: "sleep-1", note: "", durationMs: 60_000, createdAt: "", fireAt: "2026-10-29T09:00:00.000Z" }], now)
 		).toBe("zzz 0s");
+	});
+});
+
+describe("sleepNotice (herdr message)", () => {
+	const now = Date.parse("2026-10-29T10:00:00.000Z");
+	const wake = (over: Partial<Wake>): Wake => ({
+		id: "sleep-1",
+		note: "",
+		durationMs: 1_200_000,
+		createdAt: "",
+		fireAt: "2026-10-29T10:14:00.000Z",
+		...over,
+	});
+
+	test("empty set says so", () => {
+		expect(sleepNotice([], now)).toBe("no pending wake-ups");
+	});
+
+	test("single wake carries duration, id, clock and note", () => {
+		const notice = sleepNotice([wake({ note: "check the build" })], now);
+		expect(notice).toMatch(/^sleeping 20m — sleep-1 wakes \d{2}:\d{2} · check the build$/);
+		expect(sleepNotice([wake()], now)).not.toContain("·");
+	});
+
+	test("long notes are truncated", () => {
+		const notice = sleepNotice([wake({ note: "x".repeat(60) })], now);
+		expect(notice).toContain("…");
+		expect(notice.length).toBeLessThan(90);
+	});
+
+	test("multiple wakes report the soonest", () => {
+		const notice = sleepNotice(
+			[wake({ id: "sleep-2", fireAt: "2026-10-29T10:30:00.000Z" }), wake({ id: "sleep-1", fireAt: "2026-10-29T10:14:00.000Z" })],
+			now
+		);
+		expect(notice).toMatch(/^2 wake-ups pending — next sleep-1 at \d{2}:\d{2} \(in 14m\)$/);
 	});
 });
 

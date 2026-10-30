@@ -24,6 +24,7 @@ import * as path from "node:path";
 import { type ExtensionAPI, type ExtensionContext, defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { herdrDrop, herdrResume, herdrSleeping } from "./herdr.js";
 import { MAX_QUEUE_AGE_MS, type QueuedDelivery, drainQueue, ensureDeliverer, startInbox } from "./inbox.js";
 import {
 	type ScheduleScope,
@@ -55,6 +56,7 @@ import {
 	readWakes,
 	removeWake,
 	resolveDuration,
+	sleepNotice,
 	sleepStatus,
 	wakeMessage,
 } from "./sleep.js";
@@ -435,7 +437,12 @@ export default function piSchedule(pi: ExtensionAPI): void {
 	const publishSleepStatus = (ctx: ExtensionContext | undefined): void => {
 		if (!ctx) return;
 		try {
-			ctx.ui.setStatus("sleep", sleepStatus(readWakes(sessionKey(ctx))));
+			const pending = readWakes(sessionKey(ctx));
+			ctx.ui.setStatus("sleep", sleepStatus(pending));
+			// herdr stays truthful: idle + notice while a wake is pending, released
+			// once the pending set is empty (herdr.ts gates on HERDR_ENV).
+			if (pending.length > 0) herdrSleeping(sleepNotice(pending));
+			else herdrResume();
 		} catch {
 			// status is cosmetic
 		}
@@ -604,6 +611,18 @@ export default function piSchedule(pi: ExtensionAPI): void {
 		},
 	});
 
+	pi.on("agent_start", async () => {
+		// Any run start — the wake itself or a user prompt — supersedes the sleep
+		// claim, so a stale idle report can never mask real activity.
+		herdrResume();
+	});
+
+	pi.on("agent_settled", async (_event, ctx) => {
+		// A run that ended with wakes still pending (e.g. the user prompted while
+		// asleep) re-claims the idle + notice state.
+		publishSleepStatus(ctx);
+	});
+
 	// One handler per event: keep arm/disarm in the existing lifecycle hooks so
 	// Map-based test fakes and real pi behave identically.
 	/** Inbox socket for external schedulers (skdlr) + deliverer script. */
@@ -704,6 +723,7 @@ export default function piSchedule(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", async () => {
 		disarm();
 		disarmSleeps();
+		herdrDrop();
 		closeInbox();
 		ctxRef = undefined;
 		parked = [];

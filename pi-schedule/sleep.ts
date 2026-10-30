@@ -262,3 +262,29 @@ export function sleepStatus(wakes: readonly Wake[], now = Date.now()): string | 
 	}
 	return `zzz ${formatDuration(Math.max(0, soonest))}`;
 }
+
+function formatClock(iso: string): string {
+	const date = new Date(iso);
+	return Number.isFinite(date.getTime()) ? date.toTimeString().slice(0, 5) : "??:??";
+}
+
+function truncate(text: string, max: number): string {
+	return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
+/**
+ * One-line notice for external state consumers (herdr report-agent --message):
+ * what the session is waiting on and when it resumes. Lifecycle stays idle —
+ * nothing is running — the message carries the schedule.
+ */
+export function sleepNotice(wakes: readonly Wake[], now = Date.now()): string {
+	if (wakes.length === 0) return "no pending wake-ups";
+	const sorted = [...wakes].sort((a, b) => Date.parse(a.fireAt) - Date.parse(b.fireAt));
+	const soonest = sorted[0] as Wake;
+	if (wakes.length === 1) {
+		const note = soonest.note.trim() ? ` · ${truncate(soonest.note.trim(), 40)}` : "";
+		return `sleeping ${formatInterval(soonest.durationMs)} — ${soonest.id} wakes ${formatClock(soonest.fireAt)}${note}`;
+	}
+	const inMs = Math.max(0, Date.parse(soonest.fireAt) - now);
+	return `${wakes.length} wake-ups pending — next ${soonest.id} at ${formatClock(soonest.fireAt)} (in ${formatDuration(inMs)})`;
+}
