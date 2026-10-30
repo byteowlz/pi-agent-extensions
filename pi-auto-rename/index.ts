@@ -202,7 +202,7 @@ const DEFAULT_CONFIG: ResolvedConfig = {
 	prefixOnly: false,
 	readableIdSuffix: false,
 	readableIdEnv: "PI_SESSION_READABLE_ID",
-	syncTabTitle: true,
+	syncTabTitle: false,
 	syncTabTitleInbound: false,
 	enabled: true,
 	debug: false,

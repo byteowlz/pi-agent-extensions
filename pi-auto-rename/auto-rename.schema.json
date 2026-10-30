@@ -139,8 +139,8 @@
 		},
 		"syncTabTitle": {
 			"type": "boolean",
-			"description": "Project the session title to the calling Herdr tab or tmux window, without the known readable ID or sub/side marker. Shared multi-pane tabs/windows are left unchanged. Independent of automatic title generation.",
-			"default": true
+			"description": "Opt-in: project the session title to the calling Herdr tab or tmux window, without the known readable ID or sub/side marker. Shared multi-pane tabs/windows are left unchanged. Independent of automatic title generation.",
+			"default": false
 		},
 		"syncTabTitleInbound": {
 			"type": "boolean",

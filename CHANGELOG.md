@@ -4,6 +4,12 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Opt-in host tab-title sync (2.39.1)
+
+- **pi-auto-rename 1.6.2**: outbound Herdr/tmux tab-title sync now defaults to
+  false, matching the existing inbound opt-in. Pi session naming is unchanged;
+  `/auto-rename outbound on` explicitly enables host-title updates.
+
 ### pi-last-question: plain ctrl bindings, hint only when expandable (2.39.0)
 
 - **pi-last-question 0.4.0**: shortcuts are now plain `ctrl` bindings — `ctrl+q`

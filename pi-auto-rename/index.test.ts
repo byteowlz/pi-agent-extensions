@@ -139,6 +139,16 @@ function tmpCwd(): string {
 const READABLE_ID_RE = /\s\[[a-z][a-z0-9-]*-[a-z][a-z0-9-]*-[a-z][a-z0-9-]*\]$/i;
 
 describe("pi-auto-rename TUI sync toggles", () => {
+	test("generated defaults disable both directions of tab-title sync", async () => {
+		const { pi, runCommand } = buildMockExtensionAPI();
+		autoRename(pi);
+		const cwd = tmpCwd();
+		await runCommand("init", buildMockCtx(cwd, "test-session-id"));
+		const saved = JSON.parse(readFileSync(join(cwd, CONFIG_FILENAME), "utf-8"));
+		expect(saved.syncTabTitle).toBe(false);
+		expect(saved.syncTabTitleInbound).toBe(false);
+	});
+
 	test("sync toggles inbound config and preserves unrelated keys", async () => {
 		const { pi, fireSessionStart, runCommand } = buildMockExtensionAPI();
 		autoRename(pi);
@@ -158,7 +168,7 @@ describe("pi-auto-rename TUI sync toggles", () => {
 		expect(saved.syncTabTitleInbound).toBe(false);
 	});
 
-	test("outbound toggle writes syncTabTitle only", async () => {
+	test("outbound toggle opts in and writes syncTabTitle only", async () => {
 		const { pi, fireSessionStart, runCommand } = buildMockExtensionAPI();
 		autoRename(pi);
 		const cwd = tmpCwd();
@@ -167,7 +177,7 @@ describe("pi-auto-rename TUI sync toggles", () => {
 		await fireSessionStart({}, ctx);
 		await runCommand("outbound", ctx);
 		const saved = JSON.parse(readFileSync(join(cwd, CONFIG_FILENAME), "utf-8"));
-		expect(saved.syncTabTitle).toBe(false);
+		expect(saved.syncTabTitle).toBe(true);
 		expect(saved.syncTabTitleInbound).toBe(true);
 	});
 
