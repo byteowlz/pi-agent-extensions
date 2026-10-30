@@ -14,8 +14,11 @@ Decision: Oqto ADR-0074. Same programs render in Oqto Web, desktop and mobile.
 /openui demo [fixture]   preview a profile fixture locally (no model call)
 ```
 
-When on, the profile prompt (~9k tokens) is added as an `openui` prompt section and
-the model-only `openui` tool becomes active. The model calls it with:
+When on, a short tool-scoped `openui` prompt section is added. The model-only
+`openui` tool and read-only `openui_reference` tool become active. The model
+requests syntax/component details from `openui_reference` as needed (6000
+characters per page by default; follow `nextOffset`). No full profile prompt or
+global response/data/style instructions are injected. The model calls `openui` with:
 
 - `program`: OpenUI Lang (entry statement `root`)
 - `fallback`: short plain text for hosts without UI
@@ -54,3 +57,7 @@ native surface protocols (Tern), live `Query`/`Mutation` data through the runner
 tab switching, answers from buttons and state-bound forms, cancel, event
 classification, per-session toggle and prompt injection, reload reconstruction,
 no fabricated answers outside the TUI, invalid programs fail with a fix message.
+`just test-prompts` also checks bounded guidance, reference paging and exclusion
+of the profile's global assistant policy. The maintained `reference.ts` adapter
+extracts only language-reference sections from the unchanged vendored profile;
+unknown section boundaries fail closed and require review.

@@ -16,11 +16,13 @@ import { Key as K, Text, matchesKey } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { herdrBlocked, herdrRelease } from "../pi-selection/herdr.js";
 import { type Key, type Outcome, answerPayload, reduce } from "./interact.js";
-import { FIXTURES, PROFILE_VERSION, SYSTEM_PROMPT, createOqtoParser, renderFallback } from "./openui-vendor.js";
+import { FIXTURES, PROFILE_VERSION, createOqtoParser, renderFallback } from "./openui-vendor.js";
+import { OPENUI_GUIDANCE, PROGRAM_REFERENCE } from "./reference.js";
 import { type Control, type Paint, type ViewState, emptyState, render } from "./render.js";
 
 export const STATE_ENTRY = "pi-openui/state";
 export const TOOL = "openui";
+export const REFERENCE_TOOL = "openui_reference";
 
 export interface PartDetails {
 	profile: string;
@@ -123,13 +125,14 @@ async function demo(ctx: ExtensionContext, name?: string): Promise<void> {
 
 export default function (pi: ExtensionAPI) {
 	let enabled = false;
-	let prompt: string | undefined;
 
 	const sync = (ctx: ExtensionContext) => {
 		enabled = enabledOnBranch(ctx.sessionManager.getBranch());
 		const active = new Set(pi.getActiveTools());
-		if (enabled) active.add(TOOL);
-		else active.delete(TOOL);
+		for (const name of [TOOL, REFERENCE_TOOL]) {
+			if (enabled) active.add(name);
+			else active.delete(name);
+		}
 		pi.setActiveTools([...active]);
 		if (ctx.hasUI) ctx.ui.setStatus("pi-openui", enabled ? "openui" : undefined);
 	};
@@ -142,10 +145,9 @@ export default function (pi: ExtensionAPI) {
 			event.systemPromptOptions.sections = rest;
 			return;
 		}
-		prompt ??= SYSTEM_PROMPT as string;
 		event.systemPromptOptions.sections = {
 			...event.systemPromptOptions.sections,
-			openui: `Emit UI by calling the \`${TOOL}\` tool with an OpenUI Lang program (Oqto profile ${PROFILE_VERSION}); never print OpenUI Lang as chat text. Always pass a short plain-text \`fallback\`. Set \`wait: true\` when the program ends with @Answer controls and you need the user's answer; the tool result is that answer.\n\n${prompt}`,
+			openui: OPENUI_GUIDANCE,
 		};
 	});
 
@@ -167,11 +169,42 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
+		name: REFERENCE_TOOL,
+		label: "OpenUI reference",
+		description:
+			"Read the OpenUI program syntax and component reference on demand. Applies only to the openui tool's program argument.",
+		annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+		parameters: Type.Object({
+			offset: Type.Optional(Type.Integer({ minimum: 0, description: "Character offset; default 0." })),
+			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 12000, description: "Maximum characters; default 6000." })),
+		}),
+		outputSchema: Type.Object({
+			text: Type.String(),
+			offset: Type.Integer(),
+			nextOffset: Type.Union([Type.Integer(), Type.Null()]),
+			totalChars: Type.Integer(),
+		}),
+		async execute(_id, params) {
+			if (!enabled) throw new Error("OpenUI is off for this session; the user can enable it with /openui on.");
+			const offset = params.offset ?? 0;
+			const end = Math.min(offset + (params.limit ?? 6000), PROGRAM_REFERENCE.length);
+			if (offset > PROGRAM_REFERENCE.length) throw new Error("OpenUI reference offset exceeds its length");
+			const page = {
+				text: PROGRAM_REFERENCE.slice(offset, end),
+				offset,
+				nextOffset: end < PROGRAM_REFERENCE.length ? end : null,
+				totalChars: PROGRAM_REFERENCE.length,
+			};
+			return { content: [{ type: "text", text: JSON.stringify(page) }], details: page, structuredContent: page };
+		},
+	});
+
+	pi.registerTool({
 		name: TOOL,
 		label: "OpenUI",
 		exposure: "model-only",
 		description:
-			"Show agent-generated UI to the user: an OpenUI Lang program from the Oqto profile (see the openui prompt section). Rendered natively in every Oqto host. Provide `fallback`: short plain text for hosts that cannot render it. Set `wait: true` to wait for the user's @Answer, returned as the tool result; otherwise the UI is displayed and the tool returns immediately.",
+			"Show an OpenUI Lang program to the user. Use openui_reference for syntax. Include a plain-text fallback. Set wait: true to return the user's @Answer; otherwise display without waiting.",
 		annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
 		parameters: Type.Object(
 			{

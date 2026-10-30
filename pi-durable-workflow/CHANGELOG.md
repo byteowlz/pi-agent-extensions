@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.1.0 (extension bundle)
+
+- Remove extension-versus-builtin provenance and duplicate interval syntax from
+  the tool description. Interval examples remain in the parameter schema and
+  validation errors; human review and unavailable execution are unchanged.
+
 ## 2.9.0
 
 - Expose accepted interval examples, bounds and elapsed-time semantics directly

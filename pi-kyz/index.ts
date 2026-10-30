@@ -361,7 +361,6 @@ export default function (pi: ExtensionAPI) {
 			`Available secrets (injected as env vars in bash): ${names}`,
 			"Use $SECRET_NAME in bash commands to reference secrets. Never ask the user for secret values.",
 			"Secret values are automatically scrubbed from command output.",
-			"Use /kyz to list available secrets. Use /kyz-scope tag:NAME to filter by tag.",
 			tagInfo,
 		].join("\n");
 

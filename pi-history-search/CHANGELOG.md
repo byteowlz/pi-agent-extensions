@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.1.0 (extension bundle)
+
+- Keep tool descriptions focused on finding sessions and expanding source
+  anchors. Leave parameter defaults in schemas and search-engine troubleshooting
+  in documentation, not permanent prompt guidance.
+- Preserve branch scope and incomplete-store warnings. Describe current-session
+  exclusion as the configurable default, not a per-call tool argument.
+
 ## 2.13.0
 
 - Move searches, reads, grep, branch enumeration, SQLite/index work and overlay

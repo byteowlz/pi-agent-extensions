@@ -4,6 +4,22 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Current-capability prompts and on-demand UI reference (3.1.0)
+
+- Replace OpenUI's full profile prompt with 405 characters of tool-scoped
+  guidance. `openui_reference` serves the syntax/component reference in bounded
+  pages only when requested; both tools remain off until explicitly enabled.
+  Global response-format, invented-data and style directives are excluded.
+- Remove SSH backend roadmap prose, workflow provenance/duplicate interval
+  hints, and human-only kyz command help from permanent agent context. Keep
+  approval, expiry, secret handling and unavailable-execution restrictions.
+- Shorten history tool descriptions and remove stale-index troubleshooting
+  from prompt guidance; preserve source anchors, scope semantics and incomplete
+  store warnings. Clarify that current-session exclusion is a default, not a
+  per-call `excludeCurrentSession` argument.
+- Add `just test-prompts` and regression tests for concise, current tool metadata,
+  on-demand reference paging, safe secret-name context and preserved boundaries.
+
 ### Remove deprecated remote sudo tool (3.0.0)
 
 - **pi-sudo 3.0.0**: remove `remote_sudo_exec` and its prompt description and

@@ -1,9 +1,8 @@
 /**
  * pi-history-search — let the agent search its own session history.
  *
- * Registers two LLM-callable tools:
- *   - HistorySearch: full-text search over past sessions (FTS5, BM25-ranked).
- *   - HistoryRead:   pull fuller context from a specific past session.
+ * Registers HistorySearch, HistoryBranches, HistoryRead and HistoryGrep for
+ * finding sessions, inspecting branches and expanding exact source anchors.
  *
  * The index is a SQLite FTS5 database colocated inside each project's session
  * directory (`<base>/--{cwd}--/.pi-history/index.db`), so it is reachable
@@ -44,7 +43,7 @@ const HistorySearchParams = Type.Object({
 	scope: Type.Optional(
 		StringEnum(["project", "all", "current-tree", "current-branch", "siblings", "ancestors", "descendants"] as const, {
 			description:
-				"'project' (default) searches project history; 'all' spans accessible projects. Use 'current-branch' for the active session's saved messages, including before compaction; 'current-tree' for related branches sharing its root. The active session is excluded except with 'current-branch', unless excludeCurrentSession=false. Also: 'siblings', 'ancestors', 'descendants'.",
+				"'project' (default) searches this project; 'all' spans accessible projects. 'current-branch' includes this session's saved pre-compaction messages; 'current-tree' covers related branches. The active session is excluded by default outside 'current-branch'. Also: 'siblings', 'ancestors', 'descendants'.",
 		})
 	),
 	project: Type.Optional(
@@ -350,18 +349,14 @@ export default function historySearch(pi: ExtensionAPI): void {
 		name: "HistorySearch",
 		label: "History Search",
 		description:
-			"Search saved session history (conversations and tool activity), including messages before compaction, with literal-first or ranked search. " +
-			"Use this to recall earlier decisions, prior solutions, file paths, error messages, or what was already tried — " +
-			"before re-deriving them. Returns a budgeted JSON envelope (default 3000 chars), one best snippet per session, " +
-			"including tool evidence. Identifiers use literal-first search; mode='grep' forces it. Expand with " +
-			"HistoryRead{sessionId, around: msgIndex, matchPosition}. Store completeness is unknown, not proof of absence. Defaults to the current project; pass scope='all' to search " +
-			"other projects the environment exposes.",
+			"Search saved session history, including pre-compaction messages, to recall decisions, solutions and previous attempts. " +
+			"Returns one anchored snippet per session; expand using HistoryRead. Defaults to the current project. " +
+			"Incomplete results are not proof of absence.",
 		promptSnippet: "HistorySearch — recall saved history, including pre-compaction details and related branches.",
 		promptGuidelines: [
 			"After compaction, use HistorySearch with scope='current-branch' to recover details missing from the summary before re-deriving them.",
 			"Use HistorySearch with scope='current-tree' for related branches. It excludes the active session by default; also search scope='current-branch' when both are relevant.",
 			"Expand HistorySearch evidence with HistoryRead{sessionId, around: msgIndex, matchPosition}, preserving both anchors to reach details deep inside long messages.",
-			"A HistorySearch miss is not proof of absence: check scope, filters, and attempts; use mode='grep' for a literal-first scan that bypasses stale indexes.",
 		],
 		parameters: HistorySearchParams,
 		outputSchema: historyOutputSchemas.search,
@@ -450,10 +445,8 @@ export default function historySearch(pi: ExtensionAPI): void {
 		name: "HistoryRead",
 		label: "History Read",
 		description:
-			"Read fuller context from one past session returned by HistorySearch. Modes: pass `around` (a msgIndex) for a " +
-			"window of surrounding messages; pass `query` to return every message matching terms; pass neither for the whole " +
-			"session, which defaults to a compact `outline` (user+assistant only, tool noise dropped) — set view='transcript' " +
-			"for everything. Pass matchPosition from a search hit to reach evidence deep inside a long message. Identify the session with `sessionId` from a HistorySearch result.",
+			"Read a saved session or expand a history hit using sessionId and its message/character anchors. " +
+			"Defaults to a compact conversation outline; use view='transcript' for tool activity.",
 		parameters: HistoryReadParams,
 		outputSchema: historyOutputSchemas.read,
 
@@ -526,11 +519,8 @@ export default function historySearch(pi: ExtensionAPI): void {
 		name: "HistoryGrep",
 		label: "History Grep",
 		description:
-			"Surgically and fast-search ONE past session for an exact substring or regular expression, returning pinpoint matches (msgIndex + snippet). " +
-			"Use HistoryGrep when you already know the session and need exact strings, identifiers, errors, or paths; use HistorySearch to discover sessions. " +
-			"It reads a single session file once, retries regex-shaped literal misses as regex (disable with fallback=false), and reports attempts. " +
-			"Output defaults to 3000 chars with message and character anchors. No index or tokenization. " +
-			"Typical flow: HistorySearch finds the session, then HistoryGrep extracts the exact lines. Identify the session with sessionId from a HistorySearch result.",
+			"Find exact substring or regex matches within one known session. Use HistorySearch to discover sessions. " +
+			"Returns message and character anchors for expansion with HistoryRead.",
 		promptSnippet: "HistoryGrep — fast exact/regex search inside one past session (msgIndex-precise).",
 		parameters: HistoryGrepParams,
 		outputSchema: historyOutputSchemas.grep,

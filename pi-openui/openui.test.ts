@@ -189,27 +189,75 @@ describe("session toggle and tool", () => {
 		const h = host();
 		await h.emit("session_start", {});
 		expect(h.active()).not.toContain(TOOL);
+		expect(h.active()).not.toContain("openui_reference");
 		const event = { systemPromptOptions: { sections: {} as Record<string, string> } };
 		await h.emit("before_agent_start", event);
 		expect(event.systemPromptOptions.sections.openui).toBeUndefined();
 		await expect(
 			h.tools[TOOL]?.execute("1", { program: 'root = Stack([TextContent("x")])', fallback: "x" }, undefined, undefined, h.ctx)
 		).rejects.toThrow("off");
+		await expect(h.tools.openui_reference?.execute("ref", {}, undefined, undefined, h.ctx)).rejects.toThrow("off");
 	});
 
-	test("/openui on persists, activates the tool and injects the profile prompt; off removes it", async () => {
+	test("/openui on persists, activates the tools and injects only scoped guidance; off removes it", async () => {
 		const h = host();
 		await h.emit("session_start", {});
 		await h.commands.openui?.handler("on", h.ctx);
 		expect(h.appended).toEqual([{ type: "custom", customType: STATE_ENTRY, data: { enabled: true } }]);
 		expect(h.active()).toContain(TOOL);
+		expect(h.active()).toContain("openui_reference");
 		const event = { systemPromptOptions: { sections: {} as Record<string, string> } };
 		await h.emit("before_agent_start", event);
-		expect(event.systemPromptOptions.sections.openui).toContain("@Answer");
+		const prompt = event.systemPromptOptions.sections.openui ?? "";
+		expect(prompt).toContain("@Answer");
+		expect(prompt).toContain("openui_reference");
+		expect(prompt.length).toBeLessThan(1200);
+		for (const forbidden of [
+			"ENTIRE response",
+			"generate realistic/plausible data",
+			"never mention colours",
+			"## Component Signatures",
+		])
+			expect(prompt).not.toContain(forbidden);
 		await h.commands.openui?.handler("off", h.ctx);
 		expect(h.active()).not.toContain(TOOL);
+		expect(h.active()).not.toContain("openui_reference");
 		await h.emit("before_agent_start", event);
 		expect(event.systemPromptOptions.sections.openui).toBeUndefined();
+	});
+
+	test("reference is paged on demand and contains syntax, not global behavior directives", async () => {
+		const h = host([{ type: "custom", customType: STATE_ENTRY, data: { enabled: true } }]);
+		await h.emit("session_start", {});
+		type Page = { text: string; offset: number; nextOffset: number | null; totalChars: number };
+		let offset = 0;
+		let reference = "";
+		let totalChars = 0;
+		do {
+			const result = (await h.tools.openui_reference?.execute("ref", { offset, limit: 6000 }, undefined, undefined, h.ctx)) as {
+				structuredContent: Page;
+			};
+			const page = result.structuredContent;
+			expect(page.offset).toBe(offset);
+			expect(page.text.length).toBeLessThanOrEqual(6000);
+			reference += page.text;
+			totalChars = page.totalChars;
+			offset = page.nextOffset ?? totalChars;
+		} while (offset < totalChars);
+		expect(reference.length).toBe(totalChars);
+		expect(reference).toContain("## Syntax Rules");
+		expect(reference).toContain("## Component Signatures");
+		expect(reference).toContain("@Answer");
+		for (const forbidden of [
+			"ENTIRE response",
+			"generate realistic/plausible data",
+			"never mention colours",
+			"## Final Verification",
+		])
+			expect(reference).not.toContain(forbidden);
+		await expect(
+			h.tools.openui_reference?.execute("ref", { offset: totalChars + 1 }, undefined, undefined, h.ctx)
+		).rejects.toThrow("offset");
 	});
 
 	test("state survives reload: reconstructed from the active branch", async () => {
