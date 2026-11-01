@@ -24,6 +24,8 @@ export type ClientCommand =
 	| { id?: string; type: "steer"; message: string }
 	| { id?: string; type: "follow_up"; message: string }
 	| { id?: string; type: "abort" }
+	// Reload extensions now, or once the current run and compaction finish.
+	| { id?: string; type: "reload" }
 	| { id?: string; type: "clear_queue" }
 	// session
 	| { id?: string; type: "new_session"; parentSession?: string }
@@ -135,6 +137,7 @@ export const COMMAND_TYPES: readonly string[] = [
 	"abort_bash",
 	"extension_ui_response",
 	"lease",
+	"reload",
 ];
 
 /** Parse one received line. Empty/whitespace-only lines report `empty: true`. */
@@ -205,6 +208,7 @@ export function validateCommand(value: unknown): CommandResult {
 			return { ok: true, command: { id, type, message } };
 		}
 		case "abort":
+		case "reload":
 		case "clear_queue":
 		case "get_state":
 		case "get_messages":

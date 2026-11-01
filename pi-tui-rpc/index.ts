@@ -63,6 +63,7 @@ import {
 	validateCommand,
 	wireEventData,
 } from "./protocol.js";
+import { createReloader } from "./reload.js";
 import { defaultSocketPath } from "./socket-path.js";
 
 const STATUS_KEY = "pi_tui_rpc";
@@ -170,6 +171,9 @@ interface SessionSnapshot {
 	messageCount: number;
 	lease: LeaseOwner;
 }
+
+/** Slash command behind the RPC `reload`; also usable directly in the TUI. */
+const RELOAD_COMMAND = "reload-when-idle";
 
 /** Upper bound for the human takeover prompt (seconds; 0 = unbounded). */
 const TAKEOVER_PROMPT_TIMEOUT_S = 120;
@@ -282,6 +286,30 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
+	// One reloader per extension runtime; a reload replaces this runtime.
+	const reloader = createReloader({
+		isCompacting: () => compacting,
+		onState: (state, detail) => {
+			hub?.broadcast(eventFrame("reload", { state, ...(detail ? { detail } : {}) }));
+			const ctx = currentCtx;
+			if (!ctx || isRpcMode || !ctx.hasUI) return;
+			try {
+				if (state === "queued") ctx.ui.notify("Reload queued: it runs when the current turn finishes.", "info");
+				if (state === "failed") ctx.ui.notify(`Reload failed: ${detail ?? "unknown error"}`, "error");
+			} catch {
+				// UI not ready; the event frame still informs clients.
+			}
+		},
+	});
+
+	// Command handlers get the command context that owns waitForIdle()/reload().
+	pi.registerCommand(RELOAD_COMMAND, {
+		description: "Reload extensions, skills and settings now, or when the current turn finishes",
+		handler: async (_args, ctx) => {
+			reloader.request(ctx);
+		},
+	});
+
 	const settleCompaction = (): void => {
 		if (!compacting) return;
 		compacting = false;
@@ -306,6 +334,15 @@ export default function (pi: ExtensionAPI) {
 			},
 			abort: () => {
 				ctx?.abort();
+			},
+			requestReload: () => {
+				if (!ctx) return "unavailable";
+				const state = reloader.preview(!ctx.isIdle());
+				if (state !== "already_pending") {
+					// Runs the command above, even mid-run, with a command context.
+					pi.sendUserMessage(`/${RELOAD_COMMAND}`, { expandPromptTemplates: true });
+				}
+				return state;
 			},
 			getState: () => ({ ...snapshot() }),
 			getMessages: () => (ctx ? ctx.sessionManager.getBranch() : []),
@@ -531,7 +568,7 @@ export default function (pi: ExtensionAPI) {
 					pid: process.pid,
 					lease: lease.owner(),
 					commands: COMMAND_TYPES,
-					capabilities: ["connection_leases_v1"],
+					capabilities: ["connection_leases_v1", "reload_when_idle_v1"],
 				});
 			},
 			onDisconnect: (clientId) => lease.disconnect(clientId),
@@ -571,6 +608,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (event) => {
+		reloader.shutdown((event as { reason?: string }).reason ?? "quit");
 		hub?.broadcast(eventFrame("session_shutdown", wireEventData("session_shutdown", event)));
 		currentCtx = null;
 		lease.reset("session_shutdown");

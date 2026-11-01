@@ -101,6 +101,9 @@ test("opt-in confirmation: real sockets fence controllers, disconnect, terminal 
 		sendUserMessage: (message: string) => {
 			sent.push(message);
 		},
+		registerCommand() {
+			/* Commands are exercised in reload.socket.test.ts. */
+		},
 	};
 	const emit = async (name: string, event: Frame = {}) => {
 		const handler = handlers.get(name);

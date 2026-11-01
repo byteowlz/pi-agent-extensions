@@ -118,6 +118,10 @@ install-all:
     echo "Done: $count extensions installed."
     echo "Run /reload in pi to pick up changes."
 
+# Reload every live Pi here (working ones when their turn ends); see pi-tui-rpc/README.md
+reload-all *ARGS:
+    node "{{ SRC_DIR }}/pi-tui-rpc/reload-all.mjs" {{ ARGS }}
+
 # === Status ===
 
 # Show which extensions are installed and their sync status

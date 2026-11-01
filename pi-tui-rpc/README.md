@@ -73,6 +73,21 @@ Remote lease requests are granted immediately; the terminal revokes on any inter
   the user with mode 0700 (systemd: `/run/user/<uid>`); otherwise `${TMPDIR:-/tmp}`.
   The shared `/tmp` is refused by an Oqto Runner as a socket root.
 
+### Reloading every live Pi
+
+`/reload-when-idle` (also behind the `reload` command) reloads a Pi now, or queues it until
+its turn finishes. To reload every Pi on a machine:
+
+```bash
+just reload-all             # or: node pi-tui-rpc/reload-all.mjs [--dry-run] [--json]
+just reload-all --legacy-herdr --wait
+```
+
+Pis that still run an older pi-tui-rpc (no `reload` in their hello) cannot reload over the
+socket. `--legacy-herdr` types `/reload` into their herdr pane, only when the Pi is idle and its
+input box is empty, so a draft is never submitted; `--wait` re-checks working ones until
+`--timeout` seconds (default 1800). After one reload they carry the socket command.
+
 ## Protocol (v0)
 
 Strict JSONL: LF (`\n`) is the only record delimiter; a single trailing `\r` is tolerated.
@@ -88,6 +103,7 @@ Strict JSONL: LF (`\n`) is the only record delimiter; a single trailing `\r` is 
 | `get_state` | — | Mode, cwd, session ids/name, routing description, model, thinking level, streaming, `isCompacting`, lease |
 | `get_messages` | — | Current branch entries |
 | `lease` | `action: request\|release` | Granted at once; confirm dialog only with `PI_TUI_RPC_LEASE_CONFIRM=1` |
+| `reload` | — | Reload extensions, skills and settings now when idle, or once the current turn and compaction finish. No lease; nothing reaches the model. Replies `{reload:"reloading"\|"queued"\|"already_pending"}`; broadcasts `reload` events (`queued`, `reloading`, `failed`). Hello capability `reload_when_idle_v1` |
 
 Responses: `{"type":"response","id":…,"command":…,"success":…,"data"|"error":…}`.
 

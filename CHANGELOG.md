@@ -4,6 +4,17 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Reload every live Pi without interrupting work
+
+- **pi-tui-rpc**: new `reload` socket command and `/reload-when-idle` slash
+  command. An idle Pi reloads extensions, skills and settings at once; a working
+  one queues the reload until its turn and any compaction finish (retried if a
+  queued follow-up starts the next turn first). No input lease, nothing sent to
+  the model; hello capability `reload_when_idle_v1`, `reload` events report
+  progress. `just reload-all` reloads every live Pi on a machine; Pis on an older
+  pi-tui-rpc get a herdr-typed `/reload` only when idle with an empty input box
+  (`--legacy-herdr`, `--wait`).
+
 ### Agent wake-up tool (3.2.0)
 
 - **pi-schedule 0.3.0**: the `sleep` tool lets the model end its turn and be

@@ -24,6 +24,8 @@ export interface ModelSummary {
 
 export interface RpcDeps {
 	isStreaming(): boolean;
+	/** Reload extensions when idle; queued while a run or compaction is going. */
+	requestReload?(): "reloading" | "queued" | "already_pending" | "unavailable";
 	sendUserMessage(message: string, options?: { deliverAs?: StreamingBehavior }): unknown | Promise<unknown>;
 	abort(): void;
 	getState(): Promise<Record<string, unknown>> | Record<string, unknown>;
@@ -81,7 +83,9 @@ function unsupported(what: string): DispatchResult {
 }
 
 export async function dispatchCommand(command: ClientCommand, deps: RpcDeps): Promise<DispatchResult> {
-	if (command.type !== "lease" && !OBSERVATION_COMMANDS.has(command.type) && !deps.leaseHeld()) {
+	// A reload never sends input to the agent and waits for it to be idle, so it
+	// is an operator action on this socket, not something gated by the input lease.
+	if (command.type !== "lease" && command.type !== "reload" && !OBSERVATION_COMMANDS.has(command.type) && !deps.leaseHeld()) {
 		return { success: false, error: "lease_denied:connection_does_not_own_input" };
 	}
 
@@ -95,6 +99,11 @@ export async function dispatchCommand(command: ClientCommand, deps: RpcDeps): Pr
 		case "abort":
 			deps.abort();
 			return { success: true, data: { aborted: true } };
+		case "reload": {
+			const state = deps.requestReload?.() ?? "unavailable";
+			if (state === "unavailable") return { success: false, error: "reload: this Pi offers no command context to reload from" };
+			return { success: true, data: { reload: state } };
+		}
 		case "clear_queue":
 			return unsupported("clear_queue: pi's extension API exposes no message queue access");
 
