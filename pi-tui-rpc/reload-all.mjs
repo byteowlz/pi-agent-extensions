@@ -2,7 +2,7 @@
 /**
  * Reload every live Pi on this machine that runs pi-tui-rpc.
  *
- *   node reload-all.mjs [--dry-run] [--json] [--legacy-herdr] [--wait] [--timeout <s>]
+ *   node reload-all.mjs [--dry-run] [--json] [--legacy-herdr] [--wait] [--timeout <s>] [--pid <n>]
  *
  * Pis with this extension's `reload` command reload now when idle; working ones
  * queue it and reload when their turn (and any compaction) finishes. Nothing is
@@ -32,6 +32,8 @@ const json = has("--json");
 const legacyHerdr = has("--legacy-herdr");
 const wait = has("--wait");
 const timeoutMs = Number(value("--timeout") ?? 1800) * 1000;
+/** Only this Pi process (repeatable). */
+const onlyPids = args.flatMap((arg, at) => (arg === "--pid" ? [Number(args[at + 1])] : []));
 
 /** Same rule as socket-path.ts: a private XDG_RUNTIME_DIR on Linux, else tmpdir. */
 function socketDirectory() {
@@ -182,7 +184,7 @@ async function main() {
 		.map((name) => /^pi-tui-rpc-(\d+)\.sock$/.exec(name))
 		.filter(Boolean)
 		.map((match) => ({ pid: Number(match[1]), socket: path.join(dir, match[0]) }))
-		.filter(({ pid }) => alive(pid));
+		.filter(({ pid }) => alive(pid) && (onlyPids.length === 0 || onlyPids.includes(pid)));
 	const pis = [];
 	for (const { pid, socket } of sockets) pis.push(await inspect(socket, pid));
 	const agents = legacyHerdr ? herdrAgents() : null;
