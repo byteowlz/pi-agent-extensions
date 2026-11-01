@@ -162,7 +162,8 @@ async function reloadLegacy(pi, agents) {
 	if (!legacyHerdr) return "legacy: run /reload in this Pi once (or pass --legacy-herdr)";
 	if (!agents) return "legacy: herdr unavailable";
 	const agent = agents.find((a) => a.agent === "pi" && a.agent_session?.value === pi.sessionFile);
-	if (!agent) return "legacy: not in a herdr pane";
+	// herdr's session identity can lag a session switch; --wait looks again.
+	if (!agent) return "legacy-unmatched";
 	if (pi.working || agent.agent_status === "working" || agent.agent_status === "blocked") return "legacy-busy";
 	if (!editorEmpty(agent.pane_id)) return "legacy: input box not empty, skipped";
 	if (dryRun) return "legacy: would type /reload";
@@ -203,10 +204,11 @@ async function main() {
 	}
 	// Legacy Pis that were working: re-check until idle when asked to wait.
 	const startedAt = Date.now();
-	while (wait && legacyHerdr && !dryRun && rows.some((r) => r.result === "legacy-busy") && Date.now() - startedAt < timeoutMs) {
+	const retryable = (result) => result === "legacy-busy" || result === "legacy-unmatched";
+	while (wait && legacyHerdr && !dryRun && rows.some((r) => retryable(r.result)) && Date.now() - startedAt < timeoutMs) {
 		await new Promise((resolve) => setTimeout(resolve, 5000));
 		const fresh = herdrAgents();
-		for (const row of rows.filter((r) => r.result === "legacy-busy")) {
+		for (const row of rows.filter((r) => retryable(r.result))) {
 			const now = await inspect(row.socket, row.pid);
 			if (!now.reachable) {
 				row.result = "gone";
@@ -217,10 +219,13 @@ async function main() {
 				continue;
 			}
 			const result = await reloadLegacy({ ...row, ...now }, fresh);
-			if (result !== "legacy-busy") row.result = result;
+			row.result = result;
 		}
 	}
-	for (const row of rows) if (row.result === "legacy-busy") row.result = "legacy: working, not reloaded (use --wait)";
+	for (const row of rows) {
+		if (row.result === "legacy-busy") row.result = "legacy: working, not reloaded (use --wait)";
+		if (row.result === "legacy-unmatched") row.result = "legacy: not in a herdr pane";
+	}
 	if (json) {
 		console.log(JSON.stringify(rows.map(({ socket, sessionFile, ...rest }) => rest), null, 2));
 		return;
