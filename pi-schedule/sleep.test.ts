@@ -144,13 +144,19 @@ describe("wake messages and presentation", () => {
 		expect(formatWakes([], now)).toContain("no pending wake-ups");
 		const listing = formatWakes(
 			[
-				{ id: "sleep-1", note: "check the build", durationMs: 1_200_000, createdAt: "", fireAt: "2026-10-29T10:14:00.000Z" },
+				{
+					id: "sleep-1",
+					note: "check the build",
+					durationMs: 1_200_000,
+					createdAt: "2026-10-29T09:46:00.000Z",
+					fireAt: "2026-10-29T10:14:00.000Z",
+				},
 				{ id: "sleep-2", note: "", durationMs: 60_000, createdAt: "", fireAt: "2026-10-29T09:00:00.000Z" },
 			],
 			now
 		);
-		expect(listing).toContain("1. sleep-1 · in 14m · 20m sleep — check the build");
-		expect(listing).toContain("2. sleep-2 · in 0s · 1m sleep");
+		expect(listing).toMatch(/1\. sleep-1 · in 14m · set \d{2}:\d{2} · 20m sleep — check the build/);
+		expect(listing).toContain("2. sleep-2 · in 0s · set ??:?? · 1m sleep");
 	});
 
 	test("sleepStatus reports the soonest wake or undefined", () => {
@@ -163,10 +169,10 @@ describe("wake messages and presentation", () => {
 			],
 			now
 		);
-		expect(soonest).toBe("zzz 5m");
+		expect(soonest).toBe("zzz 5m/1m");
 		expect(
 			sleepStatus([{ id: "sleep-1", note: "", durationMs: 60_000, createdAt: "", fireAt: "2026-10-29T09:00:00.000Z" }], now)
-		).toBe("zzz 0s");
+		).toBe("zzz 0s/1m");
 	});
 });
 
@@ -182,19 +188,24 @@ describe("sleepNotice (herdr message)", () => {
 	});
 
 	test("empty set says so", () => {
-		expect(sleepNotice([], now)).toBe("no pending wake-ups");
+		expect(sleepNotice([])).toBe("no pending wake-ups");
 	});
 
 	test("single wake carries duration, id, clock and note", () => {
-		const notice = sleepNotice([wake({ note: "check the build" })], now);
+		const notice = sleepNotice([wake({ note: "check the build" })]);
 		expect(notice).toMatch(/^sleeping 20m — sleep-1 wakes \d{2}:\d{2} · check the build$/);
-		expect(sleepNotice([wake()], now)).not.toContain("·");
+		expect(sleepNotice([wake()])).not.toContain("·");
 	});
 
 	test("long notes are truncated", () => {
-		const notice = sleepNotice([wake({ note: "x".repeat(60) })], now);
+		const notice = sleepNotice([wake({ note: "x".repeat(60) })]);
 		expect(notice).toContain("…");
 		expect(notice.length).toBeLessThan(90);
+	});
+
+	test("single wake reports when it was set", () => {
+		const notice = sleepNotice([wake({ createdAt: "2026-10-29T09:46:00.000Z" })]);
+		expect(notice).toMatch(/^sleeping 20m \(started \d{2}:\d{2}\) — sleep-1 wakes \d{2}:\d{2}$/);
 	});
 
 	test("multiple wakes report the soonest", () => {
@@ -202,7 +213,7 @@ describe("sleepNotice (herdr message)", () => {
 			[wake({ id: "sleep-2", fireAt: "2026-10-29T10:30:00.000Z" }), wake({ id: "sleep-1", fireAt: "2026-10-29T10:14:00.000Z" })],
 			now
 		);
-		expect(notice).toMatch(/^2 wake-ups pending — next sleep-1 at \d{2}:\d{2} \(in 14m\)$/);
+		expect(notice).toMatch(/^2 wake-ups pending — next sleep-1 wakes \d{2}:\d{2}$/);
 	});
 });
 

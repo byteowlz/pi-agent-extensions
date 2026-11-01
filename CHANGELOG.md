@@ -4,6 +4,14 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Sleep timing surfaces (3.4.0)
+
+- **pi-schedule 0.5.0**: the sleep tool result records the fire time, the
+  footer countdown ticks live (`zzz 12m/20m`, 30s republish), `/sleep` shows
+  each wake's set time, and the herdr notice gains when the sleep was started
+  (`sleeping 20m (started 15:22) — sleep-1 wakes 15:42`) — absolute clocks
+  only, sent once per change so republishes never re-send it.
+
 ### Reload every live Pi without interrupting work
 
 - **pi-tui-rpc**: new `reload` socket command and `/reload-when-idle` slash

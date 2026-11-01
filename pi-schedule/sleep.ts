@@ -246,24 +246,29 @@ export function formatWakes(wakes: readonly Wake[], now = Date.now()): string {
 		const inMs = Number.isFinite(fireAt) ? fireAt - now : 0;
 		const note = wake.note.trim() ? ` — ${wake.note.trim()}` : "";
 		lines.push(
-			`${index + 1}. ${wake.id} · in ${formatDuration(Math.max(0, inMs))} · ${formatInterval(wake.durationMs)} sleep${note}`
+			`${index + 1}. ${wake.id} · in ${formatDuration(Math.max(0, inMs))} · set ${formatClock(wake.createdAt)} · ${formatInterval(wake.durationMs)} sleep${note}`
 		);
 	});
 	return lines.join("\n");
 }
 
-/** Footer segment for pending wakes: "zzz 14m", or undefined when none. */
+/** Footer segment for pending wakes: "zzz 12m/20m" (remaining/total of the soonest), or undefined. */
 export function sleepStatus(wakes: readonly Wake[], now = Date.now()): string | undefined {
 	if (wakes.length === 0) return undefined;
-	let soonest = Number.POSITIVE_INFINITY;
+	let soonestFire = Number.POSITIVE_INFINITY;
+	let soonestTotal = 0;
 	for (const wake of wakes) {
 		const fireAt = Date.parse(wake.fireAt);
-		if (Number.isFinite(fireAt)) soonest = Math.min(soonest, fireAt - now);
+		if (Number.isFinite(fireAt) && fireAt < soonestFire) {
+			soonestFire = fireAt;
+			soonestTotal = wake.durationMs;
+		}
 	}
-	return `zzz ${formatDuration(Math.max(0, soonest))}`;
+	return `zzz ${formatDuration(Math.max(0, soonestFire - now))}/${formatDuration(soonestTotal)}`;
 }
 
-function formatClock(iso: string): string {
+/** Local HH:MM for a stored ISO timestamp (tool results, notices, listings). */
+export function formatClock(iso: string): string {
 	const date = new Date(iso);
 	return Number.isFinite(date.getTime()) ? date.toTimeString().slice(0, 5) : "??:??";
 }
@@ -274,17 +279,17 @@ function truncate(text: string, max: number): string {
 
 /**
  * One-line notice for external state consumers (herdr report-agent --message):
- * what the session is waiting on and when it resumes. Lifecycle stays idle —
- * nothing is running — the message carries the schedule.
+ * when the sleep was set and when it fires. Absolute clock times only — the
+ * message is sent once per change, so a countdown would go stale in it.
  */
-export function sleepNotice(wakes: readonly Wake[], now = Date.now()): string {
+export function sleepNotice(wakes: readonly Wake[]): string {
 	if (wakes.length === 0) return "no pending wake-ups";
 	const sorted = [...wakes].sort((a, b) => Date.parse(a.fireAt) - Date.parse(b.fireAt));
 	const soonest = sorted[0] as Wake;
 	if (wakes.length === 1) {
 		const note = soonest.note.trim() ? ` · ${truncate(soonest.note.trim(), 40)}` : "";
-		return `sleeping ${formatInterval(soonest.durationMs)} — ${soonest.id} wakes ${formatClock(soonest.fireAt)}${note}`;
+		const started = soonest.createdAt ? ` (started ${formatClock(soonest.createdAt)})` : "";
+		return `sleeping ${formatInterval(soonest.durationMs)}${started} — ${soonest.id} wakes ${formatClock(soonest.fireAt)}${note}`;
 	}
-	const inMs = Math.max(0, Date.parse(soonest.fireAt) - now);
-	return `${wakes.length} wake-ups pending — next ${soonest.id} at ${formatClock(soonest.fireAt)} (in ${formatDuration(inMs)})`;
+	return `${wakes.length} wake-ups pending — next ${soonest.id} wakes ${formatClock(soonest.fireAt)}`;
 }

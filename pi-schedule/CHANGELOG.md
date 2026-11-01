@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0
+
+- **Sleep timing is visible everywhere it matters**: the tool result records
+  the fire time (`fires at 15:42`), the footer countdown ticks live
+  (`zzz 12m/20m`, re-published every 30s instead of freezing after publish),
+  `/sleep` lists each wake's set time, and the herdr notice carries when the
+  sleep was started: `sleeping 20m (started 15:22) — sleep-1 wakes 15:42`.
+- The herdr notice is absolute-clock only and sent once per change, so the
+  periodic footer republish never re-sends it (no seq churn against the
+  herdr ledger); the countdown removed from the notice was stale-prone.
+
 ## 0.4.0
 
 - **herdr state reporting**: while a wake-up is pending in a herdr pane, the

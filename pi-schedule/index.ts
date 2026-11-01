@@ -51,6 +51,7 @@ import {
 	type SleepConfig,
 	addWake,
 	clearWake,
+	formatClock,
 	formatWakes,
 	loadSleepConfig,
 	readWakes,
@@ -432,6 +433,7 @@ export default function piSchedule(pi: ExtensionAPI): void {
 	const disarmSleeps = (): void => {
 		for (const timer of sleepTimers.values()) clearTimeout(timer);
 		sleepTimers.clear();
+		stopSleepTicker();
 	};
 
 	const publishSleepStatus = (ctx: ExtensionContext | undefined): void => {
@@ -439,13 +441,29 @@ export default function piSchedule(pi: ExtensionAPI): void {
 		try {
 			const pending = readWakes(sessionKey(ctx));
 			ctx.ui.setStatus("sleep", sleepStatus(pending));
+			if (pending.length > 0) ensureSleepTicker();
+			else stopSleepTicker();
 			// herdr stays truthful: idle + notice while a wake is pending, released
-			// once the pending set is empty (herdr.ts gates on HERDR_ENV).
+			// once the pending set is empty (herdr.ts gates on HERDR_ENV). Its
+			// notice is absolute-clock only, so ticker republishes never re-send it.
 			if (pending.length > 0) herdrSleeping(sleepNotice(pending));
 			else herdrResume();
 		} catch {
 			// status is cosmetic
 		}
+	};
+
+	/** Status text is set once per publish; this re-publishes so the countdown ticks. */
+	let sleepTicker: ReturnType<typeof setInterval> | undefined;
+	const ensureSleepTicker = (): void => {
+		if (sleepTicker) return;
+		sleepTicker = setInterval(() => publishSleepStatus(ctxRef), 30_000);
+		sleepTicker.unref?.();
+	};
+	const stopSleepTicker = (): void => {
+		if (!sleepTicker) return;
+		clearInterval(sleepTicker);
+		sleepTicker = undefined;
 	};
 
 	/** mode "off" hides the tool from the model; takes effect on session start/reload. */
@@ -534,7 +552,7 @@ export default function piSchedule(pi: ExtensionAPI): void {
 					content: [
 						{
 							type: "text",
-							text: `Sleeping for ${formatInterval(wake.durationMs)} (wake ${wake.id}). Your turn ends now; the "[wake-up]" message${note ? " with your note" : ""} will wake you.`,
+							text: `Sleeping for ${formatInterval(wake.durationMs)} (wake ${wake.id}, fires at ${formatClock(wake.fireAt)}). Your turn ends now; the "[wake-up]" message${note ? " with your note" : ""} will wake you.`,
 						},
 					],
 					details: { id: wake.id, durationMs: wake.durationMs, fireAt: wake.fireAt, note } satisfies SleepDetails,
