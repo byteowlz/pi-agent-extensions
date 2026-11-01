@@ -86,7 +86,8 @@ just reload-all --legacy-herdr --wait
 Pis that still run an older pi-tui-rpc (no `reload` in their hello) cannot reload over the
 socket. `--legacy-herdr` types `/reload` into their herdr pane, only when the Pi is idle and its
 input box is empty, so a draft is never submitted; `--wait` re-checks working ones until
-`--timeout` seconds (default 1800). After one reload they carry the socket command.
+`--timeout` seconds (default 1800). After one reload they carry the socket command. `--legacy-only` skips Pis that
+already have it (a follow-up pass), `--pid <n>` targets one Pi.
 
 ## Protocol (v0)
 

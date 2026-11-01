@@ -2,7 +2,7 @@
 /**
  * Reload every live Pi on this machine that runs pi-tui-rpc.
  *
- *   node reload-all.mjs [--dry-run] [--json] [--legacy-herdr] [--wait] [--timeout <s>] [--pid <n>]
+ *   node reload-all.mjs [--dry-run] [--json] [--legacy-herdr] [--wait] [--timeout <s>] [--pid <n>] [--legacy-only]
  *
  * Pis with this extension's `reload` command reload now when idle; working ones
  * queue it and reload when their turn (and any compaction) finishes. Nothing is
@@ -31,6 +31,8 @@ const dryRun = has("--dry-run");
 const json = has("--json");
 const legacyHerdr = has("--legacy-herdr");
 const wait = has("--wait");
+/** Skip Pis that already carry `reload` (a follow-up pass for the old ones). */
+const legacyOnly = has("--legacy-only");
 const timeoutMs = Number(value("--timeout") ?? 1800) * 1000;
 /** Only this Pi process (repeatable). */
 const onlyPids = args.flatMap((arg, at) => (arg === "--pid" ? [Number(args[at + 1])] : []));
@@ -195,7 +197,9 @@ async function main() {
 			rows.push({ ...pi, result: `unreachable (${pi.error})` });
 			continue;
 		}
-		if (pi.reloadCapable) {
+		if (pi.reloadCapable && legacyOnly) {
+			rows.push({ ...pi, result: "current, skipped" });
+		} else if (pi.reloadCapable) {
 			const result = dryRun ? (pi.working ? "would queue" : "would reload") : await reloadModern(pi);
 			rows.push({ ...pi, result });
 		} else {
@@ -227,12 +231,20 @@ async function main() {
 		if (row.result === "legacy-unmatched") row.result = "legacy: not in a herdr pane";
 	}
 	if (json) {
-		console.log(JSON.stringify(rows.map(({ socket, sessionFile, ...rest }) => rest), null, 2));
+		console.log(
+			JSON.stringify(
+				rows.map(({ socket, sessionFile, ...rest }) => rest),
+				null,
+				2
+			)
+		);
 		return;
 	}
 	for (const row of rows) {
 		const where = row.cwd ? path.basename(row.cwd) : "?";
-		console.log(`${String(row.pid).padEnd(7)} ${(row.working ? "working" : "idle").padEnd(8)} ${where.padEnd(22).slice(0, 22)} ${(row.session ?? "").slice(0, 40).padEnd(40)} ${row.result}`);
+		console.log(
+			`${String(row.pid).padEnd(7)} ${(row.working ? "working" : "idle").padEnd(8)} ${where.padEnd(22).slice(0, 22)} ${(row.session ?? "").slice(0, 40).padEnd(40)} ${row.result}`
+		);
 	}
 	const count = (predicate) => rows.filter(predicate).length;
 	console.log(
