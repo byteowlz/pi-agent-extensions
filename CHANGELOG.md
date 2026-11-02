@@ -4,6 +4,21 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Subagent identity notice and tab naming (3.5.0)
+
+- **pi-session-tools**: every delegated prompt now opens with a one-line notice
+  (`Subagent notice: you are a subagent (…)`) stating that a parent pi session
+  reads the final message and is notified when the child goes idle, so a spawned
+  agent cannot mistake itself for its parent. `/subagent reset <name> <task>`
+  re-prompts carry the same notice; the task text itself is unchanged below it.
+- Herdr tab labels leave out the readable id by default (`[sub] Title`). New
+  `subagent-config.json` key `tabLabelStyle: "title" | "session"`; the Pi
+  session name always keeps the canonical `[sub] Title [readable-id]`. `/subagent
+  status` reports the setting.
+- **pi-auto-rename 1.6.3**: exports `stripReadableIdSuffix` (now also used by its
+  own title sanitizer) so display labels can drop the id without re-implementing
+  the pattern.
+
 ### Sleep timing surfaces (3.4.0)
 
 - **pi-schedule 0.5.0**: the sleep tool result records the fire time, the

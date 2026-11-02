@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.3
+
+- Export `stripReadableIdSuffix` so consumers (pi-session-tools Herdr tab
+  labels) can drop the readable id from display names; the internal title
+  sanitizer now reuses it. No behavior change for session names.
+
 ## 1.6.2
 
 - Disable outbound Herdr/tmux tab-title sync by default so session naming does

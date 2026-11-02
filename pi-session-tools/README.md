@@ -33,9 +33,14 @@ and manifests when deploying; do not load both the old and renamed entry points.
 
 Spawned Pi sessions receive `[sub] Title [readable-id]` immediately via explicit
 `--name` and a fresh `--session-id`. The spawning agent provides the title with
-`tabLabel` (otherwise a bounded task excerpt is used). The suffix belongs to the
-child session, and the Herdr tab has the same label. Canonical naming is supplied
-by the collection's `pi-auto-rename` module; include that directory when deploying.
+`tabLabel` (otherwise a bounded task excerpt is used). The readable id belongs to
+the child session: it is always part of the Pi session name (so `pi -r` and
+side-by-side children stay distinguishable), while the Herdr **tab label**
+leaves it out by default (`[sub] Title`). Set `"tabLabelStyle": "session"` in
+`subagent-config.json` to give the tab the full session name instead. Canonical
+naming is supplied by the collection's `pi-auto-rename` module; include that
+directory when deploying. `pi-auto-rename`'s own `readableIdSuffix` setting does
+not govern subagent names, and `syncTabTitle` is off unless you enable it.
 
 Subagent tabs target the live calling pane's workspace explicitly, never the
 workspace currently focused by the user. Missing or changed calling-workspace
@@ -87,7 +92,7 @@ agent's context. Default is `spawn`.
 | `kind` | no | herdr agent kind, e.g. `pi` (default), `claude`, `codex` |
 | `model` | no | pi model id (for `kind=pi`). Defaults to the current model |
 | `loadout` | no | Named loadout that gates/chooses the model (see "Model catalog") |
-| `tabLabel` | no | Label for the new herdr tab |
+| `tabLabel` | no | Title for the new herdr tab (task excerpt if omitted) |
 | `cwd` | no | Working directory. Defaults to the current directory |
 
 `spawn` flow (via the herdr CLI):
@@ -95,7 +100,9 @@ agent's context. Default is `spawn`.
 1. `herdr tab create --label <label> --cwd <cwd> --no-focus`
 2. `herdr agent start <name> --kind <kind> --pane <pane> [-- --model <model>]`
    (`--model` is passed only when `kind=pi`)
-3. `herdr agent prompt <name> "<task>"` (async — no `--wait`)
+3. `herdr agent prompt <name> "<task>"` (async — no `--wait`). The task is
+   prefixed with a one-line notice stating that this session is a subagent whose
+   final message the parent reads, so the child never mistakes itself for the parent.
 
 The subagent is named `sub-<random>`, so it is counted and listed.
 
@@ -432,6 +439,7 @@ Deliberate properties:
   "allowMode": "confirm",
   "autoDecision": "deny",
   "confirmTimeoutMs": 60000,
+  "tabLabelStyle": "title",
   "loadouts": {}
 }
 ```
@@ -449,6 +457,9 @@ Deliberate properties:
   indefinitely (opt-out; capped at one hour otherwise, and `/subagent timeout <ms>`
   sets it per session).
 - `loadouts` — named model-presets (globs), managed via `/subagent models loadout`.
+- `tabLabelStyle` — what the Herdr tab shows: `title` (default) is `[sub] Title`,
+  `session` is the full `[sub] Title [readable-id]` session name. The Pi session
+  name always keeps the readable id.
 
 ## Per-session state
 

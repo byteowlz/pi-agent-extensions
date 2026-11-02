@@ -84,7 +84,7 @@ import {
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { buildSubagentSessionName } from "../pi-auto-rename/index.js";
+import { buildSubagentSessionName, stripReadableIdSuffix } from "../pi-auto-rename/index.js";
 import { STATUS_QUERY, type StatusQuery } from "../pi-introspection/contributions.js";
 import { openTmuxSide, resolveRoute } from "./backend.js";
 import {
@@ -104,6 +104,7 @@ import { isLiveSession, shouldReconnect } from "./lifecycle.js";
 import { fitEntries, fitText } from "./output-budget.js";
 import { subagentOutputSchema, subagentResult } from "./output.js";
 import { forkBoundaryMessage, sideLaunch } from "./side-launch.js";
+import { subagentTaskPrompt } from "./subagent-prompt.js";
 
 /** A named subagent profile: model allowlist plus optional mode/cap/kind. */
 export interface PresetLoadout {
@@ -210,8 +211,16 @@ interface SubagentConfig {
 	autoDecision: AutoDecision;
 	confirmTimeoutMs: number;
 	loadouts: Record<string, LoadoutDef>;
+	/** Herdr tab label: "title" drops the readable id, "session" reuses the full session name. */
+	tabLabelStyle: TabLabelStyle;
 	/** Path to the byteowlz model catalog (metadata + loadouts + policy). */
 	catalogPath?: string;
+}
+
+type TabLabelStyle = "title" | "session";
+
+function asTabLabelStyle(v: unknown): TabLabelStyle | undefined {
+	return v === "title" || v === "session" ? v : undefined;
 }
 
 const DEFAULT_CONFIG: SubagentConfig = {
@@ -224,6 +233,7 @@ const DEFAULT_CONFIG: SubagentConfig = {
 	autoDecision: "deny",
 	confirmTimeoutMs: 60_000,
 	loadouts: {},
+	tabLabelStyle: "title",
 	catalogPath: path.join(os.homedir(), ".pi", "agent", "model-catalog.json"),
 };
 
@@ -268,6 +278,7 @@ function loadConfig(): SubagentConfig {
 					typeof raw.confirmTimeoutMs === "number" ? raw.confirmTimeoutMs : DEFAULT_CONFIG.confirmTimeoutMs
 				),
 				loadouts,
+				tabLabelStyle: asTabLabelStyle(raw.tabLabelStyle) ?? DEFAULT_CONFIG.tabLabelStyle,
 				catalogPath: typeof raw.catalogPath === "string" ? raw.catalogPath : DEFAULT_CONFIG.catalogPath,
 			};
 		}
@@ -2478,7 +2489,7 @@ async function resetSubagent(ctx: ExtensionContext, token: string, instruction?:
 	t.gone = false;
 	persistState();
 	if (instruction) {
-		await herdr(["agent", "prompt", t.name, instruction]);
+		await herdr(["agent", "prompt", t.name, subagentTaskPrompt(instruction, { label: t.label })]);
 		t.status = "working";
 		persistState();
 		startNotifyTimer(piRef, ctx);
@@ -2778,7 +2789,8 @@ export default function sessionTools(pi: ExtensionAPI) {
 				const sessionId = randomUUID();
 				const title = params.tabLabel ?? (params.task.replace(/\s+/g, " ").slice(0, 80).trim() || "Subagent");
 				const label = buildSubagentSessionName(title, sessionId, cwd);
-				const detail = `Tab: ${label}\nKind: ${kind}\nModel: ${model}\nCwd: ${cwd}\n\nTask:\n${params.task.slice(0, 400)}${params.task.length > 400 ? "\n…" : ""}`;
+				const tabLabel = config.tabLabelStyle === "session" ? label : stripReadableIdSuffix(label);
+				const detail = `Tab: ${tabLabel}\nKind: ${kind}\nModel: ${model}\nCwd: ${cwd}\n\nTask:\n${params.task.slice(0, 400)}${params.task.length > 400 ? "\n…" : ""}`;
 				assertActive();
 				const approval = await approveSpawn({ ...ctx, signal: _signal ?? ctx.signal }, config, detail, kind === "pi");
 				assertActive();
@@ -2800,7 +2812,7 @@ export default function sessionTools(pi: ExtensionAPI) {
 					// Once dispatched, a lost response cannot establish effects:none.
 					partialEffects = true;
 					const tabRes = await herdr(
-						["tab", "create", "--workspace", workspaceId, "--label", label, "--cwd", cwd, "--no-focus"],
+						["tab", "create", "--workspace", workspaceId, "--label", tabLabel, "--cwd", cwd, "--no-focus"],
 						{ signal: _signal }
 					);
 					paneId = tabRes?.result?.root_pane?.pane_id;
@@ -2847,7 +2859,9 @@ export default function sessionTools(pi: ExtensionAPI) {
 				trackSubagent(ctx, { name, paneId, tabId, model, kind, label, cwd, spawnedAt: Date.now(), status: "idle" });
 
 				assertActive();
-				const promptRes = await herdr(["agent", "prompt", name, params.task], { signal: _signal });
+				const promptRes = await herdr(["agent", "prompt", name, subagentTaskPrompt(params.task, { label })], {
+					signal: _signal,
+				});
 				const promptOk = !promptRes?.error;
 				startNotifyTimer(pi, ctx);
 				if (!promptOk) {
@@ -3047,6 +3061,7 @@ export default function sessionTools(pi: ExtensionAPI) {
 						`allowMode=${mode}${modeLabel ? ` (${modeLabel})` : ""}`,
 						`max=${maxN}${maxN === 0 ? " (unlimited)" : ""}`,
 						`kinds=${sessionAllowedKinds(config).join(",")}`,
+						`tabLabelStyle=${config.tabLabelStyle}`,
 						`active=${active}`,
 						`tracked=${tracked}`,
 						`Allowlist [${eff.source}]: ${eff.patterns.length ? eff.patterns.join(", ") : "(all)"}`,
