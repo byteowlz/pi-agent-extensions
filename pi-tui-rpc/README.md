@@ -91,6 +91,12 @@ events. Absent ports stay unavailable, decisions are deny-by-default and
 one-shot, and a presenter answer is never a grant. See
 `docs/runtime-interaction-adapter.md`.
 
+Terminal consumers get the same contract as plain text: `interaction-terminal.ts`
+renders the command palette, permission prompt (expiry/cancel, deny-by-default),
+queue state/actions with CAS, error list and event/status notices, and builds the
+canonical requests from a terminal choice. oqt TUI/CLI, Oq and a managed runner
+all use one dialect.
+
 ### Native source-result frames (read-only)
 
 `runtime_interactions_source_v1` is advertised separately from engine

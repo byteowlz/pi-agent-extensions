@@ -4,6 +4,24 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Terminal-renderable interaction contract (3.12.0)
+
+- **pi-tui-rpc**: new `interaction-terminal.ts` renders the shared contract for
+  terminal consumers (oqt TUI/CLI) without ANSI/pi-tui dependency and builds the
+  canonical requests back: command palette (available commands, issued
+  generation, raw args), permission prompt (subject/effect, expiry countdown,
+  allow-once rows, deny, cancel; expired disables allow and yields cancel), queue
+  view with engine ids/cursor/supported actions and CAS action builders, error
+  list with phase/recovery/uncertainty, and event/status notices.
+- No GUI-only fields are required: every operation has a plain-text view and a
+  terminal-built canonical request, using the same DTOs and runtime as personal
+  and managed placements. Deny-by-default, one-shot receipts and
+  selection-is-not-a-grant are preserved.
+- Tests: palette → canonical dispatch executes through the runtime; permission
+  prompt choices (including expired → cancel) produce valid decide requests;
+  queue actions use the CAS cursor and unsupported actions are unbuildable;
+  errors/notices/status render visible text. 117 pi-tui-rpc tests.
+
 ### Placement-neutral interaction runtime (3.11.0)
 
 - **pi-tui-rpc**: new `interaction-runtime.ts` with
