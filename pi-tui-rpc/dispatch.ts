@@ -286,11 +286,12 @@ function isCompactionRefusal(error: unknown): boolean {
 
 // --- canonical runtime interactions (typed negotiation/demux) --------------
 //
-// Reuses the existing authenticated admission: observation operations are free,
-// mutating ones require this connection's input lease. No binding is synthesized
-// here; a hosting adapter must supply the authenticated RuntimeBinding or the
-// whole interaction stays unavailable (transport-level, so no response DTO is
-// fabricated with an invented binding).
+// Uses the connection's existing input lease for mutating operations; that lease
+// is NOT host authentication or admission. No binding is synthesized here: a
+// hosting adapter must supply the authenticated RuntimeBinding or the whole
+// interaction stays unavailable (transport-level, no response DTO is fabricated
+// with an invented binding). The binding and lease are re-read AFTER the adapter
+// work, so a revocation during an await cannot return a stale success.
 
 import type { InteractionAdapter } from "./interaction-adapter.js";
 import type { RuntimeBinding } from "./protocol/runtime-interactions/v1/RuntimeBinding.js";
@@ -298,7 +299,7 @@ import type { RuntimeOperation } from "./protocol/runtime-interactions/v1/Runtim
 import type { RuntimeRequest } from "./protocol/runtime-interactions/v1/RuntimeRequest.js";
 import type { RuntimeResponse } from "./protocol/runtime-interactions/v1/RuntimeResponse.js";
 import type { RuntimeResult } from "./protocol/runtime-interactions/v1/RuntimeResult.js";
-import { isMutatingOperation } from "./wire.js";
+import { isMutatingOperation, validateRuntimeResponse } from "./wire.js";
 
 export interface InteractionDispatchDeps {
 	adapter: InteractionAdapter;
@@ -309,7 +310,7 @@ export interface InteractionDispatchDeps {
 
 export type InteractionDispatchOutcome =
 	| { ok: true; response: RuntimeResponse }
-	| { ok: false; code: "binding_unavailable" | "authority_denied" };
+	| { ok: false; code: "binding_unavailable" | "authority_denied" | "engine_failure" };
 
 function validBinding(binding: RuntimeBinding): boolean {
 	const id = (value: unknown) => typeof value === "string" && value.length > 0;
@@ -320,6 +321,16 @@ function validBinding(binding: RuntimeBinding): boolean {
 		generation(binding.runtimeGeneration) &&
 		(binding.controllerId === null || id(binding.controllerId)) &&
 		(binding.controllerGeneration === null || generation(binding.controllerGeneration))
+	);
+}
+
+function sameBinding(a: RuntimeBinding, b: RuntimeBinding): boolean {
+	return (
+		a.publicSessionId === b.publicSessionId &&
+		a.nativeSessionId === b.nativeSessionId &&
+		a.runtimeGeneration === b.runtimeGeneration &&
+		a.controllerId === b.controllerId &&
+		a.controllerGeneration === b.controllerGeneration
 	);
 }
 
@@ -382,10 +393,15 @@ export async function dispatchInteractionRequest(
 ): Promise<InteractionDispatchOutcome> {
 	const binding = deps.binding?.();
 	if (!binding || !validBinding(binding)) return { ok: false, code: "binding_unavailable" };
-	if (isMutatingOperation(request.operation.op) && !deps.leaseHeld()) return { ok: false, code: "authority_denied" };
+	const mutating = isMutatingOperation(request.operation.op);
+	if (mutating && !deps.leaseHeld()) return { ok: false, code: "authority_denied" };
 	const result = await resultFor(request.operation, deps.adapter);
-	return {
-		ok: true,
-		response: { version: request.version, requestId: request.requestId, binding, result },
-	};
+	// Authoritative revalidation, not a pre-await snapshot: a controller/binding
+	// revocation or a lease loss during the await must not yield a success.
+	const current = deps.binding?.();
+	if (!current || !validBinding(current) || !sameBinding(binding, current)) return { ok: false, code: "binding_unavailable" };
+	if (mutating && !deps.leaseHeld()) return { ok: false, code: "authority_denied" };
+	const response: RuntimeResponse = { version: request.version, requestId: request.requestId, binding: current, result };
+	if (!validateRuntimeResponse(response)) return { ok: false, code: "engine_failure" };
+	return { ok: true, response };
 }

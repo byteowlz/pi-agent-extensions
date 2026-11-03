@@ -6,6 +6,10 @@
  * unsupported version is never coerced to v1.
  */
 
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import AjvDefault, { type ValidateFunction } from "ajv";
 import type { RuntimeEvent } from "./protocol/runtime-interactions/v1/RuntimeEvent.js";
 import type { RuntimeOperation } from "./protocol/runtime-interactions/v1/RuntimeOperation.js";
 import type { RuntimeRejectCode } from "./protocol/runtime-interactions/v1/RuntimeRejectCode.js";
@@ -17,9 +21,40 @@ import type { RuntimeVersion } from "./protocol/runtime-interactions/v1/RuntimeV
 export const RUNTIME_INTERACTIONS_VERSION: RuntimeVersion = 1;
 export const RUNTIME_INTERACTIONS_CAPABILITY = "runtime_interactions_v1";
 
+type AjvConstructor = new (options?: Record<string, unknown>) => { compile(schema: unknown): ValidateFunction };
+// ajv v8 is CommonJS; the default export shape depends on the loader.
+const Ajv = (AjvDefault as unknown as { default?: AjvConstructor }).default ?? (AjvDefault as unknown as AjvConstructor);
+
+export type WireParse<T> = { ok: true; value: T } | { ok: false; code: RuntimeRejectCode };
+
+export type InteractionRequestFrame = { type: "interaction"; request: RuntimeRequest };
+export type InteractionResponseFrame = { type: "interaction_response"; response: RuntimeResponse };
+export type InteractionEventFrame = { type: "interaction_event"; event: RuntimeEvent };
+export type InteractionNegotiateFrame = { type: "interaction_negotiate"; versions: number[] };
+export type InteractionNegotiatedFrame = { type: "interaction_negotiated"; version: RuntimeVersion | null };
+
+export type InteractionStatusCode =
+	| "binding_unavailable"
+	| "authority_denied"
+	| "not_negotiated"
+	| "engine_failure"
+	| "invalid_request";
+
+/**
+ * Transport-level status for a request that cannot produce a RuntimeResponse
+ * (for example no authenticated RuntimeBinding). It is not a DTO and carries no
+ * canonical result; requestId is correlation only.
+ */
+export type InteractionStatusFrame = {
+	type: "interaction_status";
+	ok: false;
+	code: InteractionStatusCode;
+	requestId?: string;
+};
+
 type OperationOp = RuntimeOperation["op"];
 
-/** Read-only operations; mutating ones reuse the existing lease admission. */
+/** Read-only operations; mutating ones reuse the connection input lease (NOT host admission). */
 const OBSERVATION_OPS: OperationOp[] = [
 	"capabilities",
 	"command_catalog",
@@ -31,42 +66,92 @@ const OBSERVATION_OPS: OperationOp[] = [
 ];
 const MUTATING_OPS: OperationOp[] = ["command_dispatch", "permission_decide", "policy_apply", "queue_apply"];
 
-const ALL_OPS: OperationOp[] = [...OBSERVATION_OPS, ...MUTATING_OPS];
-const OP_SET = new Set<string>(ALL_OPS);
-const ID_BOUND = 256;
+/** Core runtime-frame bound; larger frames are rejected before schema validation. */
+export const MAX_RUNTIME_FRAME_BYTES = 256 * 1024;
 
-export type InteractionRequestFrame = { type: "interaction"; request: RuntimeRequest };
-export type InteractionResponseFrame = { type: "interaction_response"; response: RuntimeResponse };
-export type InteractionEventFrame = { type: "interaction_event"; event: RuntimeEvent };
-export type InteractionNegotiateFrame = { type: "interaction_negotiate"; versions: number[] };
-export type InteractionNegotiatedFrame = { type: "interaction_negotiated"; version: RuntimeVersion | null };
-/**
- * Transport-level status for a request that cannot produce a RuntimeResponse
- * (for example no authenticated RuntimeBinding). It is not a DTO and carries no
- * canonical result.
- */
-export type InteractionStatusFrame = {
-	type: "interaction_status";
-	ok: false;
-	code: "binding_unavailable" | "authority_denied";
-};
+const SCHEMA_DIR = join(dirname(fileURLToPath(import.meta.url)), "protocol", "runtime-interactions", "v1");
 
-export type WireParse<T> = { ok: true; value: T } | { ok: false; code: RuntimeRejectCode };
+export type CanonicalSchemaName =
+	| "RuntimeCommandCatalog"
+	| "RuntimeCommandReceipt"
+	| "RuntimeQueueSnapshot"
+	| "RuntimeErrorSnapshot"
+	| "RuntimePermissionPresentation"
+	| "RuntimeBinding";
+
+interface Schemas {
+	request: ValidateFunction;
+	response: ValidateFunction;
+	event: ValidateFunction;
+	pieces: Record<CanonicalSchemaName, ValidateFunction>;
+}
+
+let schemas: Schemas | null = null;
+
+function readSchema(name: string): Record<string, unknown> {
+	return JSON.parse(readFileSync(join(SCHEMA_DIR, name), "utf8")) as Record<string, unknown>;
+}
+
+function pieceSchema(responseSchema: Record<string, unknown>, name: CanonicalSchemaName) {
+	// Only definitions + the $ref: copying the response root would re-require its
+	// properties (binding/result/version) on a standalone piece.
+	return {
+		$schema: responseSchema.$schema,
+		$ref: `#/definitions/${name}`,
+		definitions: responseSchema.definitions,
+	};
+}
+
+/** Compiled once, from the vendored schemas; the generated schema is authoritative. */
+function compiled(): Schemas {
+	if (schemas) return schemas;
+	const ajv = new Ajv({ allErrors: true, strict: false, logger: false });
+	const requestSchema = readSchema("request.schema.json");
+	const responseSchema = readSchema("response.schema.json");
+	const eventSchema = readSchema("event.schema.json");
+	const names: CanonicalSchemaName[] = [
+		"RuntimeCommandCatalog",
+		"RuntimeCommandReceipt",
+		"RuntimeQueueSnapshot",
+		"RuntimeErrorSnapshot",
+		"RuntimePermissionPresentation",
+		"RuntimeBinding",
+	];
+	const pieces = {} as Record<CanonicalSchemaName, ValidateFunction>;
+	for (const name of names) pieces[name] = ajv.compile(pieceSchema(responseSchema, name));
+	schemas = {
+		request: ajv.compile(requestSchema),
+		response: ajv.compile(responseSchema),
+		event: ajv.compile(eventSchema),
+		pieces,
+	};
+	return schemas;
+}
+
+export function validateRuntimeRequest(value: unknown): boolean {
+	return compiled().request(value) === true;
+}
+export function validateRuntimeResponse(value: unknown): boolean {
+	return compiled().response(value) === true;
+}
+export function validateRuntimeEvent(value: unknown): boolean {
+	return compiled().event(value) === true;
+}
+/** Validate one canonical piece (port output) against the generated response schema. */
+export function validateCanonicalPiece(name: CanonicalSchemaName, value: unknown): boolean {
+	return compiled().pieces[name](value) === true;
+}
 
 function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isId(value: unknown): value is string {
-	return typeof value === "string" && value.length > 0 && value.length <= ID_BOUND;
-}
-
-function isGeneration(value: unknown): boolean {
-	return isId(value) || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0);
-}
-
-function isRevision(value: unknown): value is number {
-	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+function frameBytes(value: unknown): number {
+	try {
+		return Buffer.byteLength(JSON.stringify(value), "utf8");
+	} catch {
+		return Number.POSITIVE_INFINITY;
+	}
 }
 
 /** Accept only exactly v1; anything else is unsupported, never downgraded. */
@@ -83,55 +168,19 @@ export function isMutatingOperation(op: OperationOp): boolean {
 	return MUTATING_OPS.includes(op);
 }
 
-/** Shallow envelope validation; deep shape authority stays with the generated schema. */
-function validateOperation(operation: Record<string, unknown>): RuntimeRejectCode | null {
-	if (typeof operation.op !== "string" || !OP_SET.has(operation.op)) return "invalid_request";
-	switch (operation.op) {
-		case "command_dispatch":
-			if (!isId(operation.commandId) || typeof operation.args !== "string" || !isGeneration(operation.catalogGeneration))
-				return "invalid_request";
-			return null;
-		case "permission_decide":
-			if (
-				!isId(operation.handleId) ||
-				!isGeneration(operation.producerGeneration) ||
-				!isRevision(operation.requestRevision) ||
-				!isId(operation.controllerId) ||
-				!isGeneration(operation.controllerGeneration)
-			)
-				return "invalid_request";
-			if (operation.decision !== "allow_once" && operation.decision !== "deny" && operation.decision !== "cancel")
-				return "invalid_request";
-			if (operation.optionId !== null && !isId(operation.optionId)) return "invalid_request";
-			return null;
-		case "queue_apply":
-			if (!isObject(operation.expected) || !isObject(operation.action)) return "invalid_request";
-			return null;
-		case "policy_apply":
-			if (!isObject(operation.expected) || !Array.isArray(operation.changes)) return "invalid_request";
-			return null;
-		case "error_list":
-			if (operation.afterEventId !== null && !isId(operation.afterEventId)) return "invalid_request";
-			return null;
-		case "receipt_get":
-			if (!isId(operation.operationId)) return "invalid_request";
-			return null;
-		default:
-			return null;
-	}
-}
-
-/** Parse a client line into a canonical request; framing only. */
+/**
+ * Parse a client line into a canonical request.
+ *
+ * Schema validation is the generated Core schema, not a handwritten subset: it is
+ * what rejects forged bindings, answer fields disguised as decisions, and policy
+ * writes smuggled into an answer.
+ */
 export function parseInteractionRequestFrame(value: unknown): WireParse<RuntimeRequest> {
-	if (!isObject(value) || value.type !== "interaction") return { ok: false, code: "invalid_request" };
-	const request = value.request;
-	if (!isObject(request)) return { ok: false, code: "invalid_request" };
-	if (request.version !== RUNTIME_INTERACTIONS_VERSION) return { ok: false, code: "invalid_request" };
-	if (!isId(request.requestId)) return { ok: false, code: "invalid_request" };
-	if (!isObject(request.operation)) return { ok: false, code: "invalid_request" };
-	const operationError = validateOperation(request.operation);
-	if (operationError) return { ok: false, code: operationError };
-	return { ok: true, value: request as unknown as RuntimeRequest };
+	if (!isObject(value) || !("type" in value) || value.type !== "interaction") return { ok: false, code: "invalid_request" };
+	if (!("request" in value) || !isObject(value.request)) return { ok: false, code: "invalid_request" };
+	if (frameBytes(value) > MAX_RUNTIME_FRAME_BYTES) return { ok: false, code: "invalid_request" };
+	if (!validateRuntimeRequest(value.request)) return { ok: false, code: "invalid_request" };
+	return { ok: true, value: value.request as unknown as RuntimeRequest };
 }
 
 export function parseNegotiationFrame(value: unknown): WireParse<RuntimeVersion | null> {
@@ -158,6 +207,6 @@ export function negotiatedFrame(version: RuntimeVersion | null): InteractionNego
 	return { type: "interaction_negotiated", version };
 }
 
-export function statusFrame(code: InteractionStatusFrame["code"]): InteractionStatusFrame {
-	return { type: "interaction_status", ok: false, code };
+export function statusFrame(code: InteractionStatusCode, requestId?: string): InteractionStatusFrame {
+	return { type: "interaction_status", ok: false, code, ...(requestId ? { requestId } : {}) };
 }

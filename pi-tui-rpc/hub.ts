@@ -36,6 +36,8 @@ export interface Hub {
 	/** Accept/deny a negotiated interaction version for one connection. */
 	negotiateInteraction(clientId: string, version: number): boolean;
 	interactionVersion(clientId: string): number | null;
+	/** Explicitly drop a connection's negotiated version (failed renegotiation). */
+	clearInteraction(clientId: string): void;
 	/** Version-gated typed delivery; false when the client did not negotiate. */
 	deliverInteractionEvent(clientId: string, event: RuntimeEvent): boolean;
 	broadcastInteractionEvent(event: RuntimeEvent): void;
@@ -242,9 +244,18 @@ export function createHub(options: HubOptions): Hub {
 			return clients.size;
 		},
 		negotiateInteraction(clientId: string, version: number): boolean {
-			if (!clients.has(clientId) || !supportedVersions.has(version)) return false;
+			if (!clients.has(clientId)) return false;
+			if (!supportedVersions.has(version)) {
+				// A failed renegotiation explicitly drops the previous acceptance; an
+				// unsupported offer must not leave an older version silently active.
+				interactionVersions.delete(clientId);
+				return false;
+			}
 			interactionVersions.set(clientId, version);
 			return true;
+		},
+		clearInteraction(clientId: string): void {
+			interactionVersions.delete(clientId);
 		},
 		interactionVersion(clientId: string): number | null {
 			return interactionVersions.get(clientId) ?? null;

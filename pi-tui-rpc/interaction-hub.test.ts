@@ -73,6 +73,7 @@ test("interaction frames are delivered only to connections that negotiated v1", 
 			}
 			const version = negotiation.value;
 			if (version !== null) hub.negotiateInteraction(clientId, version);
+			else hub.clearInteraction(clientId);
 			reply({ type: "interaction_negotiated", version });
 		},
 	});
@@ -101,11 +102,20 @@ test("interaction frames are delivered only to connections that negotiated v1", 
 		const bId = await secondId;
 		await b.next(); // hello
 		expect(hub.deliverInteractionEvent(bId, event)).toBe(false);
-		// An unsupported offer is answered with null and does not revoke v1.
+		// A failed renegotiation explicitly resets the accepted version.
 		a.send({ type: "interaction_negotiate", versions: [2] });
 		expect(await a.next()).toEqual({ type: "interaction_negotiated", version: null });
-		expect(hub.interactionVersion(aId)).toBe(1);
+		expect(hub.interactionVersion(aId)).toBeNull();
+		expect(hub.deliverInteractionEvent(aId, event)).toBe(false);
 
+		// Hub-level: an unsupported version explicitly drops an earlier acceptance.
+		expect(hub.negotiateInteraction(aId, 1)).toBe(true);
+		expect(hub.negotiateInteraction(aId, 2)).toBe(false);
+		expect(hub.interactionVersion(aId)).toBeNull();
+
+		// Re-negotiating v1 restores gated delivery for that connection only.
+		a.send({ type: "interaction_negotiate", versions: [1] });
+		expect(await a.next()).toEqual({ type: "interaction_negotiated", version: 1 });
 		hub.broadcastInteractionEvent(event);
 		expect(await a.next()).toEqual({ type: "interaction_event", event });
 

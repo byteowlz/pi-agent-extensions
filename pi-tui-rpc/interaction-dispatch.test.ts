@@ -149,6 +149,99 @@ test("families without a real port map to concrete unavailability", async () => 
 	}
 });
 
+test("a binding revoked during the await cannot return a stale success", async () => {
+	let release: () => void = () => {};
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const adapter = new InteractionAdapter({
+		ports: {
+			commands: {
+				catalog: () => catalog,
+				dispatch: async () => {
+					await gate;
+					return receipt;
+				},
+			},
+		},
+	});
+	let calls = 0;
+	const pending = dispatchInteractionRequest(
+		request({ op: "command_dispatch", catalogGeneration: "gen-7", commandId: "cmd-1", args: "" }),
+		{
+			adapter,
+			binding: () => {
+				calls += 1;
+				return calls === 1 ? binding : undefined;
+			},
+			leaseHeld: () => true,
+		}
+	);
+	release();
+	expect(await pending).toEqual({ ok: false, code: "binding_unavailable" });
+
+	let releaseGeneration: () => void = () => {};
+	const gate2 = new Promise<void>((resolve) => {
+		releaseGeneration = resolve;
+	});
+	const changed = new InteractionAdapter({
+		ports: {
+			commands: {
+				catalog: () => catalog,
+				dispatch: async () => {
+					await gate2;
+					return receipt;
+				},
+			},
+		},
+	});
+	let first = true;
+	const bumped = dispatchInteractionRequest(
+		request({ op: "command_dispatch", catalogGeneration: "gen-7", commandId: "cmd-1", args: "" }),
+		{
+			adapter: changed,
+			binding: () => {
+				const current = first ? binding : { ...binding, controllerGeneration: 2 };
+				first = false;
+				return current;
+			},
+			leaseHeld: () => true,
+		}
+	);
+	releaseGeneration();
+	expect(await bumped).toEqual({ ok: false, code: "binding_unavailable" });
+});
+
+test("a lease lost during the await cannot return a success", async () => {
+	let release: () => void = () => {};
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const adapter = new InteractionAdapter({
+		ports: {
+			commands: {
+				catalog: () => catalog,
+				dispatch: async () => {
+					await gate;
+					return receipt;
+				},
+			},
+		},
+	});
+	let held = true;
+	const pending = dispatchInteractionRequest(
+		request({ op: "command_dispatch", catalogGeneration: "gen-7", commandId: "cmd-1", args: "" }),
+		{
+			adapter,
+			binding: () => binding,
+			leaseHeld: () => held,
+		}
+	);
+	held = false;
+	release();
+	expect(await pending).toEqual({ ok: false, code: "authority_denied" });
+});
+
 test("permission_decide requires the lease and still reports no producer port", async () => {
 	const operation: RuntimeRequest["operation"] = {
 		op: "permission_decide",

@@ -40,19 +40,21 @@ const queue: RuntimeQueueSnapshot = {
 	supportedActions: ["steer", "follow_up"],
 };
 
+const DIGEST = "a".repeat(64);
+
 const presentation: RuntimePermissionPresentation = {
 	handleId: "handle-1",
 	requestId: "req-1",
 	requestRevision: 0,
 	subject: null,
-	subjectDigest: "subject-digest",
-	operationDigest: "operation-digest",
-	ceilingDigest: "ceiling-digest",
+	subjectDigest: DIGEST,
+	operationDigest: DIGEST,
+	ceilingDigest: DIGEST,
 	expiresAtMs: 1_700_000_060_000,
 	options: [
-		{ optionId: "allow", model: null, effectDigest: "effect" },
-		{ optionId: "allow_with_model", model: "local/alternate", effectDigest: "effect-alt" },
-		{ optionId: "deny", model: null, effectDigest: "deny" },
+		{ optionId: "allow", model: null, effectDigest: DIGEST },
+		{ optionId: "allow_with_model", model: "local/alternate", effectDigest: DIGEST },
+		{ optionId: "deny", model: null, effectDigest: DIGEST },
 	],
 };
 
@@ -221,6 +223,32 @@ test("permission presentation is transport only and requires an explicit canonic
 		ports: { permissions: { present: () => ({ decision: "allow" as never, optionId: "allow" }) } },
 	});
 	expect(await loose.presentPermission(presentation)).toMatchObject({ kind: "rejected", code: "invalid_request" });
+});
+
+test("port outputs with extra or forged fields are rejected by the canonical schema", async () => {
+	const forged = new InteractionAdapter({
+		ports: {
+			commands: {
+				catalog: () => ({ ...catalog, forgedAuthority: true }) as never,
+				dispatch: () => ({ ...receipt, task: "private" }) as never,
+			},
+		},
+	});
+	expect(await forged.catalog()).toMatchObject({ kind: "rejected", code: "engine_failure" });
+	expect(await forged.dispatch({ commandId: "cmd-subagent", args: "", catalogGeneration: "gen-7" })).toMatchObject({
+		kind: "rejected",
+		code: "engine_failure",
+	});
+
+	const queueForged = new InteractionAdapter({
+		ports: { queue: { snapshot: () => ({ ...queue, extra: 1 }) as never } },
+	});
+	expect(await queueForged.queueSnapshot()).toMatchObject({ kind: "rejected", code: "engine_failure" });
+
+	const errorsForged = new InteractionAdapter({
+		ports: { errors: { snapshot: () => ({ ...errors, errors: [{ ...errors.errors[0], token: "x" }] }) as never } },
+	});
+	expect(await errorsForged.errorSnapshot(null)).toMatchObject({ kind: "rejected", code: "engine_failure" });
 });
 
 test("error snapshots project retained canonical errors", async () => {

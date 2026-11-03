@@ -68,6 +68,7 @@ import { createReloader } from "./reload.js";
 import { defaultSocketPath } from "./socket-path.js";
 import {
 	RUNTIME_INTERACTIONS_CAPABILITY,
+	RUNTIME_INTERACTIONS_VERSION,
 	responseFrame as interactionResponseFrame,
 	negotiatedFrame,
 	parseInteractionRequestFrame,
@@ -590,14 +591,22 @@ export default function (pi: ExtensionAPI) {
 				const negotiation = parseNegotiationFrame(value);
 				if (negotiation.ok) {
 					const version = negotiation.value;
-					if (version !== null) hub?.negotiateInteraction(clientId, version);
+					if (version === null) hub?.clearInteraction(clientId);
+					else hub?.negotiateInteraction(clientId, version);
 					reply(negotiatedFrame(version));
 					return;
 				}
 				if (typeof value === "object" && value !== null && (value as { type?: unknown }).type === "interaction") {
+					const requestedId = (value as { request?: { requestId?: unknown } }).request?.requestId;
+					const correlation = typeof requestedId === "string" ? requestedId.slice(0, 128) : undefined;
+					// Interaction requests are only served on a connection that negotiated v1.
+					if (hub?.interactionVersion(clientId) !== RUNTIME_INTERACTIONS_VERSION) {
+						reply(statusFrame("not_negotiated", correlation));
+						return;
+					}
 					const parsed = parseInteractionRequestFrame(value);
 					if (!parsed.ok) {
-						reply(responseFrame("interaction", undefined, { success: false, error: parsed.code }));
+						reply(statusFrame("invalid_request", correlation));
 						return;
 					}
 					// No authenticated personal binding source exists in this bridge. The
@@ -607,7 +616,7 @@ export default function (pi: ExtensionAPI) {
 						leaseHeld: () => lease.heldBy(clientId),
 					}).then((outcome) => {
 						if (outcome.ok) reply(interactionResponseFrame(outcome.response));
-						else reply(statusFrame(outcome.code));
+						else reply(statusFrame(outcome.code, parsed.value.requestId));
 					});
 					return;
 				}

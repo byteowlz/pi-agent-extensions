@@ -27,96 +27,44 @@ import type { RuntimePermissionPresentation } from "./protocol/runtime-interacti
 import type { RuntimeQueueSnapshot } from "./protocol/runtime-interactions/v1/RuntimeQueueSnapshot.js";
 import type { RuntimeRejectCode } from "./protocol/runtime-interactions/v1/RuntimeRejectCode.js";
 import type { RuntimeUnavailableReason } from "./protocol/runtime-interactions/v1/RuntimeUnavailableReason.js";
+import { validateCanonicalPiece } from "./wire.js";
 
-const COVERAGE = new Set(["full", "registered_only", "partial"]);
-const ORIGINS = new Set(["builtin", "extension", "prompt", "skill"]);
-const DISPOSITIONS = new Set(["rejected", "handled", "queued", "started"]);
-const REJECT_CODES = new Set([
-	"invalid_request",
-	"unknown_command",
-	"ambiguous_command",
-	"stale_generation",
-	"stale_revision",
-	"unknown_request",
-	"already_consumed",
-	"expired",
-	"cancelled",
-	"authority_denied",
-	"policy_denied",
-	"subject_mismatch",
-	"journal_unavailable",
-	"engine_failure",
-]);
 const PERMISSION_DECISIONS = new Set(["allow_once", "deny", "cancel"]);
-const COMPLETENESS = new Set(["complete", "partial", "unknown"]);
+const ID = /^[A-Za-z0-9._:-]{1,128}$/;
 
 function isId(value: unknown): value is string {
-	return typeof value === "string" && value.length > 0;
+	return typeof value === "string" && ID.test(value);
 }
 
 function isGeneration(value: unknown): boolean {
 	return isId(value) || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0);
 }
 
-function isRevision(value: unknown): value is number {
-	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-/** Structural gate for a port-supplied snapshot; the canonical schema is authoritative. */
+/** Port output is shaped by the canonical generated schema, not a handwritten subset. */
 function validQueueSnapshot(value: RuntimeQueueSnapshot | undefined): boolean {
-	if (!value || !value.cursor || !isGeneration(value.cursor.generation) || !isRevision(value.cursor.revision)) return false;
-	if (!COMPLETENESS.has(value.completeness)) return false;
-	if (!Array.isArray(value.steering) || !Array.isArray(value.followUp)) return false;
-	for (const item of [...value.steering, ...value.followUp]) {
-		if (!item || typeof item.text !== "string") return false;
-		if (item.itemId !== null && !isId(item.itemId)) return false;
-	}
-	return Array.isArray(value.supportedActions);
+	return validateCanonicalPiece("RuntimeQueueSnapshot", value);
 }
 
 function validCatalog(value: RuntimeCommandCatalog | undefined): boolean {
-	if (!value || !isGeneration(value.generation) || !COVERAGE.has(value.coverage)) return false;
-	if (!Array.isArray(value.commands)) return false;
-	for (const command of value.commands) {
-		if (!command || !isId(command.commandId) || typeof command.invocation !== "string") return false;
-		if (!ORIGINS.has(command.origin)) return false;
-		if (!command.arguments || (command.arguments.kind !== "raw_string" && command.arguments.kind !== "json_schema")) return false;
-		if (!command.availability || !["available", "unavailable"].includes(command.availability.state)) return false;
-		if (!Array.isArray(command.requiredInteractions)) return false;
-	}
-	return true;
+	return validateCanonicalPiece("RuntimeCommandCatalog", value);
 }
 
 function validReceipt(value: RuntimeCommandReceipt | undefined): boolean {
-	if (!value || !isId(value.operationId) || !isId(value.commandId)) return false;
-	if (!DISPOSITIONS.has(value.disposition)) return false;
-	if (value.rejection !== null && !REJECT_CODES.has(value.rejection)) return false;
-	return true;
+	return validateCanonicalPiece("RuntimeCommandReceipt", value);
 }
 
 function validPresentation(value: RuntimePermissionPresentation): boolean {
-	if (!isId(value.handleId) || !isId(value.requestId) || !isRevision(value.requestRevision)) return false;
-	if (!isRevision(value.expiresAtMs)) return false;
-	if (!Array.isArray(value.options) || value.options.length === 0) return false;
-	return value.options.every(
-		(option) => option && isId(option.optionId) && (option.model === null || typeof option.model === "string")
-	);
+	return validateCanonicalPiece("RuntimePermissionPresentation", value);
 }
 
+/** The answer is a decision vocabulary plus an option reference; it is not a standalone DTO. */
 function validAnswer(value: PermissionAnswer | undefined): boolean {
 	if (!value || !PERMISSION_DECISIONS.has(value.decision)) return false;
-	return value.optionId === null || isId(value.optionId);
+	return value.optionId === null || (typeof value.optionId === "string" && value.optionId.length > 0);
 }
 
 function validErrors(value: RuntimeErrorSnapshot | undefined): boolean {
-	if (!value || !value.cursor || !isGeneration(value.cursor.generation) || !isRevision(value.cursor.revision)) return false;
-	if (!Array.isArray(value.errors)) return false;
-	for (const error of value.errors) {
-		if (!error || !isId(error.eventId)) return false;
-		if (typeof error.code !== "string" || typeof error.message !== "string" || typeof error.phase !== "string") return false;
-		if (typeof error.recoverable !== "boolean" || typeof error.uncertain !== "boolean") return false;
-	}
-	return true;
+	return validateCanonicalPiece("RuntimeErrorSnapshot", value);
 }
 
 export interface InteractionAdapterOptions {

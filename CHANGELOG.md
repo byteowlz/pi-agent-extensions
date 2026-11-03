@@ -4,6 +4,29 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Canonical schema validation and interaction transport hardening (3.8.1)
+
+- **pi-tui-rpc**: `wire.ts` now validates requests, responses and events against
+  the vendored generated Core schemas with `ajv` instead of a hand-written
+  subset. Forged authority, answer fields that try to change the model or write
+  policy, malformed CAS/action/policy payloads and invalid IDs (128-char ASCII)
+  are rejected; the 256 KiB runtime-frame bound is enforced before validation.
+- Port outputs (catalog, receipt, queue snapshot, error snapshot, permission
+  presentation) are validated through the response schema's definitions, so extra
+  or forged fields fail as `engine_failure` rather than leaking through.
+- Inbound interaction requests require the connection to have negotiated v1;
+  otherwise the bridge replies with a transport `interaction_status`
+  (`not_negotiated`) and dispatches nothing. Status frames carry the request id
+  for correlation and still never fabricate a `RuntimeBinding`.
+- `hub.ts` resets the accepted version on a failed renegotiation; `dispatch.ts`
+  re-reads the binding and lease after the adapter await (revocation during an
+  await cannot yield a stale success) and schema-validates the response. The
+  comment no longer calls the input lease "authenticated admission".
+- Tests: the actual boundary runs every Core positive (11 requests / 11 responses
+  / 4 events) and rejects all 20 negatives, including the three review cases;
+  deferred-port tests cover binding and lease revocation during the await.
+  86 pi-tui-rpc tests (186 with pi-session-tools).
+
 ### Pinned runtime-interaction DTOs and typed bridge integration (3.8.0)
 
 - **pi-tui-rpc**: vendored the whole canonical bundle from oqto

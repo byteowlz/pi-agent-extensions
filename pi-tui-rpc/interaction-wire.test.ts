@@ -96,8 +96,91 @@ test("per-operation envelope checks keep ids, generations and raw args intact", 
 	).toMatchObject({ ok: false });
 	expect(parseInteractionRequestFrame(dispatch({ op: "receipt_get", operationId: "" }))).toMatchObject({ ok: false });
 	expect(parseInteractionRequestFrame(dispatch({ op: "error_list", afterEventId: 4 }))).toMatchObject({ ok: false });
-	expect(parseInteractionRequestFrame(dispatch({ op: "queue_apply", expected: {}, action: {} }))).toMatchObject({ ok: true });
-	expect(parseInteractionRequestFrame(dispatch({ op: "policy_apply", expected: {}, changes: [] }))).toMatchObject({ ok: true });
+	expect(
+		parseInteractionRequestFrame(
+			dispatch({
+				op: "queue_apply",
+				expected: { generation: "fixture-runtime", revision: 4 },
+				action: { action: "cancel_item", itemId: "fixture-q1" },
+			})
+		)
+	).toMatchObject({ ok: true });
+	expect(
+		parseInteractionRequestFrame(dispatch({ op: "queue_apply", action: { action: "cancel_item", itemId: "q1" } }))
+	).toMatchObject({
+		ok: false,
+	});
+	expect(
+		parseInteractionRequestFrame(
+			dispatch({
+				op: "policy_apply",
+				expected: { generation: "fixture-runtime", revision: 4 },
+				changes: [{ setting: "allowed_models", value: ["fixture/model"] }],
+			})
+		)
+	).toMatchObject({ ok: true });
+	expect(parseInteractionRequestFrame(dispatch({ op: "policy_apply", expected: {}, changes: [] }))).toMatchObject({ ok: false });
+});
+
+test("forged authority, disguised answers and policy writes are rejected at the boundary", () => {
+	const forgedAuthority = frame({
+		version: 1,
+		requestId: "req-1",
+		operation: { op: "capabilities" },
+		binding: {
+			publicSessionId: "public-1",
+			nativeSessionId: "native-1",
+			runtimeGeneration: 1,
+			controllerId: "controller-1",
+			controllerGeneration: 1,
+		},
+	});
+	expect(parseInteractionRequestFrame(forgedAuthority)).toMatchObject({ ok: false });
+
+	const answerChangesModel = frame({
+		version: 1,
+		requestId: "req-1",
+		operation: {
+			op: "permission_decide",
+			producerGeneration: 1,
+			handleId: "handle-1",
+			requestRevision: 0,
+			controllerId: "controller-1",
+			controllerGeneration: 1,
+			decision: "allow_once",
+			optionId: "allow",
+			model: "external/x",
+		},
+	});
+	expect(parseInteractionRequestFrame(answerChangesModel)).toMatchObject({ ok: false });
+
+	const answerWritesPolicy = frame({
+		version: 1,
+		requestId: "req-1",
+		operation: {
+			op: "permission_decide",
+			producerGeneration: 1,
+			handleId: "handle-1",
+			requestRevision: 0,
+			controllerId: "controller-1",
+			controllerGeneration: 1,
+			decision: "allow_once",
+			optionId: "allow",
+			policy: { allow_mode: "auto" },
+		},
+	});
+	expect(parseInteractionRequestFrame(answerWritesPolicy)).toMatchObject({ ok: false });
+});
+
+test("oversized frames are rejected before schema validation", () => {
+	const base = {
+		version: 1,
+		requestId: "req-1",
+		operation: { op: "command_dispatch", catalogGeneration: 1, commandId: "c", args: "" },
+	};
+	const big = frame({ ...base, operation: { ...base.operation, args: "x".repeat(300 * 1024) } });
+	expect(parseInteractionRequestFrame(big)).toMatchObject({ ok: false, code: "invalid_request" });
+	expect(parseInteractionRequestFrame(frame(base))).toMatchObject({ ok: true });
 });
 
 test("all canonical operations are classified for admission", () => {
@@ -138,6 +221,12 @@ test("frame builders stay envelopes and add no DTO fields", () => {
 	expect(requestFrame(capabilitiesRequest)).toEqual({ type: "interaction", request: capabilitiesRequest });
 	expect(responseFrame(response)).toEqual({ type: "interaction_response", response });
 	expect(statusFrame("binding_unavailable")).toEqual({ type: "interaction_status", ok: false, code: "binding_unavailable" });
+	expect(statusFrame("binding_unavailable", "req-1")).toEqual({
+		type: "interaction_status",
+		ok: false,
+		code: "binding_unavailable",
+		requestId: "req-1",
+	});
 	expect(
 		eventFrame({
 			version: 1,

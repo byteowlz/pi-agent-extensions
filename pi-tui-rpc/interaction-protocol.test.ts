@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { parseInteractionRequestFrame, validateRuntimeEvent, validateRuntimeResponse } from "./wire.js";
 
 const ROOT = join(import.meta.dir, "protocol", "runtime-interactions");
 const V1 = join(ROOT, "v1");
@@ -85,6 +86,47 @@ test("cross-codec fixtures and CLI/API obligations are present and contract-only
 		expect({ name, implementation: operation.implementation }).toEqual({ name, implementation: "contract_only" });
 		expect(operation.requiredAdapters).toEqual(["personal_tui", "managed_rpc", "cli_api"]);
 		expect(operation.cliPath[0]).toBe("runtime");
+	}
+});
+
+test("the actual wire boundary accepts every Core positive and rejects every Core negative", () => {
+	const fixtures = JSON.parse(readFileSync(join(V1, "fixtures.json"), "utf8")) as {
+		requests: Array<{ name: string; value: { requestId: string } }>;
+		responses: Array<{ name: string; value: unknown }>;
+		events: Array<{ name: string; value: unknown }>;
+		invalid: Array<{ name: string; frame: "request" | "response" | "event"; value: unknown }>;
+	};
+	expect(fixtures.requests.length).toBe(11);
+	expect(fixtures.responses.length).toBe(11);
+	expect(fixtures.events.length).toBe(4);
+	expect(fixtures.invalid.length).toBe(20);
+
+	for (const row of fixtures.requests) {
+		expect({ name: row.name, ...parseInteractionRequestFrame({ type: "interaction", request: row.value }) }).toMatchObject({
+			name: row.name,
+			ok: true,
+		});
+	}
+	for (const row of fixtures.responses) {
+		expect({ name: row.name, valid: validateRuntimeResponse(row.value) }).toEqual({ name: row.name, valid: true });
+	}
+	for (const row of fixtures.events) {
+		expect({ name: row.name, valid: validateRuntimeEvent(row.value) }).toEqual({ name: row.name, valid: true });
+	}
+
+	const rejected: string[] = [];
+	for (const row of fixtures.invalid) {
+		const accepted =
+			row.frame === "request"
+				? parseInteractionRequestFrame({ type: "interaction", request: row.value }).ok
+				: row.frame === "response"
+					? validateRuntimeResponse(row.value)
+					: validateRuntimeEvent(row.value);
+		if (!accepted) rejected.push(row.name);
+	}
+	expect(rejected).toHaveLength(20);
+	for (const name of ["forged_authority", "answer_cannot_change_model", "answer_cannot_write_policy"]) {
+		expect(rejected).toContain(name);
 	}
 });
 
