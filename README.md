@@ -188,6 +188,18 @@ cp -r <extension-name> .pi/extensions/
 ln -s $(pwd)/<extension-name> ~/.pi/agent/extensions/<extension-name>
 ```
 
+`pi-tui-rpc` also needs the host-neutral consumer package
+`runtime-interactions/` and the `ajv` runtime dependency deployed next to it:
+
+```bash
+just install                     # does this automatically (also install-all)
+bash scripts/install-runtime-interactions.sh "$PWD" "$HOME/.pi/agent/extensions"
+just verify-install              # checks imports, ajv and the pinned manifest
+```
+
+Copying only the `pi-tui-rpc` directory breaks extension loading with
+`Cannot find module '../runtime-interactions/wire.js'`.
+
 ## Publishing Extensions
 
 Individual extensions can be published as npm packages under the `@byteowlz/` scope. Pi loads TypeScript directly via jiti, so no build step is needed.

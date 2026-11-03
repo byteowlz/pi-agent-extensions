@@ -55,6 +55,16 @@ pi's extension API cannot back (clear_queue, queue modes, auto-compaction /
 auto-retry settings, export_html on some installs, extension_ui_response)
 answer `success: false` with an `unsupported:` error.
 
+### Install
+
+This extension imports the host-neutral consumer package at
+`../runtime-interactions` and the `ajv` runtime dependency. Deploy both with the
+extension; `just install` / `just install-all` copy them into
+`~/.pi/agent/extensions/` automatically. Copying only this directory leaves Pi
+failing to load with `Cannot find module '../runtime-interactions/wire.js'`.
+`just verify-install` simulates the deploy and checks relative imports, `ajv`
+resolution and the pinned protocol manifest.
+
 ### Model commands
 
 - `get_available_models` → `{ models: [...] }` in pi RPC shape (session-scoped models when configured).

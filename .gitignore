@@ -5,6 +5,8 @@ scripts/*
 !scripts/test-pi-1-catalog.mjs
 !scripts/test-selection-rpc.mjs
 !scripts/test-selection-tool.mjs
+!scripts/install-runtime-interactions.sh
+!scripts/verify-install-layout.mjs
 !scripts/sync-durable-workflow-runtime.mjs
 !scripts/sync-history-worker.mjs
 !scripts/list-tools.mjs

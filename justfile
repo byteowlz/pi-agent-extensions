@@ -6,6 +6,7 @@ set positional-arguments
 EXTENSIONS_DIR := "~/.pi/agent/extensions"
 SRC_DIR := justfile_directory()
 
+
 # === Help ===
 
 # List available commands
@@ -84,6 +85,8 @@ install:
         rm -f "$dest_dir/$name/package.json" "$dest_dir/$name/install.sh"
     done <<< "$chosen"
 
+    bash "$src_dir/scripts/install-runtime-interactions.sh" "$src_dir" "$dest_dir"
+
     echo ""
     echo "Done: $installed installed, $updated updated."
     echo "Run /reload in pi to pick up changes."
@@ -114,9 +117,15 @@ install-all:
         ((count++)) || true
     done
 
+    bash "$src_dir/scripts/install-runtime-interactions.sh" "$src_dir" "$dest_dir"
+
     echo ""
     echo "Done: $count extensions installed."
     echo "Run /reload in pi to pick up changes."
+
+# Verify a simulated deploy layout: relative imports, ajv, and the pinned vendor hash
+verify-install:
+    @node "{{ SRC_DIR }}/scripts/verify-install-layout.mjs"
 
 # Reload every live Pi here (working ones when their turn ends); see pi-tui-rpc/README.md
 reload-all *ARGS:
@@ -152,6 +161,18 @@ status:
             printf "%-25s %s\n" "$name" "outdated"
         fi
     done
+
+    if [[ -d "$dest_dir/pi-tui-rpc" ]]; then
+        if [[ -f "$dest_dir/runtime-interactions/wire.ts" && -f "$dest_dir/runtime-interactions/node_modules/ajv/package.json" ]]; then
+            if diff -q "$src_dir/runtime-interactions/mod.ts" "$dest_dir/runtime-interactions/mod.ts" > /dev/null 2>&1; then
+                printf "%-25s %s\n" "runtime-interactions" "up-to-date"
+            else
+                printf "%-25s %s\n" "runtime-interactions" "outdated"
+            fi
+        else
+            printf "%-25s %s\n" "runtime-interactions" "not installed (pi-tui-rpc will fail)"
+        fi
+    fi
 
 # === Uninstall ===
 
