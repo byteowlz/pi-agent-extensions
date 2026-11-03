@@ -4,6 +4,17 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Fix: alternate-model permission re-check (3.5.2)
+
+- **pi-session-tools**: `decidePermission` now re-checks an `allow_with_model`
+  option as the effective subject (the alternate model) against both the ceiling
+  captured at issue time and the current policy. Previously the later ceiling
+  checks used the original `request.subject.model`, so tightening the allowlist
+  to the original model still admitted the alternate. Decisions now carry the
+  validated effective `subject`, not only an option id. Regression:
+  `permission-broker.test.ts` (red before the fix). Source-only and still
+  unwired; no presenter, socket or admitted-pin change.
+
 ### Subagent permission decision core (3.5.1)
 
 - **pi-session-tools**: pure permission broker (`permission-broker.ts`) with

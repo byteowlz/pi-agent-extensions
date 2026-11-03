@@ -242,3 +242,67 @@ test("malformed requests are rejected before they become requests", () => {
 		expect(result.ok).toBe(false);
 	}
 });
+
+test("allow_with_model re-checks the alternate model against the current ceiling, not the original", () => {
+	// Captured policy allows both models; the current policy has been tightened
+	// to the original model only. The alternate effect must not slip through by
+	// re-checking request.subject.model.
+	const issuedPolicy = policy({ allowedModels: ["local/primary", "local/alternate"] });
+	const tightened = policy({ allowedModels: ["local/primary"] });
+	const result = issuePermissionRequest(
+		{
+			sessionId: "session-a",
+			controllerId: "controller-1",
+			source: "adapter",
+			subject: subject({ model: "local/primary" }),
+			options: [{ id: "allow_with_model", model: "local/alternate" }, { id: "deny" }],
+			ttlMs: 5000,
+		},
+		issuedPolicy,
+		{ now: NOW, requestId: "req-alt" }
+	);
+	if (!result.ok || result.kind !== "request") throw new Error("expected request");
+	const denied = decidePermission(result.request, respond({ requestId: "req-alt", optionId: "allow_with_model" }), {
+		sessionId: "session-a",
+		controllerId: "controller-1",
+		policy: tightened,
+		now: NOW + 1,
+	});
+	expect(denied).toMatchObject({ decision: "deny", reason: "policy_ceiling" });
+});
+
+test("a bounded alternate allow binds the validated effective model, not just an option id", () => {
+	const both = policy({ allowedModels: ["local/primary", "local/alternate"] });
+	const result = issuePermissionRequest(
+		{
+			sessionId: "session-a",
+			controllerId: "controller-1",
+			source: "adapter",
+			subject: subject({ model: "local/primary" }),
+			options: [{ id: "allow_with_model", model: "local/alternate" }, { id: "deny" }],
+			ttlMs: 5000,
+		},
+		both,
+		{ now: NOW, requestId: "req-alt-ok" }
+	);
+	if (!result.ok || result.kind !== "request") throw new Error("expected request");
+	const allowed = decidePermission(result.request, respond({ requestId: "req-alt-ok", optionId: "allow_with_model" }), {
+		sessionId: "session-a",
+		controllerId: "controller-1",
+		policy: both,
+		now: NOW + 1,
+	});
+	expect(allowed).toMatchObject({ decision: "allow", reason: "explicit_allow", optionId: "allow_with_model" });
+	expect(allowed.subject).toEqual({ ...subject({ model: "local/alternate" }) });
+
+	// The plain allow path keeps the requested subject.
+	const plain = issued();
+	expect(
+		decidePermission(plain, respond(), {
+			sessionId: "session-a",
+			controllerId: "controller-1",
+			policy: policy(),
+			now: NOW + 1,
+		}).subject
+	).toEqual(subject());
+});

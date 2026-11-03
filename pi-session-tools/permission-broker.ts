@@ -120,6 +120,8 @@ export interface PermissionDecision {
 	revision: number;
 	decision: "allow" | "deny";
 	optionId?: string;
+	/** The effect actually authorized: the alternate model when one was chosen. */
+	subject: SpawnSubject;
 	reason: DecisionReason;
 	decidedAt: number;
 }
@@ -313,6 +315,7 @@ function deny(request: PermissionRequest, reason: DecisionReason, now: number, o
 		revision: request.revision,
 		decision: "deny",
 		...(optionId ? { optionId } : {}),
+		subject: { ...request.subject },
 		reason,
 		decidedAt: now,
 	};
@@ -344,10 +347,15 @@ export function decidePermission(
 	const option = request.options.find((candidate) => candidate.id === response.optionId);
 	if (!option) return deny(request, response.optionId === undefined ? "invalid_response" : "unknown_option", now);
 	if (option.id === "deny") return deny(request, "explicit_deny", now, option.id);
-	if (option.id === "allow_with_model" && !allowedBy(request.ceiling.allowedModels, option.model))
+	// An alternate-model allow authorizes a DIFFERENT model than the request
+	// subject: validate and re-check that effective subject, never the original.
+	// Using the original here let a tightened allowlist admit the alternate.
+	const effective: SpawnSubject =
+		option.id === "allow_with_model" ? { ...request.subject, model: option.model } : { ...request.subject };
+	if (option.id === "allow_with_model" && !allowedBy(request.ceiling.allowedModels, effective.model))
 		return deny(request, "policy_ceiling", now, option.id);
-	if (!ceilingAllows(request.ceiling, request.subject)) return deny(request, "policy_ceiling", now, option.id);
-	if (!ceilingAllows(context.policy, request.subject)) return deny(request, "policy_ceiling", now, option.id);
+	if (!ceilingAllows(request.ceiling, effective)) return deny(request, "policy_ceiling", now, option.id);
+	if (!ceilingAllows(context.policy, effective)) return deny(request, "policy_ceiling", now, option.id);
 	return {
 		version: PERMISSION_VERSION,
 		requestId: request.requestId,
@@ -357,6 +365,7 @@ export function decidePermission(
 		revision: request.revision,
 		decision: "allow",
 		optionId: option.id,
+		subject: effective,
 		reason: "explicit_allow",
 		decidedAt: now,
 	};
