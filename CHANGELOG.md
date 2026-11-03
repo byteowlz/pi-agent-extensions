@@ -4,6 +4,20 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Subagent permission decision core (3.5.1)
+
+- **pi-session-tools**: pure permission broker (`permission-broker.ts`) with
+  table tests. It binds request id, revision, controller, requesting session and
+  source to a `subagent.spawn` subject, requires an explicit expiry for remote
+  sources, caps it by the session's confirmation budget, and denies on expiry
+  even when `timeout` mode would auto-allow. Only an explicit allow option
+  inside the policy ceiling evaluated at issue time allows; a policy that became
+  stricter later denies. `allowMode: auto` still authorizes locally without a
+  request. Not wired to `approveSpawn`, tools, commands or the socket: no
+  presenter, native or RPC semantics change.
+- Model allowlist glob matching moved to `policy.ts` and reused by the existing
+  subagent tool with unchanged behavior.
+
 ### Subagent identity notice and tab naming (3.5.0)
 
 - **pi-session-tools**: every delegated prompt now opens with a one-line notice

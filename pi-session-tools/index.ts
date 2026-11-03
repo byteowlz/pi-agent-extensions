@@ -103,6 +103,7 @@ import {
 import { isLiveSession, shouldReconnect } from "./lifecycle.js";
 import { fitEntries, fitText } from "./output-budget.js";
 import { subagentOutputSchema, subagentResult } from "./output.js";
+import { allowedBy } from "./policy.js";
 import { forkBoundaryMessage, sideLaunch } from "./side-launch.js";
 import { subagentTaskPrompt } from "./subagent-prompt.js";
 
@@ -660,26 +661,6 @@ async function startAgentWithRetry(
 		}
 	}
 	throw lastErr;
-}
-
-/** Convert a simple glob (e.g. "openai/*") to a RegExp. */
-function globToRegExp(pattern: string): RegExp {
-	const escaped = pattern
-		.replace(/[.+^${}()|[\]\\]/g, "\\$&")
-		.replace(/\*/g, ".*")
-		.replace(/\?/g, ".");
-	return new RegExp(`^${escaped}$`);
-}
-
-/** Does `full` (e.g. "openai/gpt-5") match any of the given patterns? Empty = all allowed. */
-function allowedBy(patterns: string[], full: string): boolean {
-	if (patterns.length === 0) return true;
-	const provider = full.split("/")[0] ?? "";
-	const bare = full.split("/").pop() ?? full;
-	return patterns.some((p) => {
-		const re = globToRegExp(p);
-		return re.test(full) || re.test(bare) || re.test(`${provider}/*`);
-	});
 }
 
 // --- Loadouts (global + per-session) & effective allowlist ------------
