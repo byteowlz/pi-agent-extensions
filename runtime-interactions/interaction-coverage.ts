@@ -127,12 +127,14 @@ export function coverageFor(
 	return [
 		engineRow(placement, "catalog", "command_catalog", Boolean(ports.commands), evidence.catalog, {
 			supported: "canonical catalog from the engine port",
-			partial: "registered-resource discovery exists, but no engine-issued generation/args schema and no catalog port is wired",
+			partial:
+				"registered commands/skills/templates are enumerable and a producer can mint the generation; builtins are not exported from the package root; no catalog port is wired here",
 			unwired: "no catalog port wired; absence alone is not evidence that Pi lacks an SDK operation",
 		}),
 		engineRow(placement, "dispatch", "command_dispatch", Boolean(ports.commands), evidence.dispatch, {
 			supported: "real engine dispatch with correlated receipt",
-			partial: "no public dispatch primitive yet; a literal prompt is not dispatch",
+			partial:
+				"catalog-fenced sendUserMessage(expandPromptTemplates) is genuine dispatch for registered commands; unregistered text falls through to the model, so re-check immediately before dispatch; builtins need typed operations",
 			unwired: "no dispatch port wired; absence alone is not evidence that Pi lacks an SDK operation",
 		}),
 		row(
@@ -180,12 +182,13 @@ export function coverageFor(
 		),
 		engineRow(placement, "queue_snapshot", "queue_snapshot", Boolean(ports.queue), evidence.queueSnapshot, {
 			supported: "engine-owned queue facts with cursor/ids",
-			partial: "Pi emits queue updates, but no public snapshot operation with ids/cursor is wired",
+			partial:
+				"AgentSession exposes read/clear and queue_update internally, but the extension context exposes only hasPendingMessages(); no public snapshot port is wired",
 			unwired: "no queue snapshot port wired; absence alone is not evidence that Pi lacks an SDK operation",
 		}),
 		engineRow(placement, "queue_actions", "queue_apply", Boolean(ports.queue?.apply), evidence.queueActions, {
 			supported: "declared actions with atomic expected cursor",
-			partial: "no public queue action/CAS operation yet",
+			partial: "the extension context exposes no queue actions and clearQueue is not exposed; the managed RPC surface does",
 			unwired: "no queue action port wired; absence alone is not evidence that Pi lacks an SDK operation",
 		}),
 		// Composite row: no recovery/CLI implementation exists; a transport flag is not evidence.

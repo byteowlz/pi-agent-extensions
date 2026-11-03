@@ -49,10 +49,14 @@ parity is diagnostic only.
 
 oqt launches upstream Pi Durable TUI from its **own pinned Pi source** and does
 not load user extensions. It therefore consumes this package and supplies a
-producer port implementation from that source (or a first-party hook). Genuinely
-SDK-blocked rows for oqt: **command catalog, genuine command dispatch, queue
-snapshot, queue actions** — they need a public in-process Pi API or a first-party
-hook in oqt's pinned source. Permission menu/decision are blocked by producer
+producer port implementation from that source (or a first-party hook). For an extension-hosted personal producer, command catalog and genuine dispatch
+are **not** SDK-blocked: registered commands/skills/templates are enumerable and
+a catalog-fenced `sendUserMessage(..., {expandPromptTemplates:true})` is genuine
+dispatch (receipt `started`, uncertain, never `handled`). Builtins need an
+upstream public export of `BUILTIN_SLASH_COMMANDS` plus typed-operation mapping.
+The remaining personal SDK gap is **queue read/clear**: `ExtensionContext` has
+only `hasPendingMessages()`. oqt is not an extension host, so its own producer
+still needs a public in-process API or a first-party hook in its pinned source. Permission menu/decision are blocked by producer
 wiring + a Core-qualified domain extension (not the Pi SDK); owner configuration
 by a separate owner-write authority; retained notifications by a Core-qualified
 DTO; headless by the CLI/recovery implementation.

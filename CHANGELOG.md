@@ -4,6 +4,27 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Verified command dispatch seam; correct the shim finding (3.15.0)
+
+- **pi-tui-rpc**: `pi-command-engine.ts` implements catalog + catalog-fenced
+  dispatch. Verified against Pi 1.4.0: `sendUserMessage(text,{expandPromptTemplates:true})`
+  runs registered extension commands before input handlers/expansion/model
+  (`agent-session.js:1640-1646,1698-1722`), with verbatim args. Dispatch takes a
+  catalog command id, re-checks `getCommands()` immediately before sending, and
+  returns `rejected/unknown_command|stale_generation` for stale or absent ids —
+  unfenced `/text` never reaches the prompt channel.
+- Receipts report `started` (accepted with explicit uncertainty), never `handled`;
+  Pi returns no disposition and no operation id, so the host supplies the
+  correlation id. Builtins stay unavailable: `BUILTIN_SLASH_COMMANDS` is not in
+  the package root/exports; typed-op mapping needs a first-party provider.
+- Coverage detail strings corrected: catalog/dispatch are not blanket SDK gaps;
+  the remaining personal gap is queue read/clear (ExtensionContext exposes only
+  `hasPendingMessages()`), while managed RPC already has clear_queue/queue_update.
+- The consumer package still forbids `sendUserMessage`; the producer engine is the
+  only sanctioned expansion path. Tests cover fence, stale/removed commands,
+  verbatim args, started-not-handled receipts, host-owned ids, builtins and
+  dispatch-originated input not being re-handled.
+
 ### Attributed wake-ups and a note cue budget (3.15.0)
 
 - **pi-schedule**: a `sleep` wake-up is now delivered as an attributed
