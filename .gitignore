@@ -7,6 +7,7 @@ scripts/*
 !scripts/test-selection-tool.mjs
 !scripts/install-runtime-interactions.sh
 !scripts/verify-install-layout.mjs
+!scripts/verify-runtime-interactions.ts
 !scripts/sync-durable-workflow-runtime.mjs
 !scripts/sync-history-worker.mjs
 !scripts/list-tools.mjs

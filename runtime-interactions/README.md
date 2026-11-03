@@ -61,5 +61,17 @@ wiring + a Core-qualified domain extension (not the Pi SDK); owner configuration
 by a separate owner-write authority; retained notifications by a Core-qualified
 DTO; headless by the CLI/recovery implementation.
 
+## Contract gate
+
+`just check` runs lint, typecheck, the pinned contract verifier and the tamper/
+stale-pin regressions. `just contract` runs only the contract verifier:
+SOURCE.json pin, manifest byte-identity for all 68 files and the full shared
+corpus (11 requests / 11 responses / 4 events / 20 invalid; 11 source pairs / 28
+frames / 12 invalid / 9 correlation mismatches) through the real boundary.
+
+When a Core checkout is present (sibling `../oqto` or `OQTO_CORE_DIR`), the gate
+also runs Core's reusable consumer verifier at the pinned commit. On a machine
+without Core, `--allow-local-only` is an explicit escape hatch, never the default.
+
 Packaging: ship `protocol/**` (schemas/transport/fixtures) and `ajv` with the
 consumer. No deployment or reload is implied by this package.

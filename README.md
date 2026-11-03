@@ -161,6 +161,15 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
+## Contract gate
+
+`just check` is the enforceable gate: lint, the pinned `runtime-interactions`
+contract (SOURCE.json pin, manifest byte-identity for all 68 vendored files and
+the full shared corpus) and the tamper/stale-pin regressions. It also invokes
+Core's reusable consumer verifier when a Core checkout is available (sibling
+`../oqto` or `OQTO_CORE_DIR`). `just contract` runs only the contract check;
+`just check-all` adds repo-wide typecheck.
+
 ## Installation
 
 ### Via npm (recommended)

@@ -375,9 +375,17 @@ lint-fix:
 typecheck:
     bun run typecheck
 
-# Lint + typecheck
+# Enforceable gate: lint + pinned contract + tamper/stale-pin regressions.
+# Repo-wide tsgo currently reports 18 pre-existing errors in unrelated
+# extensions; use `just check-all` once those are fixed.
 check:
-    bun run check
+    bun run lint
+    bun scripts/verify-runtime-interactions.ts
+    bun test runtime-interactions/contract-check.test.ts
+
+# Contract gate plus repo-wide typecheck
+check-all: check
+    bun run typecheck
 
 # Focused agent-prompt contracts (no live services or privileged commands)
 test-prompts:
