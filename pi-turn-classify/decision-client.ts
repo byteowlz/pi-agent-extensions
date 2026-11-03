@@ -35,7 +35,7 @@ import {
 export type DecisionApi = "systemone" | "decisions";
 
 export interface DecisionClientConfig {
-	/** Base URL, e.g. http://localhost:8010 or http://localhost:8000. Trailing /v1 is stripped. */
+	/** Base URL, e.g. http://localhost:8010 or http://decision-host:8000. Trailing /v1 is stripped. */
 	endpoint: string;
 	/** Model id as the server knows it, e.g. vllm-sr/d3-lite. */
 	model: string;

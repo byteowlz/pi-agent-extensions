@@ -4,8 +4,9 @@ A small web UI for hand-labelling **real** agent turns, so the classification
 schema and the model calibration can be judged against human labels on real
 traffic instead of turns written to fit the schema.
 
-Live (tailnet only): **http://127.0.0.1:8842** — registered in owlznest as
-`turn labeler` (`registry/apps/turn-labeler--127-0-0-1-8842.json`).
+Run it on a private network address only (for example a tailnet IP). Set the
+address once in `~/.config/pi-turn-classify/labeler.env` (see Run) so the
+repository carries no host-specific address.
 
 ## Why it exists
 
@@ -23,8 +24,10 @@ The bundled bench is 14 turns I wrote myself. That cannot answer "is
 # 1. rebuild the queue from your sessions (newest first)
 bun run pi-turn-classify/labeler/extract.ts --limit 60 --per-session 5
 
-# 2. serve it (tailnet address only; never 0.0.0.0)
-./pi-turn-classify/labeler/run.sh 8842 127.0.0.1
+# 2. serve it (private address only; never 0.0.0.0). Host: argument 2,
+#    else TURN_LABELER_HOST, else ~/.config/pi-turn-classify/labeler.env
+#    (TURN_LABELER_HOST=<tailnet-ip>), else 127.0.0.1.
+./pi-turn-classify/labeler/run.sh 8842 <tailnet-ip>
 
 # or label the background dataset the extension already collected
 bun run pi-turn-classify/labeler/extract.ts --from-dataset ~/.local/share/pi-turn-classify/dataset.jsonl
@@ -98,7 +101,7 @@ the repository, and nothing is uploaded anywhere.
 
 - One labeller, no accounts: it is a personal tool on a private network.
 - The bun process is detached with a pidfile (`/tmp/pi-turn-labeler.pid`); it does
-  not survive a reboot of `dev-host`. Move it to an always-on host (e.g. the
+  not survive a reboot of the host. Move it to an always-on host (e.g. the
   owlznest/gateway machine) when it becomes part of a habit, and update the
   owlznest manifest then.
 - Design Studio has **no line** for this tool (it is not an Oqto/ctx surface), so

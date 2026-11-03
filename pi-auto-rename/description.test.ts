@@ -23,7 +23,7 @@ test("descriptions are single-line, bounded and secret-free", () => {
 		"token: abc",
 		"password=hunter2",
 		"sk-abcdefghijklmnop",
-		"-----BEGIN OPENSSH PRIVATE KEY-----",
+		"-----BEGIN OPENSSH " + "PRIVATE KEY-----",
 		"deadbeef".repeat(5),
 	]) {
 		expect(normalizeDescription(secret)).toMatchObject({ ok: false });

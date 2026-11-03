@@ -13,7 +13,7 @@ import { memoryOutputSchema, parseMemoryOutput } from "../pi-mmry/src/output.js"
 import { checkedContent, checkedItems, laterOutputSchema, readOutput } from "../pi-xlatch-session/src/output.js";
 import { subagentOutputSchema, subagentResult } from "../pi-session-tools/output.js";
 import { scrubText, scrubValue } from "../pi-kyz/scrub.js";
-import manifest from "../docs/structured-output-manifest.json";
+import manifest from "./structured-output-manifest.json";
 
 test("canonical maintained-tool manifest covers every registration and schema classification", () => {
 	const root = join(import.meta.dir, "..");

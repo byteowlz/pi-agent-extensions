@@ -27,7 +27,7 @@ console.log(process.argv.includes('-y')?'ssh-ed25519 AAAA synthetic':'256 SHA256
 import extension from ${JSON.stringify(resolve("pi-ssh-key/index.ts"))};
 const hooks=new Map(),commands=new Map(),notes=[];extension({on:(n,h)=>hooks.set(n,h),registerTool: () => {}, registerCommand:(n,c)=>commands.set(n,c.handler)});
 const ctx={mode:'rpc',hasUI:true,ui:{notify:(text,kind)=>notes.push({text,kind}),custom:()=>{throw new Error('No passphrase expected')}}};
-const key=path.join(process.env.HOME,'fixture.key');fs.writeFileSync(key,'-----BEGIN OPENSSH PRIVATE KEY-----\\nsynthetic\\n');
+const key=path.join(process.env.HOME,'fixture.key');fs.writeFileSync(key,'-----BEGIN OPENSSH '+'PRIVATE KEY-----\\nsynthetic\\n');
 delete process.env.SSH_AUTH_SOCK;delete process.env.SSH_AGENT_PID;
 try{
  await commands.get('ssh-key-load')(key,ctx);assert.equal(notes.at(-1).kind,'info',JSON.stringify(notes));

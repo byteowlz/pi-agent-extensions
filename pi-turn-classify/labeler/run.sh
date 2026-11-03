@@ -3,7 +3,14 @@
 #   ./run.sh [port] [host]
 set -euo pipefail
 PORT="${1:-8842}"
-HOST="${2:-127.0.0.1}"
+# Host: argument 2, else $TURN_LABELER_HOST, else the untracked local env file
+# (TURN_LABELER_HOST=<tailnet-ip>), else loopback. Never 0.0.0.0.
+LOCAL_ENV="${XDG_CONFIG_HOME:-$HOME/.config}/pi-turn-classify/labeler.env"
+if [ -z "${TURN_LABELER_HOST:-}" ] && [ -f "$LOCAL_ENV" ]; then
+  # shellcheck disable=SC1090
+  . "$LOCAL_ENV"
+fi
+HOST="${2:-${TURN_LABELER_HOST:-127.0.0.1}}"
 DATA="${TURN_LABELER_DATA:-$HOME/.local/share/pi-turn-classify-labeler}"
 mkdir -p "$DATA"
 cd "$(dirname "$0")/../.."

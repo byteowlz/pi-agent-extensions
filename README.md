@@ -7,7 +7,7 @@ Custom extensions for the [pi coding agent](https://github.com/badlogic/pi-mono)
 The 2.2.0 collection targets **Pi 1.0.0**. Pre-1.0 host compatibility is no
 longer promised. There are 26 active extensions: 17 selected to keep, six
 still under review and the new selection/capabilities pair. See [the archive](./archive/README.md) for the five retired
-extensions and [migration evidence](./docs/pi-1-baseline.md) for proof limits.
+extensions.
 
 | Extension | Purpose |
 |-----------|---------|

@@ -438,7 +438,7 @@ calibration fit:
 
 ```bash
 bun run pi-turn-classify/labeler/extract.ts --limit 60   # build the queue
-./pi-turn-classify/labeler/run.sh 8842 127.0.0.1        # tailnet-only server
+./pi-turn-classify/labeler/run.sh 8842 <tailnet-ip>      # private-network server
 ```
 
 See [labeler/README.md](./labeler/README.md). It asks the v2 questions

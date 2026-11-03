@@ -4,6 +4,26 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Public mirror preparation (3.16.1)
+
+- The working repository moved to private Forgejo; GitHub now receives `byt publish`
+  snapshots only. `publish.toml` allowlists extension READMEs/CHANGELOGs/examples;
+  `docs/`, `.mmry/`, `.pi/` and agent context files stay private.
+- Replaced machine-specific values in tracked files with placeholders: test fixture
+  homes (`/home/user`), fixture host names (`dev-host`, `gpu-host`, `localvm`), a
+  provider label in a session-tools test, documentation IPs (`192.0.2.12`), and the
+  example gateway URL (`eavs.example.com`). Test-only private-key headers are built by
+  concatenation so the leak scan stays strict.
+- **pi-turn-classify 0.8.1**: default endpoint is now `http://localhost:8010` (set
+  `endpoint` in `~/.pi/agent/turn-classify.json` to use another server); `labeler/run.sh`
+  takes its bind address from argument 2, `TURN_LABELER_HOST`, or the untracked
+  `~/.config/pi-turn-classify/labeler.env`, else loopback.
+- **pi-openui**: the vendored dashboard fixture names its example host `localvm`.
+- **pi-session-tools**: the Pi1 e2e launcher path is resolved from the home directory.
+- Root README no longer links to private migration notes.
+- `structured-output-manifest.json` moved from `docs/` to `scripts/`, next to its only
+  consumer `scripts/structured-output.test.ts`, so the public tree runs the same tests.
+
 ### Contract pin 042ee39b (3.16.0)
 
 - Re-vendored only `v1/manifest.json` at Core `042ee39b462196149013acdeaadcb2d6650caf43`

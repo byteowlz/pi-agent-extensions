@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.1
+
+- Default `endpoint` is `http://localhost:8010` instead of a machine-specific address;
+  configure the decision server in `turn-classify.json`.
+- `labeler/run.sh` binds argument 2, else `TURN_LABELER_HOST`, else the value from the
+  untracked `~/.config/pi-turn-classify/labeler.env`, else `127.0.0.1`.
+- Fixture paths and host names in tests, samples and docs are placeholders.
+
 ## 0.8.0
 
 - **`scope` cut and derived.** It was the last weak question (37.5% jev / 81.3%

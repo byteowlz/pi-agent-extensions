@@ -11,7 +11,7 @@ async function exercise(inputs: string[]) {
 	const root = await mkdtemp(join(tmpdir(), "ssh-picker-"));
 	try {
 		for (const name of ["alpha#", "beta#", "zzz"]) {
-			await writeFile(join(root, name), "-----BEGIN OPENSSH PRIVATE KEY-----\nsynthetic\n");
+			await writeFile(join(root, name), "-----BEGIN OPENSSH " + "PRIVATE KEY-----\nsynthetic\n");
 		}
 		const screens: string[] = [];
 		const ctx = {

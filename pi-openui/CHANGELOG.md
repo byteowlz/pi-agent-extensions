@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- The vendored dashboard fixture (`fixtures.gen.ts`, `openui-vendor.js`) names its
+  example host `localvm`; a rebuild from a package still carrying the old name will be
+  caught by the publish leak scan.
+
 ## 3.1.0 (extension bundle)
 
 - Replace the full profile injection with short instructions scoped to the

@@ -28,7 +28,7 @@ import extension from ${JSON.stringify(resolve("pi-ssh-key/index.ts"))};
 const commands=new Map(),hooks=new Map(),notes=[];
 const pi={on:(name,handler)=>hooks.set(name,handler),registerTool: () => {}, registerCommand:(name,command)=>commands.set(name,command.handler)};
 const ctx={mode:'rpc',hasUI:true,ui:{notify:(text,kind)=>notes.push({text,kind}),custom:()=>{throw new Error('No passphrase UI expected')}}};
-const home=process.env.HOME;const key=path.join(home,'synthetic.key');fs.writeFileSync(key,'-----BEGIN OPENSSH PRIVATE KEY-----\\nsynthetic\\n');
+const home=process.env.HOME;const key=path.join(home,'synthetic.key');fs.writeFileSync(key,'-----BEGIN OPENSSH '+'PRIVATE KEY-----\\nsynthetic\\n');
 const open=async (name,delay=0)=>{const sock=path.join(home,name);const server=net.createServer(client=>{client.on('error',()=>{});client.once('data',()=>setTimeout(()=>client.end(Buffer.from([0,0,0,5,12,0,0,0,0])),delay))});await new Promise(resolve=>server.listen(sock,resolve));return{sock,server}};
 const close=server=>new Promise(resolve=>server.close(()=>resolve()));
 const a=await open('a.sock'),b=await open('b.sock');

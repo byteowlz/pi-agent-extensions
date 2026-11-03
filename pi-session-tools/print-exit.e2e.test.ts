@@ -23,7 +23,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { type Server, createServer } from "node:http";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const require = createRequire(import.meta.url);
@@ -36,7 +36,7 @@ const require = createRequire(import.meta.url);
 function resolvePiBinary(): string {
 	const override = process.env.PI_TEST_PI_BIN;
 	if (override) return override;
-	const pi1 = "/home/user/byteowlz/oqto-release-artifacts/pi1-node-qualification/runtime/pi";
+	const pi1 = join(homedir(), "byteowlz/oqto-release-artifacts/pi1-node-qualification/runtime/pi");
 	try {
 		require("node:fs").accessSync(pi1);
 		return pi1;
