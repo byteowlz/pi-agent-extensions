@@ -383,6 +383,29 @@ check:
     bun scripts/verify-runtime-interactions.ts
     bun test runtime-interactions/contract-check.test.ts
 
+# Fast, scoped contract check for the tracked pre-commit hook. Runs only when the
+# vendored bundle, its SOURCE.json or contract-consuming code is staged.
+pre-commit:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+    if [[ -z "$staged" ]]; then
+        echo "pre-commit: nothing staged"
+        exit 0
+    fi
+    if ! printf '%s\n' "$staged" | grep -Eq '^(runtime-interactions/(protocol/runtime-interactions/|wire\.ts|interaction-(port|runtime|terminal|coverage)\.ts|mod\.ts|contract-check\.test\.ts)|pi-tui-rpc/(interaction-(adapter|source|continuity)\.ts|pi-command-engine\.ts|dispatch\.ts|hub\.ts|index\.ts)|scripts/verify-runtime-interactions\.ts|justfile|\.githooks/)'; then
+        echo "pre-commit: no contract-relevant staged files; skipping contract check"
+        exit 0
+    fi
+    echo "pre-commit: staged contract-relevant files; verifying pin + corpus"
+    bun scripts/verify-runtime-interactions.ts --allow-local-only
+
+# Enable the tracked hooks for this clone (per-clone; bypassable with --no-verify).
+setup-hooks:
+    chmod +x .githooks/pre-commit
+    git config core.hooksPath .githooks
+    echo "Git hooks installed: core.hooksPath=.githooks (bypass with git commit --no-verify)"
+
 # Contract gate plus repo-wide typecheck
 check-all: check
     bun run typecheck

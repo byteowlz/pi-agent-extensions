@@ -170,6 +170,13 @@ Core's reusable consumer verifier when a Core checkout is available (sibling
 `../oqto` or `OQTO_CORE_DIR`). `just contract` runs only the contract check;
 `just check-all` adds repo-wide typecheck.
 
+Pre-commit: the tracked `.githooks/pre-commit` runs `just pre-commit`. Enable it
+once per clone with `just setup-hooks` (sets `core.hooksPath=.githooks`; bypass
+with `git commit --no-verify`). `just pre-commit` only checks when the vendored
+bundle, its `SOURCE.json` or contract-consuming code is staged, and runs the
+byte/pin + shared-corpus verifier (~0.3s when skipping, ~1.2s when checking).
+Hooks are per-clone and bypassable; `just check` remains the push gate.
+
 ## Installation
 
 ### Via npm (recommended)
