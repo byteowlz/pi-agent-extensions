@@ -293,13 +293,13 @@ function isCompactionRefusal(error: unknown): boolean {
 // with an invented binding). The binding and lease are re-read AFTER the adapter
 // work, so a revocation during an await cannot return a stale success.
 
+import type { InteractionPorts } from "../runtime-interactions/interaction-port.js";
+import { createInteractionRuntime } from "../runtime-interactions/interaction-runtime.js";
+import type { RuntimeBinding } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeBinding.js";
+import type { RuntimeRequest } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeRequest.js";
+import type { RuntimeResponse } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeResponse.js";
+import { isMutatingOperation } from "../runtime-interactions/wire.js";
 import type { InteractionAdapter } from "./interaction-adapter.js";
-import type { InteractionPorts } from "./interaction-port.js";
-import { createInteractionRuntime } from "./interaction-runtime.js";
-import type { RuntimeBinding } from "./protocol/runtime-interactions/v1/RuntimeBinding.js";
-import type { RuntimeRequest } from "./protocol/runtime-interactions/v1/RuntimeRequest.js";
-import type { RuntimeResponse } from "./protocol/runtime-interactions/v1/RuntimeResponse.js";
-import { isMutatingOperation } from "./wire.js";
 
 export interface InteractionDispatchDeps {
 	adapter: InteractionAdapter;

@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { CommandEnginePort, ErrorSourcePort, QueueEnginePort } from "../runtime-interactions/interaction-port.js";
+import type { RuntimeCommandCatalog } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeCommandCatalog.js";
+import type { RuntimeCommandReceipt } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeCommandReceipt.js";
+import type { RuntimeErrorSnapshot } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeErrorSnapshot.js";
+import type { RuntimePermissionPresentation } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimePermissionPresentation.js";
+import type { RuntimeQueueSnapshot } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeQueueSnapshot.js";
 import { InteractionAdapter } from "./interaction-adapter.js";
-import type { CommandEnginePort, ErrorSourcePort, QueueEnginePort } from "./interaction-port.js";
-import type { RuntimeCommandCatalog } from "./protocol/runtime-interactions/v1/RuntimeCommandCatalog.js";
-import type { RuntimeCommandReceipt } from "./protocol/runtime-interactions/v1/RuntimeCommandReceipt.js";
-import type { RuntimeErrorSnapshot } from "./protocol/runtime-interactions/v1/RuntimeErrorSnapshot.js";
-import type { RuntimePermissionPresentation } from "./protocol/runtime-interactions/v1/RuntimePermissionPresentation.js";
-import type { RuntimeQueueSnapshot } from "./protocol/runtime-interactions/v1/RuntimeQueueSnapshot.js";
 
 const catalog: RuntimeCommandCatalog = {
 	generation: "gen-7",
@@ -112,11 +112,13 @@ test("no engine port means unavailable, never a prompt or a fabricated result", 
 	expect(surface.some((name) => /prompt|message|send/i.test(name))).toBe(false);
 });
 
-test("bridge modules contain no raw-prompt shim and leave lease/reload read-only", () => {
+test("bridge adapter and host-neutral contract contain no raw-prompt shim", () => {
 	const stripComments = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-	const files = ["interaction-port.ts", "interaction-adapter.ts", "wire.ts"].map((name) =>
-		stripComments(readFileSync(join(import.meta.dir, name), "utf8"))
-	);
+	const files = [
+		stripComments(readFileSync(join(import.meta.dir, "interaction-adapter.ts"), "utf8")),
+		stripComments(readFileSync(join(import.meta.dir, "..", "runtime-interactions", "interaction-port.ts"), "utf8")),
+		stripComments(readFileSync(join(import.meta.dir, "..", "runtime-interactions", "wire.ts"), "utf8")),
+	];
 	for (const source of files) {
 		for (const forbidden of ["sendUserMessage", "expandPromptTemplates", "dispatchCommand", "lease."]) {
 			expect(source).not.toContain(forbidden);

@@ -1,0 +1,23 @@
+{
+	"name": "@byteowlz/runtime-interactions",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Host-neutral consumer contract for placement-neutral Pi runtime interactions (DTOs, wire validation, ports/runtime, terminal views, coverage).",
+	"type": "module",
+	"exports": {
+		".": "./mod.ts"
+	},
+	"files": [
+		"mod.ts",
+		"wire.ts",
+		"interaction-port.ts",
+		"interaction-runtime.ts",
+		"interaction-terminal.ts",
+		"interaction-coverage.ts",
+		"protocol/**",
+		"README.md"
+	],
+	"dependencies": {
+		"ajv": "^8.17.1"
+	}
+}

@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
+import type { RuntimeBinding } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeBinding.js";
+import type { RuntimeCommandCatalog } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeCommandCatalog.js";
+import type { RuntimeCommandReceipt } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeCommandReceipt.js";
+import type { RuntimeRequest } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeRequest.js";
 import { dispatchInteractionRequest } from "./dispatch.js";
 import { InteractionAdapter } from "./interaction-adapter.js";
-import type { RuntimeBinding } from "./protocol/runtime-interactions/v1/RuntimeBinding.js";
-import type { RuntimeCommandCatalog } from "./protocol/runtime-interactions/v1/RuntimeCommandCatalog.js";
-import type { RuntimeCommandReceipt } from "./protocol/runtime-interactions/v1/RuntimeCommandReceipt.js";
-import type { RuntimeRequest } from "./protocol/runtime-interactions/v1/RuntimeRequest.js";
 
 const binding: RuntimeBinding = {
 	publicSessionId: "public-1",

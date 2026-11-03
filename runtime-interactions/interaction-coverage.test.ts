@@ -75,38 +75,81 @@ test("the matrix has exactly the ten required rows in contract order", () => {
 	]);
 });
 
-test("genuine Pi SDK gaps are marked as such, separately from unwired adapters", () => {
-	const rows = byRow(coverageFor("personal", {}));
-	// Pi has no public extension dispatch or queue operations in the pinned SDK.
-	expect(sdkGapRows(Object.values(rows))).toEqual(["catalog", "dispatch", "queue_snapshot", "queue_actions"]);
+test("missing ports alone never claim an SDK gap or a headless capability", () => {
+	const rows = byRow(coverageFor("managed", {}));
+	// Red regression 1: an empty matrix plus a transport flag is not recovery/headless.
+	const flagged = byRow(coverageFor("managed", {}, { headless: true } as never));
+	expect(flagged.reconnect_headless).toMatchObject({ state: "unavailable", reason: "adapter_unwired", sdkGap: false });
+
+	// Red regression 3: absence alone cannot distinguish stock-Pi gaps from unwired adapters.
+	expect(sdkGapRows(Object.values(rows))).toEqual([]);
 	for (const row of ["catalog", "dispatch", "queue_snapshot", "queue_actions"] as const) {
-		expect(rows[row]).toMatchObject({ state: "unavailable", reason: "sdk_engine_absent", sdkGap: true });
+		expect(rows[row]).toMatchObject({ state: "unavailable", reason: "adapter_unwired", sdkGap: false });
 	}
-	// Unwired or separate-authority rows must not masquerade as SDK gaps.
-	for (const row of ["permission_menu", "explicit_decision", "retained_notifications", "errors_outcomes"] as const) {
-		expect(rows[row]).toMatchObject({ state: "unavailable", reason: "port_not_configured", sdkGap: false });
-	}
-	expect(rows.owner_config).toMatchObject({ state: "unavailable", reason: "owner_authority_pending", sdkGap: false });
-	expect(rows.reconnect_headless).toMatchObject({ state: "unavailable", reason: "adapter_unwired", sdkGap: false });
+	expect(rows.permission_menu).toMatchObject({ state: "unavailable", reason: "port_not_configured", sdkGap: false });
+	expect(rows.owner_config).toMatchObject({ state: "unavailable", reason: "owner_authority_pending" });
+	expect(rows.reconnect_headless).toMatchObject({ state: "unavailable", reason: "adapter_unwired" });
 });
 
-test("a fully wired producer reports the servable rows available and the rest honestly unavailable", () => {
-	const rows = byRow(coverageFor("managed", fullPorts(), { headless: true }));
-	for (const row of [
-		"catalog",
-		"dispatch",
-		"permission_menu",
-		"explicit_decision",
-		"errors_outcomes",
-		"queue_snapshot",
-		"queue_actions",
-		"reconnect_headless",
-	] as const) {
+test("explicit engine evidence distinguishes known SDK absence from unwired adapters", () => {
+	const absent = coverageFor(
+		"managed",
+		{},
+		{ catalog: "sdk_absent", dispatch: "sdk_absent", queueSnapshot: "sdk_absent", queueActions: "sdk_absent" }
+	);
+	expect(sdkGapRows(absent)).toEqual(["catalog", "dispatch", "queue_snapshot", "queue_actions"]);
+	for (const row of ["catalog", "dispatch", "queue_snapshot", "queue_actions"] as const) {
+		expect(byRow(absent)[row]).toMatchObject({ state: "unavailable", reason: "sdk_engine_absent", sdkGap: true });
+	}
+
+	const supportedButUnwired = byRow(
+		coverageFor(
+			"managed",
+			{},
+			{ catalog: "supported", dispatch: "supported", queueSnapshot: "supported", queueActions: "supported" }
+		)
+	);
+	for (const row of ["catalog", "dispatch", "queue_snapshot", "queue_actions"] as const) {
+		expect(supportedButUnwired[row]).toMatchObject({ state: "unavailable", reason: "adapter_unwired", sdkGap: false });
+	}
+
+	const partial = byRow(coverageFor("managed", {}, { catalog: "partial", queueSnapshot: "partial" }));
+	expect(partial.catalog).toMatchObject({ state: "unavailable", reason: "adapter_unwired" });
+	expect(partial.catalog.detail).toContain("discovery");
+	expect(partial.queue_snapshot.detail).toContain("queue updates");
+});
+
+test("retained errors alone do not implement the combined errors/outcomes row", () => {
+	// Red regression 2: a throwing error port must not satisfy the composite row.
+	const errorsOnly = byRow(
+		coverageFor("managed", {
+			errors: {
+				snapshot: () => {
+					throw new Error("never invoked");
+				},
+			},
+		})
+	);
+	expect(errorsOnly.errors_outcomes).toMatchObject({ state: "unavailable", reason: "port_not_configured" });
+	expect(errorsOnly.errors_outcomes.detail).toContain("retained errors present");
+	expect(errorsOnly.errors_outcomes.detail).toContain("missing");
+
+	const withEvents = byRow(coverageFor("managed", { ...fullPorts() }));
+	expect(withEvents.errors_outcomes).toMatchObject({ state: "unavailable", reason: "port_not_configured" });
+	expect(withEvents.errors_outcomes.detail).toContain("live only (not retained)");
+});
+
+test("a fully wired producer serves only the rows it can actually serve", () => {
+	const rows = byRow(coverageFor("managed", fullPorts()));
+	for (const row of ["catalog", "dispatch", "permission_menu", "explicit_decision", "queue_snapshot", "queue_actions"] as const) {
 		expect(rows[row]).toMatchObject({ state: "available", sdkGap: false });
 	}
 	expect(rows.owner_config).toMatchObject({ state: "unavailable", reason: "owner_authority_pending" });
 	expect(rows.retained_notifications).toMatchObject({ state: "unavailable", reason: "port_not_configured" });
-	// A queue port without apply keeps actions unavailable as a genuine engine gap.
+	expect(rows.errors_outcomes).toMatchObject({ state: "unavailable", reason: "port_not_configured" });
+	expect(rows.reconnect_headless).toMatchObject({ state: "unavailable", reason: "adapter_unwired" });
+
+	// A queue port without apply does not become an SDK gap by itself.
 	const noApply = byRow(
 		coverageFor("managed", {
 			...fullPorts(),
@@ -121,16 +164,21 @@ test("a fully wired producer reports the servable rows available and the rest ho
 			},
 		})
 	);
-	expect(noApply.queue_actions).toMatchObject({ state: "unavailable", reason: "sdk_engine_absent", sdkGap: true });
+	expect(noApply.queue_actions).toMatchObject({ state: "unavailable", reason: "adapter_unwired", sdkGap: false });
 });
 
-test("both placements produce identical semantics for identical capabilities", () => {
-	for (const ports of [{}, fullPorts()]) {
-		const personal = coverageFor("personal", ports, { headless: true });
-		const managed = coverageFor("managed", ports, { headless: true });
+test("placement parity is diagnostic only; equal matrices can be equally unavailable", () => {
+	for (const [ports, evidence] of [
+		[{}, {}],
+		[fullPorts(), { catalog: "sdk_absent" as const }],
+	] as const) {
+		const personal = coverageFor("personal", ports, evidence);
+		const managed = coverageFor("managed", ports, evidence);
 		expect(parityViolations(personal, managed)).toEqual([]);
 		expect(personal.map(({ placement: _p, ...rest }) => rest)).toEqual(managed.map(({ placement: _m, ...rest }) => rest));
 	}
+	const empty = coverageFor("personal", {});
+	expect(empty.every((entry) => entry.state === "unavailable")).toBe(true);
 });
 
 test("every row names only canonical operations", () => {
@@ -157,13 +205,12 @@ test("terminal obligations cover oqt's mandatory non-GUI surfaces and mark what 
 	const obligations = terminalObligations();
 	expect(obligations.map((entry) => entry.row)).toEqual([...INTERACTION_ROWS]);
 	const rows = Object.fromEntries(obligations.map((entry) => [entry.row, entry]));
-	// Native keyboard picker, timed/cancellable prompt, notices, queue actions and headless are mandatory.
 	expect(rows.catalog).toMatchObject({ status: "source_helper", helper: "commandPalette" });
 	expect(rows.permission_menu).toMatchObject({ status: "source_helper", helper: "permissionPrompt" });
 	expect(rows.explicit_decision).toMatchObject({ status: "source_helper", helper: "permissionDecisionRequest" });
 	expect(rows.queue_actions).toMatchObject({ status: "source_helper", helper: "queueActionRequest" });
-	expect(rows.errors_outcomes).toMatchObject({ status: "source_helper", helper: "errorView" });
-	// Renderer/CLI and retention are not closed by builders.
+	// Errors are visible via errorView, but retained outcomes are still missing.
+	expect(rows.errors_outcomes).toMatchObject({ status: "renderer_missing" });
 	expect(rows.retained_notifications).toMatchObject({ status: "renderer_missing" });
 	expect(rows.reconnect_headless).toMatchObject({ status: "renderer_missing" });
 	expect(rows.owner_config).toMatchObject({ status: "unavailable" });
@@ -172,8 +219,11 @@ test("terminal obligations cover oqt's mandatory non-GUI surfaces and mark what 
 
 test("the runtime exposes the same matrix for both placements", () => {
 	const runtime = createInteractionRuntime(fullPorts(), admission);
-	expect(runtime.coverage("personal", { headless: true }).map((entry) => entry.row)).toEqual([...INTERACTION_ROWS]);
-	expect(
-		parityViolations(runtime.coverage("personal", { headless: true }), runtime.coverage("managed", { headless: true }))
-	).toEqual([]);
+	expect(runtime.coverage("personal").map((entry) => entry.row)).toEqual([...INTERACTION_ROWS]);
+	expect(parityViolations(runtime.coverage("personal"), runtime.coverage("managed"))).toEqual([]);
+	const emptyRuntime = createInteractionRuntime({}, admission);
+	expect(emptyRuntime.coverage("managed", { catalog: "sdk_absent" }).find((entry) => entry.row === "catalog")).toMatchObject({
+		sdkGap: true,
+		reason: "sdk_engine_absent",
+	});
 });

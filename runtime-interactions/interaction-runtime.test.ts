@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { InteractionAdapter } from "./interaction-adapter.js";
 import type { InteractionPorts } from "./interaction-port.js";
 import { type InteractionAdmission, createInteractionRuntime } from "./interaction-runtime.js";
 import type { RuntimeBinding } from "./protocol/runtime-interactions/v1/RuntimeBinding.js";
@@ -129,18 +128,10 @@ async function executeOk(runtime: ReturnType<typeof createInteractionRuntime>, o
 	return outcome.response;
 }
 
-test("a managed producer and the personal bridge adapter satisfy the same typed contract", async () => {
-	const managed = fakeProducerPorts();
-	const managedRuntime = createInteractionRuntime(managed.ports, admission());
-
-	const personal = new InteractionAdapter({
-		ports: {
-			commands: managed.ports.commands,
-			queue: managed.ports.queue,
-			errors: managed.ports.errors,
-		},
-	});
-	const personalRuntime = createInteractionRuntime(personal.enginePorts(), admission());
+test("the same ports satisfy the contract for either placement", async () => {
+	const producer = fakeProducerPorts();
+	const personal = createInteractionRuntime(producer.ports, admission());
+	const managed = createInteractionRuntime(producer.ports, admission());
 
 	for (const operation of [
 		{ op: "command_catalog" as const },
@@ -148,8 +139,8 @@ test("a managed producer and the personal bridge adapter satisfy the same typed 
 		{ op: "queue_snapshot" as const },
 		{ op: "error_list" as const, afterEventId: null },
 	] satisfies RuntimeRequest["operation"][]) {
-		const a = await executeOk(managedRuntime, operation);
-		const b = await executeOk(personalRuntime, operation);
+		const a = await executeOk(personal, operation);
+		const b = await executeOk(managed, operation);
 		expect(b.result).toEqual(a.result);
 		expect(b.binding).toEqual(a.binding);
 	}

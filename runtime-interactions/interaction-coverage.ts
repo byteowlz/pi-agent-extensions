@@ -2,16 +2,14 @@
  * Placement-parity coverage for the ten mandatory runtime-interaction rows.
  *
  * The rows and their order come from Core's placement-neutral contract
- * (`mobile-command-interactions.md`, ADR-0078): catalog; dispatch; permission
- * menu/snapshot; explicit decision; owner configuration; retained notifications;
- * errors/outcomes; queue snapshot; queue actions; reconnect/headless.
+ * (`mobile-command-interactions.md`, ADR-0078). A row is `available` only when the
+ * supplied ports can actually serve it. Absence of a port is NOT evidence that Pi
+ * lacks an SDK operation: callers pass explicit engine evidence for that, so an
+ * unwired managed adapter and a known stock-Pi gap are distinguishable.
  *
- * This module reports what the current ports can actually serve in a placement,
- * and marks rows that are unavailable because Pi genuinely lacks a public SDK
- * operation (dispatch, queue snapshot/actions) separately from rows that are
- * merely unwired (permissions producer, retention, owner authority, headless CLI).
- * It adds no wire fields and no second dialect: every row names canonical
- * operations only.
+ * Composite rows stay unavailable until every required path exists; their detail
+ * names the partial inputs. A boolean "headless" flag is not evidence, and equal
+ * matrices (both placements) are diagnostic, not proof of two real producers.
  */
 
 import type { InteractionPorts } from "./interaction-port.js";
@@ -35,8 +33,18 @@ export const INTERACTION_ROWS = [
 
 export type InteractionRow = (typeof INTERACTION_ROWS)[number];
 
-/** Why a row is unavailable; `sdk_engine_absent` is the genuine Pi gap. */
+/** Why a row is unavailable; `sdk_engine_absent` requires explicit evidence. */
 export type CoverageReason = RuntimeUnavailableReason | "adapter_unwired" | "renderer_missing" | "owner_authority_pending";
+
+/** Caller-supplied engine knowledge. Never inferred from a missing port. */
+export type EngineEvidence = "supported" | "partial" | "sdk_absent" | "unknown";
+
+export interface CoverageEvidence {
+	catalog?: EngineEvidence;
+	dispatch?: EngineEvidence;
+	queueSnapshot?: EngineEvidence;
+	queueActions?: EngineEvidence;
+}
 
 export interface RowCoverage {
 	row: InteractionRow;
@@ -46,14 +54,9 @@ export interface RowCoverage {
 	reason?: CoverageReason;
 	/** Canonical operations that serve the row; never a parallel dialect. */
 	ops: RuntimeOperation["op"][];
-	/** True only when absence is a genuine Pi SDK/engine gap, not wiring. */
+	/** True only with explicit `sdk_absent` evidence, not merely a missing port. */
 	sdkGap: boolean;
 	detail: string;
-}
-
-export interface CoverageOptions {
-	/** A typed headless transport exists for this placement (not a GUI-only path). */
-	headless?: boolean;
 }
 
 const ROW_LABEL: Record<InteractionRow, string> = {
@@ -89,58 +92,63 @@ function row(
 	};
 }
 
+/** Describe an engine-backed row from an actual port or explicit evidence. */
+function engineRow(
+	placement: InteractionPlacement,
+	name: InteractionRow,
+	op: RuntimeOperation["op"],
+	present: boolean,
+	evidence: EngineEvidence | undefined,
+	details: { supported: string; partial: string; unwired: string }
+): RowCoverage {
+	if (present) return row(placement, name, "available", [op], details.supported);
+	if (evidence === "sdk_absent")
+		return row(placement, name, "unavailable", [op], "reported Pi engine/SDK absence", {
+			reason: "sdk_engine_absent",
+			sdkGap: true,
+		});
+	if (evidence === "partial") return row(placement, name, "unavailable", [op], details.partial, { reason: "adapter_unwired" });
+	return row(placement, name, "unavailable", [op], details.unwired, { reason: "adapter_unwired" });
+}
+
 /**
- * Derive the ten-row matrix for one placement from the supplied ports.
+ * Derive the ten-row matrix for one placement from ports plus explicit evidence.
  *
- * Personal and managed placements must produce identical rows/reasons for the
- * same port set; only routing/auth/queue ownership/transport differ outside this
- * view. Rows stay `unavailable` until a real producer satisfies them.
+ * Both placements must report the same semantics for the same capabilities, but
+ * equality alone is diagnostic: unavailable rows are still unavailable.
  */
 export function coverageFor(
 	placement: InteractionPlacement,
 	ports: InteractionPorts,
-	options: CoverageOptions = {}
+	evidence: CoverageEvidence = {}
 ): RowCoverage[] {
-	const commands = Boolean(ports.commands);
-	const queue = ports.queue;
-	const registry = Boolean(ports.permissionRegistry);
 	const errors = Boolean(ports.errors);
 	const events = Boolean(ports.events);
-	const headless = options.headless === true;
-
 	return [
-		row(
-			placement,
-			"catalog",
-			commands ? "available" : "unavailable",
-			["command_catalog"],
-			commands ? "canonical catalog from the engine port" : "Pi exposes no public catalog/dispatch engine operation yet",
-			{ reason: "sdk_engine_absent", sdkGap: true }
-		),
-		row(
-			placement,
-			"dispatch",
-			commands ? "available" : "unavailable",
-			["command_dispatch"],
-			commands
-				? "real engine dispatch with correlated receipt"
-				: "no public SDK dispatch primitive; literal prompt is not dispatch",
-			{ reason: "sdk_engine_absent", sdkGap: true }
-		),
+		engineRow(placement, "catalog", "command_catalog", Boolean(ports.commands), evidence.catalog, {
+			supported: "canonical catalog from the engine port",
+			partial: "registered-resource discovery exists, but no engine-issued generation/args schema and no catalog port is wired",
+			unwired: "no catalog port wired; absence alone is not evidence that Pi lacks an SDK operation",
+		}),
+		engineRow(placement, "dispatch", "command_dispatch", Boolean(ports.commands), evidence.dispatch, {
+			supported: "real engine dispatch with correlated receipt",
+			partial: "no public dispatch primitive yet; a literal prompt is not dispatch",
+			unwired: "no dispatch port wired; absence alone is not evidence that Pi lacks an SDK operation",
+		}),
 		row(
 			placement,
 			"permission_menu",
-			registry ? "available" : "unavailable",
+			ports.permissionRegistry ? "available" : "unavailable",
 			["permission_snapshot"],
-			registry ? "producer snapshot with revision/expiry" : "no permission producer registry port wired in this build",
+			ports.permissionRegistry ? "producer snapshot with revision/expiry" : "no permission producer registry port wired",
 			{ reason: "port_not_configured" }
 		),
 		row(
 			placement,
 			"explicit_decision",
-			registry ? "available" : "unavailable",
+			ports.permissionRegistry ? "available" : "unavailable",
 			["permission_decide"],
-			registry
+			ports.permissionRegistry
 				? "one-shot allow_once/deny/cancel on issued options"
 				: "no authoritative decision producer; a presenter cannot decide",
 			{ reason: "port_not_configured" }
@@ -161,42 +169,32 @@ export function coverageFor(
 			"live events only; no retained-notification DTO/port exists before Core qualification",
 			{ reason: "port_not_configured" }
 		),
+		// Composite row: retained errors alone are not retained outcomes.
 		row(
 			placement,
 			"errors_outcomes",
-			errors ? "available" : "unavailable",
+			"unavailable",
 			["error_list"],
-			errors
-				? `retained errors${events ? " with canonical outcome events" : "; outcome events not supplied"}`
-				: "no retained error source port wired",
+			`retained errors ${errors ? "present" : "missing"}; outcome events ${events ? "live only (not retained)" : "missing"}; the composite row requires retained outcomes`,
 			{ reason: "port_not_configured" }
 		),
-		row(
-			placement,
-			"queue_snapshot",
-			queue ? "available" : "unavailable",
-			["queue_snapshot"],
-			queue ? "engine-owned queue facts with cursor/ids" : "no public extension queue snapshot operation yet",
-			{ reason: "sdk_engine_absent", sdkGap: true }
-		),
-		row(
-			placement,
-			"queue_actions",
-			queue?.apply ? "available" : "unavailable",
-			["queue_apply"],
-			queue?.apply
-				? "declared actions with atomic expected cursor"
-				: "no public queue action/CAS operation yet; no client mirror",
-			{ reason: "sdk_engine_absent", sdkGap: true }
-		),
+		engineRow(placement, "queue_snapshot", "queue_snapshot", Boolean(ports.queue), evidence.queueSnapshot, {
+			supported: "engine-owned queue facts with cursor/ids",
+			partial: "Pi emits queue updates, but no public snapshot operation with ids/cursor is wired",
+			unwired: "no queue snapshot port wired; absence alone is not evidence that Pi lacks an SDK operation",
+		}),
+		engineRow(placement, "queue_actions", "queue_apply", Boolean(ports.queue?.apply), evidence.queueActions, {
+			supported: "declared actions with atomic expected cursor",
+			partial: "no public queue action/CAS operation yet",
+			unwired: "no queue action port wired; absence alone is not evidence that Pi lacks an SDK operation",
+		}),
+		// Composite row: no recovery/CLI implementation exists; a transport flag is not evidence.
 		row(
 			placement,
 			"reconnect_headless",
-			headless ? "available" : "unavailable",
+			"unavailable",
 			["capabilities", "queue_snapshot", "error_list"],
-			headless
-				? "typed snapshots/receipts over a non-GUI transport; no uncertain replay"
-				: "typed headless CLI/API surface not implemented for this placement",
+			"typed snapshots/receipts exist in the contract, but no recovery/CLI path is implemented; a flag is not evidence",
 			{ reason: "adapter_unwired" }
 		),
 	];
@@ -211,11 +209,11 @@ export interface TerminalObligation {
 }
 
 /**
- * What a terminal consumer (oqt TUI/CLI) must provide for each row.
+ * What a terminal consumer (oqt TUI/CLI) must still provide per row.
  *
- * `source_helper` means this repository has a renderable view/request builder but
- * the actual renderer, keymap and headless command still belong to oqt; those
- * remain `renderer_missing` until implemented and exercised natively.
+ * `source_helper` means a renderable view/request builder exists here; the actual
+ * renderer, keymap and headless command belong to oqt and remain
+ * `renderer_missing` until implemented and natively exercised.
  */
 export function terminalObligations(): TerminalObligation[] {
 	return [
@@ -258,10 +256,9 @@ export function terminalObligations(): TerminalObligation[] {
 		},
 		{
 			row: "errors_outcomes",
-			required: "visible/reopenable error list with phase/recovery/uncertainty",
-			status: "source_helper",
-			helper: "errorView",
-			note: "oqt persistence/UI still required",
+			required: "visible/reopenable retained errors and outcomes",
+			status: "renderer_missing",
+			note: "errorView exists, but retained outcome events are not implemented",
 		},
 		{
 			row: "queue_snapshot",
@@ -277,19 +274,19 @@ export function terminalObligations(): TerminalObligation[] {
 		},
 		{
 			row: "reconnect_headless",
-			required: "headless CLI/API equivalents for every operation",
+			required: "headless CLI/API equivalents for every operation incl recovery",
 			status: "renderer_missing",
-			note: "no CLI commands implemented; snapshots/receipts exist",
+			note: "no CLI or recovery path implemented",
 		},
 	];
 }
 
-/** Rows whose absence is a genuine Pi SDK gap rather than local wiring. */
+/** Rows whose absence is backed by explicit `sdk_absent` evidence. */
 export function sdkGapRows(matrix: readonly RowCoverage[]): InteractionRow[] {
 	return matrix.filter((entry) => entry.sdkGap).map((entry) => entry.row);
 }
 
-/** Placement parity for the same capabilities: states/reasons must match. */
+/** Placement parity: diagnostic only. Equal matrices may be equally unavailable. */
 export function parityViolations(
 	personal: readonly RowCoverage[],
 	managed: readonly RowCoverage[]

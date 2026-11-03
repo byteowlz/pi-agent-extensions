@@ -51,6 +51,15 @@ function toModelSummary(m: unknown): ModelSummary {
 		maxTokens: num(r.maxTokens),
 	};
 }
+import {
+	RUNTIME_INTERACTIONS_CAPABILITY,
+	RUNTIME_INTERACTIONS_VERSION,
+	responseFrame as interactionResponseFrame,
+	negotiatedFrame,
+	parseInteractionRequestFrame,
+	parseNegotiationFrame,
+	statusFrame,
+} from "../runtime-interactions/wire.js";
 import { type ModelSummary, type RpcDeps, dispatchCommand, dispatchInteractionRequest } from "./dispatch.js";
 import { type Hub, createHub } from "./hub.js";
 import { InteractionAdapter } from "./interaction-adapter.js";
@@ -68,15 +77,6 @@ import {
 } from "./protocol.js";
 import { createReloader } from "./reload.js";
 import { defaultSocketPath } from "./socket-path.js";
-import {
-	RUNTIME_INTERACTIONS_CAPABILITY,
-	RUNTIME_INTERACTIONS_VERSION,
-	responseFrame as interactionResponseFrame,
-	negotiatedFrame,
-	parseInteractionRequestFrame,
-	parseNegotiationFrame,
-	statusFrame,
-} from "./wire.js";
 
 const STATUS_KEY = "pi_tui_rpc";
 

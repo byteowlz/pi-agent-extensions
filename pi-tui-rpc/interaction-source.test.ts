@@ -1,8 +1,12 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { CommandEnginePort } from "../runtime-interactions/interaction-port.js";
+import type { RuntimeSourceFrame } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeSourceFrame.js";
+import type { RuntimeSourceRequest } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeSourceRequest.js";
+import type { RuntimeSourceResponse } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeSourceResponse.js";
+import { validateSourceFrame, validateSourceResponse } from "../runtime-interactions/wire.js";
 import { InteractionAdapter } from "./interaction-adapter.js";
-import type { CommandEnginePort } from "./interaction-port.js";
 import {
 	RUNTIME_INTERACTIONS_CONTINUITY_FIELD,
 	RUNTIME_INTERACTIONS_SOURCE_CAPABILITY,
@@ -11,12 +15,8 @@ import {
 	parseSourceFrame,
 	sameSourceIdentity,
 } from "./interaction-source.js";
-import type { RuntimeSourceFrame } from "./protocol/runtime-interactions/v1/RuntimeSourceFrame.js";
-import type { RuntimeSourceRequest } from "./protocol/runtime-interactions/v1/RuntimeSourceRequest.js";
-import type { RuntimeSourceResponse } from "./protocol/runtime-interactions/v1/RuntimeSourceResponse.js";
-import { validateSourceFrame, validateSourceResponse } from "./wire.js";
 
-const V1 = join(import.meta.dir, "protocol", "runtime-interactions", "v1");
+const V1 = join(import.meta.dir, "..", "runtime-interactions", "protocol", "runtime-interactions", "v1");
 const TRANSPORT = JSON.parse(readFileSync(join(V1, "transport.json"), "utf8"));
 
 interface SourceFixtures {

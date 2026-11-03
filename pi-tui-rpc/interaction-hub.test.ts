@@ -3,9 +3,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RuntimeEvent } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeEvent.js";
+import { parseNegotiationFrame } from "../runtime-interactions/wire.js";
 import { createHub } from "./hub.js";
-import type { RuntimeEvent } from "./protocol/runtime-interactions/v1/RuntimeEvent.js";
-import { parseNegotiationFrame } from "./wire.js";
 
 const event: RuntimeEvent = {
 	version: 1,

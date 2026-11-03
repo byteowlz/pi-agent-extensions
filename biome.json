@@ -16,7 +16,8 @@
 			"pi-history-search/worker-runtime.mjs",
 			"pi-openui/openui-vendor.js",
 			"pi-openui/vendor-src/fixtures.gen.ts",
-			"pi-tui-rpc/protocol/**"
+			"pi-tui-rpc/protocol/**",
+			"runtime-interactions/protocol/**"
 		]
 	},
 	"formatter": {

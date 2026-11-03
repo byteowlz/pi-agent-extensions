@@ -19,15 +19,15 @@ import {
 	type InteractionResult,
 	PROVISIONAL_CAPABILITIES,
 	type PermissionAnswer,
-} from "./interaction-port.js";
-import type { RuntimeCommandCatalog } from "./protocol/runtime-interactions/v1/RuntimeCommandCatalog.js";
-import type { RuntimeCommandReceipt } from "./protocol/runtime-interactions/v1/RuntimeCommandReceipt.js";
-import type { RuntimeErrorSnapshot } from "./protocol/runtime-interactions/v1/RuntimeErrorSnapshot.js";
-import type { RuntimePermissionPresentation } from "./protocol/runtime-interactions/v1/RuntimePermissionPresentation.js";
-import type { RuntimeQueueSnapshot } from "./protocol/runtime-interactions/v1/RuntimeQueueSnapshot.js";
-import type { RuntimeRejectCode } from "./protocol/runtime-interactions/v1/RuntimeRejectCode.js";
-import type { RuntimeUnavailableReason } from "./protocol/runtime-interactions/v1/RuntimeUnavailableReason.js";
-import { validateCanonicalPiece } from "./wire.js";
+} from "../runtime-interactions/interaction-port.js";
+import type { RuntimeCommandCatalog } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeCommandCatalog.js";
+import type { RuntimeCommandReceipt } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeCommandReceipt.js";
+import type { RuntimeErrorSnapshot } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeErrorSnapshot.js";
+import type { RuntimePermissionPresentation } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimePermissionPresentation.js";
+import type { RuntimeQueueSnapshot } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeQueueSnapshot.js";
+import type { RuntimeRejectCode } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeRejectCode.js";
+import type { RuntimeUnavailableReason } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeUnavailableReason.js";
+import { validateCanonicalPiece } from "../runtime-interactions/wire.js";
 
 const PERMISSION_DECISIONS = new Set(["allow_once", "deny", "cancel"]);
 const ID = /^[A-Za-z0-9._:-]{1,128}$/;

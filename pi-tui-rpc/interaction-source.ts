@@ -17,18 +17,30 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { InteractionResult } from "../runtime-interactions/interaction-port.js";
+import type { RuntimeOperation } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeOperation.js";
+import type { RuntimeResult } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeResult.js";
+import type { RuntimeSourceFrame } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeSourceFrame.js";
+import type { RuntimeSourceIdentity } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeSourceIdentity.js";
+import type { RuntimeSourceRequest } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeSourceRequest.js";
+import type { RuntimeSourceResponse } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeSourceResponse.js";
+import type { RuntimeSourceStatusCode } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeSourceStatusCode.js";
+import {
+	MAX_RUNTIME_FRAME_BYTES,
+	RUNTIME_INTERACTIONS_VERSION,
+	validateSourceFrame,
+	validateSourceResponse,
+} from "../runtime-interactions/wire.js";
 import type { InteractionAdapter } from "./interaction-adapter.js";
-import type { InteractionResult } from "./interaction-port.js";
-import type { RuntimeOperation } from "./protocol/runtime-interactions/v1/RuntimeOperation.js";
-import type { RuntimeResult } from "./protocol/runtime-interactions/v1/RuntimeResult.js";
-import type { RuntimeSourceFrame } from "./protocol/runtime-interactions/v1/RuntimeSourceFrame.js";
-import type { RuntimeSourceIdentity } from "./protocol/runtime-interactions/v1/RuntimeSourceIdentity.js";
-import type { RuntimeSourceRequest } from "./protocol/runtime-interactions/v1/RuntimeSourceRequest.js";
-import type { RuntimeSourceResponse } from "./protocol/runtime-interactions/v1/RuntimeSourceResponse.js";
-import type { RuntimeSourceStatusCode } from "./protocol/runtime-interactions/v1/RuntimeSourceStatusCode.js";
-import { MAX_RUNTIME_FRAME_BYTES, RUNTIME_INTERACTIONS_VERSION, validateSourceFrame, validateSourceResponse } from "./wire.js";
 
-const CONTRACT_DIR = join(dirname(fileURLToPath(import.meta.url)), "protocol", "runtime-interactions", "v1");
+const CONTRACT_DIR = join(
+	dirname(fileURLToPath(import.meta.url)),
+	"..",
+	"runtime-interactions",
+	"protocol",
+	"runtime-interactions",
+	"v1"
+);
 
 interface TransportContract {
 	version: number;

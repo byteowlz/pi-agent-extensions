@@ -9,9 +9,9 @@
 
 import fs from "node:fs";
 import net from "node:net";
+import type { RuntimeEvent } from "../runtime-interactions/protocol/runtime-interactions/v1/RuntimeEvent.js";
+import { RUNTIME_INTERACTIONS_VERSION, eventFrame } from "../runtime-interactions/wire.js";
 import { safeParseLine } from "./protocol.js";
-import type { RuntimeEvent } from "./protocol/runtime-interactions/v1/RuntimeEvent.js";
-import { RUNTIME_INTERACTIONS_VERSION, eventFrame } from "./wire.js";
 
 export type ReplyFn = (frame: unknown) => void;
 
