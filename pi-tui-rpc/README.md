@@ -109,7 +109,7 @@ Strict JSONL: LF (`\n`) is the only record delimiter; a single trailing `\r` is 
 | `steer` | `message` | Error when idle; error while compacting |
 | `follow_up` | `message` | Error when idle; error while compacting |
 | `abort` | — | Requires the lease |
-| `get_state` | — | Mode, cwd, session ids/name, routing description, model, thinking level, streaming, `isCompacting`, lease |
+| `get_state` | — | Mode, cwd, session ids/name, routing description, model, thinking level, streaming, `isCompacting`, lease, optional source-owned `interactionRuntimeGeneration` |
 | `get_messages` | — | Current branch entries |
 | `lease` | `action: request\|release` | Granted at once; confirm dialog only with `PI_TUI_RPC_LEASE_CONFIRM=1` |
 | `reload` | — | Reload extensions, skills and settings now when idle, or once the current turn and compaction finish. No lease; nothing reaches the model. Replies `{reload:"reloading"\|"queued"\|"already_pending"}`; broadcasts `reload` events (`queued`, `reloading`, `failed`). Hello capability `reload_when_idle_v1` |

@@ -4,6 +4,21 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Source-owned interaction runtime continuity in get_state (3.9.0)
+
+- **pi-tui-rpc**: `get_state` now carries an optional
+  `interactionRuntimeGeneration` minted by the owning interaction runtime
+  (`interaction-continuity.ts`, opaque `ir:<uuid>` token). It is reissued after a
+  hub starts listening on `session_start` and cleared before the hub closes on
+  `session_shutdown`; model/compaction/steer/lease changes do not reissue it.
+  Omitted means the projection is unavailable; no timestamp, PID, grant, catalog
+  generation or session id is reused, and nothing is replayed.
+- The field is continuity evidence only: bindings are not accepted from the
+  same-user socket, and Core assembles the trusted public binding outside it.
+- Tests: stable epoch within a lifetime, reissue differs, clear omits the field,
+  independent runtimes differ, invalid mints are rejected, and the
+  index lifecycle wiring is asserted.
+
 ### Canonical schema validation and interaction transport hardening (3.8.1)
 
 - **pi-tui-rpc**: `wire.ts` now validates requests, responses and events against

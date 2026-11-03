@@ -54,6 +54,7 @@ function toModelSummary(m: unknown): ModelSummary {
 import { type ModelSummary, type RpcDeps, dispatchCommand, dispatchInteractionRequest } from "./dispatch.js";
 import { type Hub, createHub } from "./hub.js";
 import { InteractionAdapter } from "./interaction-adapter.js";
+import { createInteractionContinuity, interactionRuntimeMetadata } from "./interaction-continuity.js";
 import { createLease, takeoverDecision } from "./lease.js";
 import {
 	COMMAND_TYPES,
@@ -180,6 +181,8 @@ interface SessionSnapshot {
 	isCompacting: boolean;
 	messageCount: number;
 	lease: LeaseOwner;
+	/** Source-owned interaction runtime continuity; omitted when unavailable. */
+	interactionRuntimeGeneration?: string;
 }
 
 /** Slash command behind the RPC `reload`; also usable directly in the TUI. */
@@ -250,6 +253,7 @@ export default function (pi: ExtensionAPI) {
 				isCompacting: false,
 				messageCount: 0,
 				lease: lease.owner(),
+				...interactionRuntimeMetadata(interactionContinuity),
 			};
 		}
 		return {
@@ -267,6 +271,7 @@ export default function (pi: ExtensionAPI) {
 			isCompacting: compacting,
 			messageCount: ctx.sessionManager.getBranch().length,
 			lease: lease.owner(),
+			...interactionRuntimeMetadata(interactionContinuity),
 		};
 	};
 
@@ -565,6 +570,12 @@ export default function (pi: ExtensionAPI) {
 			});
 	};
 
+	// Source-owned continuity for the interaction attachment lifetime. It is not a
+	// PID, timestamp, grant, session id or adapter-invented generation. Missing
+	// means the projection is unavailable; changed/added/lost must poison the host
+	// attachment and force fresh admission.
+	const interactionContinuity = createInteractionContinuity();
+
 	// Explicit adapter construction with no engine ports: every interaction family
 	// reports a concrete unavailability. Nothing is advertised as delivered.
 	const interactionAdapter = new InteractionAdapter();
@@ -629,9 +640,13 @@ export default function (pi: ExtensionAPI) {
 			},
 		});
 		await hub.start();
+		// A listening hub is a new interaction attachment lifetime.
+		interactionContinuity.reissue("session_start");
 	};
 
 	const stopHub = async (): Promise<void> => {
+		// Clear before closing so no observer sees a stale epoch for a dead attachment.
+		interactionContinuity.clear("session_shutdown");
 		if (!hub) {
 			return;
 		}
