@@ -4,6 +4,22 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Bridge interaction ports, capability-gated (3.7.0)
+
+- **pi-tui-rpc**: new `interaction-port.ts` and `interaction-adapter.ts` scaffold
+  the shared runtime interaction surface (commands, queue, permission
+  presentation, error projection) without touching `index.ts`, the hub, dispatch,
+  lease or reload. Every family is capability-gated: with no real engine port the
+  result is `unavailable` (reason `sdk_engine_absent` / `generated_dto_not_vendored`
+  / `port_not_configured`), never a model prompt or a fabricated menu.
+- Discipline encoded in code and tests: no `sendUserMessage` path, no catalog
+  generation synthesis (artifact says `argumentContract: raw_string`), explicit
+  generation comparison, acceptance-receipt vocabulary only, presenter answer must
+  be explicit allow/deny, producer receipts projected without task/private text.
+- Provisional fixtures under `pi-tui-rpc/fixtures/runtime-interactions/` are
+  marked non-normative; canonical DTOs come from Core and replace these shapes.
+  Docs: `docs/runtime-interaction-adapter.md`.
+
 ### Subagent permission producer, source-only (3.6.0)
 
 - **pi-session-tools**: `permission-producer.ts` adds the runtime half of the

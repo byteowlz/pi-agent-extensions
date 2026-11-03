@@ -1,0 +1,11 @@
+{
+  "provisional": true,
+  "normative": false,
+  "note": "Catalog entry as the bridge can describe it before the SDK issues schemas or a generation.",
+  "entry": {
+    "name": "subagent",
+    "description": "Manage subagent delegation",
+    "source": "extension",
+    "argumentContract": { "kind": "raw_string" }
+  }
+}

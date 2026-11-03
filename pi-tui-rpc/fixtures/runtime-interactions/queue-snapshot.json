@@ -1,0 +1,10 @@
+{
+  "provisional": true,
+  "normative": false,
+  "note": "Authoritative queue view shape. Ids exist only when the engine supplies them.",
+  "snapshot": {
+    "steering": [{ "id": "item-1", "text": "focus on the failing test" }],
+    "followUp": [{ "text": "report back" }],
+    "continuity": "gen-7"
+  }
+}

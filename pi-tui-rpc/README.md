@@ -73,6 +73,14 @@ Remote lease requests are granted immediately; the terminal revokes on any inter
   the user with mode 0700 (systemd: `/run/user/<uid>`); otherwise `${TMPDIR:-/tmp}`.
   The shared `/tmp` is refused by an Oqto Runner as a socket root.
 
+### Runtime interaction adapter (provisional)
+
+`interaction-port.ts` and `interaction-adapter.ts` add capability-gated ports for
+commands, queue, permission presentation and error projection. They are **not
+wired** into the socket yet: dispatch and queue return honest `unavailable`
+results until a public Pi SDK seam exists, and permission presentation waits for
+Core's generated DTOs. See `docs/runtime-interaction-adapter.md`.
+
 ### Reloading every live Pi
 
 `/reload-when-idle` (also behind the `reload` command) reloads a Pi now, or queues it until

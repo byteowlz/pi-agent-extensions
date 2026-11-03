@@ -1,0 +1,11 @@
+{
+  "provisional": true,
+  "normative": false,
+  "note": "Expected adapter capability report with no engine ports. Intermediate capability results, not feature delivery.",
+  "capabilities": [
+    { "capability": "commands", "state": "unavailable", "reason": "port_not_configured" },
+    { "capability": "queue", "state": "unavailable", "reason": "port_not_configured" },
+    { "capability": "permissions", "state": "unavailable", "reason": "port_not_configured" },
+    { "capability": "errors", "state": "unavailable", "reason": "port_not_configured" }
+  ]
+}
