@@ -4,6 +4,15 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Contract pin 042ee39b (3.16.0)
+
+- Re-vendored only `v1/manifest.json` at Core `042ee39b462196149013acdeaadcb2d6650caf43`
+  (manifest SHA `42ab8210…54d84`, 68 files / 6 inputs). Generated DTO/schema/
+  fixture bytes are unchanged; the bundle stopped pinning `backend/Cargo.lock`,
+  which had invalidated every consumer pin on unrelated dependency changes.
+  SOURCE.json, tests and docs updated. Old pins remain verifiable against their
+  own exact commits.
+
 ### Verified command dispatch seam; correct the shim finding (3.15.0)
 
 - **pi-tui-rpc**: `pi-command-engine.ts` implements catalog + catalog-fenced

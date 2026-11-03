@@ -71,9 +71,8 @@
   },
   "inputs": {
     "LICENSE": "647221b987aeb9a07979d10ff7ca51dea253d3baca226aee75838f7f72b72bf1",
-    "backend/Cargo.lock": "e498016084313c5cc4652f15444ecfaa2eb11cb773911167798fca2f9c933c27",
     "backend/crates/oqto-protocol/Cargo.toml": "941cd9b34ab04bda3108a581e25648adc5cf85c0481f2996f8d098b31182c0bb",
-    "backend/crates/oqto-protocol/examples/export_runtime_interactions.rs": "3ac765fad6cdf8c9a34e05f9b37ee967e144145e6a1c61beaa6aa78b32e4ab57",
+    "backend/crates/oqto-protocol/examples/export_runtime_interactions.rs": "3919e963fbb4c5ab3b0f7faa6453932b7cad13f9589c4d93eae611a64104c4f1",
     "backend/crates/oqto-protocol/src/runtime_interactions.rs": "e60b3fef5b299da4724d3fb1a87da615b2e57c5af22a81e89449cc9acc78cb91",
     "backend/crates/oqto-protocol/src/runtime_interactions/fixtures.json": "c53953e784498c8ae7b59df1f9f41bfef6926509d0f5171256d57cd689606057",
     "backend/crates/oqto-protocol/src/runtime_interactions/source-fixtures.json": "8b9c6e0ecd1d6969ffa3c6e175d6f22fba8a14fd69e593c0d1c88f4a00cd687b"

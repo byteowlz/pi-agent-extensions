@@ -28,8 +28,8 @@ test("the vendored bundle is complete, unchanged and pinned by SOURCE.json", () 
 		file_count: number;
 		core_path: string;
 	};
-	expect(source.core_commit).toBe("811bc5ac0971da9c3b96bc1ef6768ff6d985954e");
-	expect(source.manifest_sha256).toBe("94e3530b56379182f894aefedebb37f9d4771186d46e7652ec6ceb85600aba13");
+	expect(source.core_commit).toBe("042ee39b462196149013acdeaadcb2d6650caf43");
+	expect(source.manifest_sha256).toBe("42ab8210d3240aa6f6ef4f805a0421416a7d56940e593edc6f039a8fec954d84");
 	expect(source.core_path).toBe("backend/crates/oqto-protocol/contracts/runtime-interactions/v1");
 
 	const files = filesUnder(V1);
@@ -54,7 +54,7 @@ test("every manifest hash matches the vendored byte content", () => {
 
 	const names = Object.keys(manifest.files);
 	expect(names.length).toBe(67);
-	expect(Object.keys(manifest.inputs).length).toBe(7);
+	expect(Object.keys(manifest.inputs).length).toBe(6);
 	for (const name of names) {
 		expect({ name, hash: sha256(join(V1, name)) }).toEqual({ name, hash: manifest.files[name] });
 	}

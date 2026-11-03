@@ -3,9 +3,9 @@
 	"version": 1,
 	"vendor": "byte-identical from the Core generated bundle",
 	"core_source": "oqto",
-	"core_commit": "811bc5ac0971da9c3b96bc1ef6768ff6d985954e",
+	"core_commit": "042ee39b462196149013acdeaadcb2d6650caf43",
 	"core_path": "backend/crates/oqto-protocol/contracts/runtime-interactions/v1",
-	"manifest_sha256": "94e3530b56379182f894aefedebb37f9d4771186d46e7652ec6ceb85600aba13",
+	"manifest_sha256": "42ab8210d3240aa6f6ef4f805a0421416a7d56940e593edc6f039a8fec954d84",
 	"file_count": 68,
 	"vendored_to": "runtime-interactions/protocol/runtime-interactions/v1",
 	"license": "MIT (v1/LICENSE, unchanged; manifest inputs include the same hash)",
@@ -16,6 +16,6 @@
 		"The sibling package.json is a type-resolution shim only (commonjs for extensionless generated imports); it is not part of the bundle.",
 		"DTO presence is not capability availability; adapters must report concretely unavailable ports."
 	],
-	"input_count": 7,
+	"input_count": 6,
 	"source_result_v1": true
 }
