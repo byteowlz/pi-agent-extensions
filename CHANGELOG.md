@@ -4,6 +4,24 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Subagent permission producer, source-only (3.6.0)
+
+- **pi-session-tools**: `permission-producer.ts` adds the runtime half of the
+  accepted permission contract around the pure validator, with injected fake
+  journal and continuation ports. It owns in-memory active handles keyed by
+  `(runtimeGeneration, handleId)`, synchronous one-shot consumption, monotonic
+  producer revision, expiry/cancel/shutdown, and sanitized decision/
+  start-intent/result receipts whose acknowledgement precedes the effect.
+  Fences bind native and public session ids, controller/source generations, the
+  full subject plus task/workdir/target-operation digest, the captured ceiling and
+  a trusted host expiry. Restore advances the runtime generation and turns an
+  incomplete allow into uncertain-terminal instead of reviving a pending allow.
+- Not wired: no approveSpawn, tool, command, socket, presenter, deploy or reload
+  change. `validatePermissionOptions` is exported from the broker for reuse.
+- 16 producer fixtures (concurrency, replay, expiry, fence/digest mismatch
+  before and after consumption, journal failure, restore, reconcile);
+  100 pi-session-tools tests pass.
+
 ### Fix: alternate-model permission re-check (3.5.2)
 
 - **pi-session-tools**: `decidePermission` now re-checks an `allow_with_model`

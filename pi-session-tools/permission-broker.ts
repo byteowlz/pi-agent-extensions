@@ -223,7 +223,7 @@ export function evaluatePolicy(policy: PermissionPolicy, subject: SpawnSubject):
 	return { outcome: "needs_decision", reason: "needs_decision" };
 }
 
-function validateOptions(options: PermissionOption[], ceiling: PolicyCeiling): string | null {
+export function validatePermissionOptions(options: PermissionOption[], ceiling: PolicyCeiling): string | null {
 	if (options.length === 0 || options.length > MAX_OPTIONS) return "options must contain 1..16 entries";
 	const seen = new Set<string>();
 	for (const option of options) {
@@ -278,7 +278,7 @@ export function issuePermissionRequest(
 
 	const options = input.options ?? DEFAULT_OPTIONS;
 	const ceiling = snapshotCeiling(policy);
-	const optionError = validateOptions(options, ceiling);
+	const optionError = validatePermissionOptions(options, ceiling);
 	if (optionError) return { ok: false, reason: "invalid_options", detail: optionError };
 
 	const requestId = deps.requestId ?? randomUUID();
