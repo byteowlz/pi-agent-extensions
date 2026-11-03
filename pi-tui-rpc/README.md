@@ -81,6 +81,16 @@ wired** into the socket yet: dispatch and queue return honest `unavailable`
 results until a public Pi SDK seam exists, and permission presentation waits for
 Core's generated DTOs. See `docs/runtime-interaction-adapter.md`.
 
+### One placement-neutral contract
+
+`interaction-runtime.ts` exposes `createInteractionRuntime(ports, admission)`, a
+socket-free dispatcher over the vendored DTOs. The personal bridge and a managed
+runner producer satisfy the same ports, so Oq/oqt/CLI surfaces use one dialect:
+commands, queue snapshot/actions, permission decisions and receipts, errors and
+events. Absent ports stay unavailable, decisions are deny-by-default and
+one-shot, and a presenter answer is never a grant. See
+`docs/runtime-interaction-adapter.md`.
+
 ### Native source-result frames (read-only)
 
 `runtime_interactions_source_v1` is advertised separately from engine

@@ -294,114 +294,38 @@ function isCompactionRefusal(error: unknown): boolean {
 // work, so a revocation during an await cannot return a stale success.
 
 import type { InteractionAdapter } from "./interaction-adapter.js";
+import type { InteractionPorts } from "./interaction-port.js";
+import { createInteractionRuntime } from "./interaction-runtime.js";
 import type { RuntimeBinding } from "./protocol/runtime-interactions/v1/RuntimeBinding.js";
-import type { RuntimeOperation } from "./protocol/runtime-interactions/v1/RuntimeOperation.js";
 import type { RuntimeRequest } from "./protocol/runtime-interactions/v1/RuntimeRequest.js";
 import type { RuntimeResponse } from "./protocol/runtime-interactions/v1/RuntimeResponse.js";
-import type { RuntimeResult } from "./protocol/runtime-interactions/v1/RuntimeResult.js";
-import { isMutatingOperation, validateRuntimeResponse } from "./wire.js";
+import { isMutatingOperation } from "./wire.js";
 
 export interface InteractionDispatchDeps {
 	adapter: InteractionAdapter;
 	/** Authenticated binding from the hosting adapter; never accepted from a request. */
 	binding?: () => RuntimeBinding | undefined;
 	leaseHeld(): boolean;
+	/**
+	 * Optional placement override. A managed runner can supply its own ports here
+	 * (including a permission registry) without going through the bridge adapter.
+	 */
+	ports?: InteractionPorts;
 }
 
 export type InteractionDispatchOutcome =
 	| { ok: true; response: RuntimeResponse }
 	| { ok: false; code: "binding_unavailable" | "authority_denied" | "engine_failure" };
 
-function validBinding(binding: RuntimeBinding): boolean {
-	const id = (value: unknown) => typeof value === "string" && value.length > 0;
-	const generation = (value: unknown) => id(value) || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0);
-	return (
-		id(binding.publicSessionId) &&
-		id(binding.nativeSessionId) &&
-		generation(binding.runtimeGeneration) &&
-		(binding.controllerId === null || id(binding.controllerId)) &&
-		(binding.controllerGeneration === null || generation(binding.controllerGeneration))
-	);
-}
-
-function sameBinding(a: RuntimeBinding, b: RuntimeBinding): boolean {
-	return (
-		a.publicSessionId === b.publicSessionId &&
-		a.nativeSessionId === b.nativeSessionId &&
-		a.runtimeGeneration === b.runtimeGeneration &&
-		a.controllerId === b.controllerId &&
-		a.controllerGeneration === b.controllerGeneration
-	);
-}
-
-async function resultFor(operation: RuntimeOperation, adapter: InteractionAdapter): Promise<RuntimeResult> {
-	switch (operation.op) {
-		case "capabilities": {
-			const capabilities = adapter
-				.capabilities()
-				.map((report) =>
-					report.state === "available"
-						? { state: "available" as const, family: report.family }
-						: { state: "unavailable" as const, family: report.family, reason: report.reason ?? "port_not_configured" }
-				);
-			return { kind: "capabilities", capabilities };
-		}
-		case "command_catalog": {
-			const result = await adapter.catalog();
-			if (result.kind === "ok") return { kind: "catalog", catalog: result.value };
-			if (result.kind === "rejected") return { kind: "rejected", code: result.code };
-			return { kind: "unavailable", family: result.family, reason: result.reason };
-		}
-		case "command_dispatch": {
-			const result = await adapter.dispatch({
-				catalogGeneration: operation.catalogGeneration,
-				commandId: operation.commandId,
-				args: operation.args,
-			});
-			if (result.kind === "ok") return { kind: "command_receipt", receipt: result.value };
-			if (result.kind === "rejected") return { kind: "rejected", code: result.code };
-			return { kind: "unavailable", family: result.family, reason: result.reason };
-		}
-		case "queue_snapshot": {
-			const result = await adapter.queueSnapshot();
-			if (result.kind === "ok") return { kind: "queue", snapshot: result.value };
-			if (result.kind === "rejected") return { kind: "rejected", code: result.code };
-			return { kind: "unavailable", family: result.family, reason: result.reason };
-		}
-		case "error_list": {
-			const result = await adapter.errorSnapshot(operation.afterEventId);
-			if (result.kind === "ok") return { kind: "errors", snapshot: result.value };
-			if (result.kind === "rejected") return { kind: "rejected", code: result.code };
-			return { kind: "unavailable", family: result.family, reason: result.reason };
-		}
-		case "queue_apply":
-			return { kind: "unavailable", family: "queue", reason: "sdk_engine_absent" };
-		case "receipt_get":
-			return { kind: "unavailable", family: "permissions", reason: "port_not_configured" };
-		case "policy_read":
-		case "policy_apply":
-			return { kind: "unavailable", family: "permission_config", reason: "unsupported_operation" };
-		case "permission_snapshot":
-		case "permission_decide":
-			return { kind: "unavailable", family: "permissions", reason: "port_not_configured" };
-	}
-}
-
 export async function dispatchInteractionRequest(
 	request: RuntimeRequest,
 	deps: InteractionDispatchDeps
 ): Promise<InteractionDispatchOutcome> {
-	const binding = deps.binding?.();
-	if (!binding || !validBinding(binding)) return { ok: false, code: "binding_unavailable" };
-	const mutating = isMutatingOperation(request.operation.op);
-	if (mutating && !deps.leaseHeld()) return { ok: false, code: "authority_denied" };
-	const result = await resultFor(request.operation, deps.adapter);
-	// Authoritative revalidation, not a pre-await snapshot: a controller/binding
-	// revocation or a lease loss during the await must not yield a success.
-	const current = deps.binding?.();
-	if (!current || !validBinding(current) || !sameBinding(binding, current)) return { ok: false, code: "binding_unavailable" };
-	if (mutating && !deps.leaseHeld()) return { ok: false, code: "authority_denied" };
-	const response: RuntimeResponse = { version: request.version, requestId: request.requestId, binding: current, result };
-	if (!validateRuntimeResponse(response)) return { ok: false, code: "engine_failure" };
-	return { ok: true, response };
+	const runtime = createInteractionRuntime(deps.ports ?? deps.adapter.enginePorts(), {
+		binding: deps.binding ?? (() => undefined),
+		// The input lease is not host admission; it is the bridge's local permission
+		// check. A managed placement supplies its own admission through the runtime.
+		permitted: (operation) => !isMutatingOperation(operation) || deps.leaseHeld(),
+	});
+	return runtime.execute(request);
 }

@@ -190,6 +190,17 @@ export class InteractionAdapter {
 		}
 	}
 
+	/** Engine ports for the placement-neutral runtime (never the presenter port). */
+	enginePorts(): InteractionPorts {
+		return {
+			...(this.ports.commands ? { commands: this.ports.commands } : {}),
+			...(this.ports.queue ? { queue: this.ports.queue } : {}),
+			...(this.ports.errors ? { errors: this.ports.errors } : {}),
+			...(this.ports.permissionRegistry ? { permissionRegistry: this.ports.permissionRegistry } : {}),
+			...(this.ports.events ? { events: this.ports.events } : {}),
+		};
+	}
+
 	/** Server clock for a presentation; clients compare, never decide by it. */
 	serverNow(): number {
 		return this.now();

@@ -4,6 +4,29 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Placement-neutral interaction runtime (3.11.0)
+
+- **pi-tui-rpc**: new `interaction-runtime.ts` with
+  `createInteractionRuntime(ports, admission)`: one socket-free dispatcher over
+  the pinned canonical DTOs. The personal bridge (`InteractionAdapter`) and a
+  managed runner producer satisfy the same `InteractionPorts`, so Oq, the oqt
+  CLI and other surfaces use one dialect for commands, queue snapshot/actions,
+  permission decisions and receipts, errors and canonical events.
+- Ports extended with `permissionRegistry` (authoritative, one-shot decisions and
+  receipt lookup), optional `queue.apply`, and an event subscription. The
+  presenter port remains transport-only and never decides; policy stays a
+  separate owner-write authority (`unsupported_operation` here).
+- Admission is an explicit interface (`binding()`, `permitted()`), re-read after
+  every await; absent binding or denied mutation returns typed refusals, never a
+  fabricated response. `dispatch.ts` now delegates to the runtime with the
+  bridge's lease as its local permission check.
+- Tests: a fake managed producer and the personal adapter produce identical
+  results for the shared operations; deny-by-default, presenter-only denial,
+  post-await revocation, one-shot producer receipts and event subscription are
+  covered. Docs record producer and client obligations.
+- No UI selection as a grant, no second dialect, no package patch, reload or
+  deploy.
+
 ### Native source-result framing, pin 811bc5ac (3.10.0)
 
 - **pi-tui-rpc**: re-vendored the whole Core bundle at

@@ -77,6 +77,8 @@ export type CanonicalSchemaName =
 	| "RuntimeQueueSnapshot"
 	| "RuntimeErrorSnapshot"
 	| "RuntimePermissionPresentation"
+	| "RuntimePermissionSnapshot"
+	| "RuntimePermissionReceipt"
 	| "RuntimeBinding";
 
 interface Schemas {
@@ -121,6 +123,8 @@ function compiled(): Schemas {
 		"RuntimeQueueSnapshot",
 		"RuntimeErrorSnapshot",
 		"RuntimePermissionPresentation",
+		"RuntimePermissionSnapshot",
+		"RuntimePermissionReceipt",
 		"RuntimeBinding",
 	];
 	const pieces = {} as Record<CanonicalSchemaName, ValidateFunction>;
