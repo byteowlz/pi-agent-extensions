@@ -1,7 +1,0 @@
-{
-  "provisional": true,
-  "normative": false,
-  "note": "Internal receipt vocabulary. Acceptance is not completion; outcomes are events.",
-  "request": { "name": "subagent", "args": "status" },
-  "receipt": { "name": "subagent", "disposition": "started", "operationId": "op-1" }
-}

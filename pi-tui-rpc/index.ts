@@ -51,8 +51,9 @@ function toModelSummary(m: unknown): ModelSummary {
 		maxTokens: num(r.maxTokens),
 	};
 }
-import { type ModelSummary, type RpcDeps, dispatchCommand } from "./dispatch.js";
+import { type ModelSummary, type RpcDeps, dispatchCommand, dispatchInteractionRequest } from "./dispatch.js";
 import { type Hub, createHub } from "./hub.js";
+import { InteractionAdapter } from "./interaction-adapter.js";
 import { createLease, takeoverDecision } from "./lease.js";
 import {
 	COMMAND_TYPES,
@@ -65,6 +66,14 @@ import {
 } from "./protocol.js";
 import { createReloader } from "./reload.js";
 import { defaultSocketPath } from "./socket-path.js";
+import {
+	RUNTIME_INTERACTIONS_CAPABILITY,
+	responseFrame as interactionResponseFrame,
+	negotiatedFrame,
+	parseInteractionRequestFrame,
+	parseNegotiationFrame,
+	statusFrame,
+} from "./wire.js";
 
 const STATUS_KEY = "pi_tui_rpc";
 
@@ -555,12 +564,17 @@ export default function (pi: ExtensionAPI) {
 			});
 	};
 
+	// Explicit adapter construction with no engine ports: every interaction family
+	// reports a concrete unavailability. Nothing is advertised as delivered.
+	const interactionAdapter = new InteractionAdapter();
+
 	const startHub = async (): Promise<void> => {
 		if (hub) {
 			return;
 		}
 		hub = createHub({
 			socketPath,
+			interactionVersions: [1],
 			onConnect: (_clientId, reply) => {
 				reply({
 					type: "hello",
@@ -568,11 +582,35 @@ export default function (pi: ExtensionAPI) {
 					pid: process.pid,
 					lease: lease.owner(),
 					commands: COMMAND_TYPES,
-					capabilities: ["connection_leases_v1", "reload_when_idle_v1"],
+					capabilities: ["connection_leases_v1", "reload_when_idle_v1", RUNTIME_INTERACTIONS_CAPABILITY],
 				});
 			},
 			onDisconnect: (clientId) => lease.disconnect(clientId),
 			onLine: (clientId, value, reply) => {
+				const negotiation = parseNegotiationFrame(value);
+				if (negotiation.ok) {
+					const version = negotiation.value;
+					if (version !== null) hub?.negotiateInteraction(clientId, version);
+					reply(negotiatedFrame(version));
+					return;
+				}
+				if (typeof value === "object" && value !== null && (value as { type?: unknown }).type === "interaction") {
+					const parsed = parseInteractionRequestFrame(value);
+					if (!parsed.ok) {
+						reply(responseFrame("interaction", undefined, { success: false, error: parsed.code }));
+						return;
+					}
+					// No authenticated personal binding source exists in this bridge. The
+					// dispatch reports that gap; it never synthesizes a RuntimeBinding.
+					void dispatchInteractionRequest(parsed.value, {
+						adapter: interactionAdapter,
+						leaseHeld: () => lease.heldBy(clientId),
+					}).then((outcome) => {
+						if (outcome.ok) reply(interactionResponseFrame(outcome.response));
+						else reply(statusFrame(outcome.code));
+					});
+					return;
+				}
 				const checked = validateCommand(value);
 				if (!checked.ok) {
 					reply(responseFrame("unknown", undefined, { success: false, error: checked.error }));

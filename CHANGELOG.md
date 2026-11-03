@@ -4,6 +4,31 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Pinned runtime-interaction DTOs and typed bridge integration (3.8.0)
+
+- **pi-tui-rpc**: vendored the whole canonical bundle from oqto
+  `b9fdfee929388dabfdb69cdcb822bfc8a08b6bf2` to
+  `protocol/runtime-interactions/v1/` (57 files, manifest SHA
+  `1cc56745…9f488`) with `SOURCE.json` pinning commit and manifest; a sibling
+  `package.json` is a type-resolution shim only. Generated files are untouched
+  and hash-verified by test.
+- New `wire.ts` (v1-only envelope, request parsing, negotiation, transport-level
+  status), typed demux in `dispatch.ts` over all 11 operations reusing the
+  existing lease admission, per-connection version negotiation and gated event
+  delivery in `hub.ts`, and explicit adapter construction in `index.ts`
+  (advertising `runtime_interactions_v1`).
+- `interaction-port.ts`/`interaction-adapter.ts` now speak the canonical DTOs and
+  validate port output without inventing IDs, generations or cursors.
+- `lease.ts`/`reload.ts` untouched; no new authority, no Selection→allow, no
+  slash→prompt, no private SDK, no real producer/effect wiring.
+- Exact gap: no authenticated `RuntimeBinding` source exists in the bridge, so an
+  interaction request negotiates but is answered with transport-level
+  `binding_unavailable`; capability families report `sdk_engine_absent` /
+  `port_not_configured` / `unsupported_operation`. DTO presence is not
+  availability.
+- Tests: 80 pi-tui-rpc tests, including bundle hash conformance, envelope
+  negotiation, admission reuse, canonical demux and version-gated hub delivery.
+
 ### Bridge interaction ports, capability-gated (3.7.0)
 
 - **pi-tui-rpc**: new `interaction-port.ts` and `interaction-adapter.ts` scaffold

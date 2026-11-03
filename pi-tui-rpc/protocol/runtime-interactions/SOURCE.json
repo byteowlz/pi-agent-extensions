@@ -1,0 +1,19 @@
+{
+	"contract": "oqto.runtime-interactions",
+	"version": 1,
+	"vendor": "byte-identical from the Core generated bundle",
+	"core_source": "oqto",
+	"core_commit": "b9fdfee929388dabfdb69cdcb822bfc8a08b6bf2",
+	"core_path": "backend/crates/oqto-protocol/contracts/runtime-interactions/v1",
+	"manifest_sha256": "1cc56745660ce8700b9864a458826abd41408eb4bde40da289f38e71c9a9f488",
+	"file_count": 57,
+	"vendored_to": "pi-tui-rpc/protocol/runtime-interactions/v1",
+	"license": "MIT (v1/LICENSE, unchanged; manifest inputs include the same hash)",
+	"generated": true,
+	"normative": true,
+	"rules": [
+		"Never edit v1/ files; regenerate upstream and re-vendor the whole bundle.",
+		"The sibling package.json is a type-resolution shim only (commonjs for extensionless generated imports); it is not part of the bundle.",
+		"DTO presence is not capability availability; adapters must report concretely unavailable ports."
+	]
+}

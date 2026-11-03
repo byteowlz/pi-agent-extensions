@@ -1,0 +1,4 @@
+{
+	"$comment": "Type-resolution shim only. This directory and v1/ are generated upstream; the vendored DTOs are imported with type-only imports and never executed. CommonJS resolution lets the unchanged generated files keep their extensionless relative imports.",
+	"type": "commonjs"
+}

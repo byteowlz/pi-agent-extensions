@@ -1,168 +1,67 @@
 /**
- * Runtime interaction ports (provisional, non-normative).
+ * Runtime interaction engine ports.
  *
- * These are the extension-side *engine ports* and neutral result shapes that the
- * pi-tui-rpc interaction adapter consumes. They are NOT the canonical wire
- * contract: Core owns the versioned DTOs, generated schema/types and golden
- * fixtures in `oqto-protocol` (`runtime_interactions`). This module is scaffolding
- * so the bridge can be capability-gated and tested before those generated types
- * are vendored.
+ * The shapes here are the vendored canonical DTOs from Core
+ * (`pi-tui-rpc/protocol/runtime-interactions/v1`, pinned by SOURCE.json). This
+ * module only declares the *engine ports* a host supplies and the small internal
+ * capability/result envelope the bridge uses around them. It does not add wire
+ * fields.
  *
- * Rules this file is built to keep:
- * - No private Pi SDK access. A real engine port is only supplied once the public
- *   SDK seam exists; until then the adapter reports an honest `unavailable`.
- * - No raw-prompt fallback. There is deliberately no `sendUserMessage`-like method
- *   in any port: a command that cannot be dispatched by a real engine is
- *   unavailable, never a model prompt.
- * - No wire field invention. Internal names below are provisional and must be
- *   replaced by generated DTO field names once Core publishes them.
+ * Admission is not here: a response needs an authenticated `RuntimeBinding` from
+ * the hosting adapter, and DTO presence alone never makes a family available.
  */
 
-/** Interaction families the shared contract must eventually cover. */
-export type InteractionCapability = "commands" | "queue" | "permissions" | "errors";
+import type { RuntimeCommandCatalog } from "./protocol/runtime-interactions/v1/RuntimeCommandCatalog.js";
+import type { RuntimeCommandReceipt } from "./protocol/runtime-interactions/v1/RuntimeCommandReceipt.js";
+import type { RuntimeErrorSnapshot } from "./protocol/runtime-interactions/v1/RuntimeErrorSnapshot.js";
+import type { RuntimeFamily } from "./protocol/runtime-interactions/v1/RuntimeFamily.js";
+import type { RuntimeId } from "./protocol/runtime-interactions/v1/RuntimeId.js";
+import type { RuntimeOperation } from "./protocol/runtime-interactions/v1/RuntimeOperation.js";
+import type { RuntimePermissionDecision } from "./protocol/runtime-interactions/v1/RuntimePermissionDecision.js";
+import type { RuntimePermissionPresentation } from "./protocol/runtime-interactions/v1/RuntimePermissionPresentation.js";
+import type { RuntimeQueueSnapshot } from "./protocol/runtime-interactions/v1/RuntimeQueueSnapshot.js";
+import type { RuntimeRejectCode } from "./protocol/runtime-interactions/v1/RuntimeRejectCode.js";
+import type { RuntimeUnavailableReason } from "./protocol/runtime-interactions/v1/RuntimeUnavailableReason.js";
 
-/**
- * Internal, non-normative capability states.
- *
- * `sdk_engine_absent`: the public SDK/engine operation does not exist yet.
- * `generated_dto_not_vendored`: canonical DTOs are not vendored in this repo yet.
- * `port_not_configured`: the host supplied no adapter for this family.
- * `engine_failure`: the supplied port threw or returned an unusable result.
- */
-export type CapabilityState = "available" | "unavailable";
+/** Operation families the shared contract covers (generated vocabulary). */
+export type InteractionFamily = RuntimeFamily;
 
-export type CapabilityReason = "sdk_engine_absent" | "generated_dto_not_vendored" | "port_not_configured" | "engine_failure";
+/** `command_dispatch` payload without its op tag; `catalogGeneration` may be numeric or string. */
+export type DispatchOperation = Omit<Extract<RuntimeOperation, { op: "command_dispatch" }>, "op">;
+
+/** A presenter answer is canonical and explicit; the producer decides, this transports. */
+export type PermissionAnswer = { decision: RuntimePermissionDecision; optionId: RuntimeId | null };
 
 export interface CapabilityReport {
-	capability: InteractionCapability;
-	state: CapabilityState;
-	reason?: CapabilityReason;
-	/** Human-facing note. Never a promise that the feature works. */
-	note?: string;
+	family: RuntimeFamily;
+	state: "available" | "unavailable";
+	reason?: RuntimeUnavailableReason;
 }
 
-/** Result envelope: `unavailable` is an intermediate capability result, not delivery. */
 export type InteractionResult<T> =
 	| { kind: "ok"; value: T }
-	| { kind: "unavailable"; capability: InteractionCapability; reason: CapabilityReason }
-	| { kind: "rejected"; capability: InteractionCapability; code: InteractionRejectCode; detail?: string };
+	| { kind: "unavailable"; family: RuntimeFamily; reason: RuntimeUnavailableReason }
+	| { kind: "rejected"; code: RuntimeRejectCode };
 
-export type InteractionRejectCode =
-	| "invalid_request"
-	| "engine_failure"
-	| "unknown_command"
-	| "catalog_generation_unavailable"
-	| "unknown_request";
-
-/**
- * Catalog entry as the bridge can honestly describe it today.
- *
- * Pi's `getCommands()` exposes name, optional description, source and sourceInfo
- * only: there is no argument schema and no catalog generation. The argument
- * contract is therefore explicitly a raw string (preserve, never infer), and a
- * real generation appears only when the SDK supplies one.
- */
-export interface CatalogEntry {
-	name: string;
-	description?: string;
-	source: "extension" | "prompt" | "skill";
-	argumentContract: { kind: "raw_string" };
-}
-
-export interface EngineCatalog {
-	entries: CatalogEntry[];
-	/** Present only when the engine issues one. Never synthesized here. */
-	generation?: string;
-}
-
-export interface CommandDispatchRequest {
-	name: string;
-	/** Passed through verbatim; the bridge does not parse or infer options. */
-	args: string;
-	/** Optional expected catalog generation; a mismatch is rejected, never ignored. */
-	generation?: string;
-}
-
-/** Receipt vocabulary only. Acceptance is not completion; outcomes arrive as events. */
-export type CommandDisposition = "rejected" | "handled" | "queued" | "started";
-
-export interface CommandReceipt {
-	name: string;
-	disposition: CommandDisposition;
-	/** Correlation only; the operation's later outcome is an event, not this field. */
-	operationId?: string;
-}
-
-/** Queue entries: ids exist only when the owning engine supplies them. */
-export interface QueueEntry {
-	id?: string;
-	text: string;
-}
-
-export interface QueueSnapshotView {
-	steering: QueueEntry[];
-	followUp: QueueEntry[];
-	/** Engine continuity marker; absent when the engine cannot issue one. */
-	continuity?: string;
-}
-
-export type ErrorSource = "command" | "permission" | "queue" | "engine" | "transport";
-
-/** Safe, correlated error projection. No secrets, no invented assistant message. */
-export interface InteractionErrorView {
-	source: ErrorSource;
-	code: string;
-	message: string;
-	operationId?: string;
-	eventId?: string;
-	phase?: string;
-	recovery?: string;
-	uncertain?: boolean;
-}
-
-/** A permission request as a presenter may see it: no policy, no authority. */
-export interface PermissionPresentation {
-	requestId: string;
-	revision: number;
-	/** Host clock at presentation; clients compare, never decide by it. */
-	serverNow: number;
-	expiresAt: number;
-	options: Array<{ id: string; model?: string }>;
-}
-
-/** A presenter's answer. The producer decides; this is only transport. */
-export interface PermissionAnswerView {
-	decision: "allow" | "deny";
-	optionId?: string;
-	cancelled?: boolean;
-}
-
-/** Receipt projection carried to presenters: sanitized, no task/policy text. */
-export interface PermissionReceiptView {
-	handleId: string;
-	requestId: string;
-	kind: "decision" | "start_intent" | "result" | "cancelled" | "expired";
-	outcome: string;
-	reason: string;
-	at: number;
-}
-
-/** Engine ports. Each is optional; the adapter reports what is missing. */
+/** Engine port for registered-command catalog and explicit dispatch. */
 export interface CommandEnginePort {
-	catalog(): Promise<EngineCatalog> | EngineCatalog;
-	dispatch(request: CommandDispatchRequest): Promise<CommandReceipt> | CommandReceipt;
+	catalog(): RuntimeCommandCatalog | Promise<RuntimeCommandCatalog>;
+	dispatch(operation: DispatchOperation): RuntimeCommandReceipt | Promise<RuntimeCommandReceipt>;
 }
 
+/** Engine port for the authoritative steering/follow-up view. */
 export interface QueueEnginePort {
-	snapshot(): Promise<QueueSnapshotView> | QueueSnapshotView;
+	snapshot(): RuntimeQueueSnapshot | Promise<RuntimeQueueSnapshot>;
 }
 
+/** Presenter port: transport only, never an authority or default allow. */
 export interface PermissionPresenterPort {
-	present(request: PermissionPresentation): Promise<PermissionAnswerView> | PermissionAnswerView;
+	present(presentation: RuntimePermissionPresentation): PermissionAnswer | Promise<PermissionAnswer>;
 }
 
+/** Retained error projection port. */
 export interface ErrorSourcePort {
-	recent(): Promise<InteractionErrorView[]> | InteractionErrorView[];
+	snapshot(afterEventId: RuntimeId | null): RuntimeErrorSnapshot | Promise<RuntimeErrorSnapshot>;
 }
 
 export interface InteractionPorts {
@@ -173,34 +72,15 @@ export interface InteractionPorts {
 }
 
 /**
- * Capability defaults before any SDK seam exists.
+ * Default capability report before any engine/SDK seam exists.
  *
- * These are intermediate states, never a claim that the requested feature is
- * delivered. Do not replace them with text dispatch.
+ * These are concrete unavailability results, not delivery. `permission_config`
+ * has no owner-authorized write port in this bridge at all.
  */
 export const PROVISIONAL_CAPABILITIES: CapabilityReport[] = [
-	{
-		capability: "commands",
-		state: "unavailable",
-		reason: "sdk_engine_absent",
-		note: "No public Pi dispatch primitive; a literal /name prompt is not dispatch.",
-	},
-	{
-		capability: "queue",
-		state: "unavailable",
-		reason: "sdk_engine_absent",
-		note: "Pi emits queue_update, but no public extension queue snapshot port exists.",
-	},
-	{
-		capability: "permissions",
-		state: "unavailable",
-		reason: "generated_dto_not_vendored",
-		note: "Producer and presenter work locally; canonical DTOs are not vendored yet.",
-	},
-	{
-		capability: "errors",
-		state: "unavailable",
-		reason: "port_not_configured",
-		note: "No retained error source is wired into this adapter.",
-	},
+	{ family: "commands", state: "unavailable", reason: "sdk_engine_absent" },
+	{ family: "queue", state: "unavailable", reason: "sdk_engine_absent" },
+	{ family: "permissions", state: "unavailable", reason: "port_not_configured" },
+	{ family: "permission_config", state: "unavailable", reason: "unsupported_operation" },
+	{ family: "errors", state: "unavailable", reason: "port_not_configured" },
 ];

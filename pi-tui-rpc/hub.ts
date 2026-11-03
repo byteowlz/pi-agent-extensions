@@ -10,6 +10,8 @@
 import fs from "node:fs";
 import net from "node:net";
 import { safeParseLine } from "./protocol.js";
+import type { RuntimeEvent } from "./protocol/runtime-interactions/v1/RuntimeEvent.js";
+import { RUNTIME_INTERACTIONS_VERSION, eventFrame } from "./wire.js";
 
 export type ReplyFn = (frame: unknown) => void;
 
@@ -21,6 +23,8 @@ export interface HubOptions {
 	onConnect?(clientId: string, reply: ReplyFn): void;
 	/** Exactly once on EOF, failure, backpressure or stop. */
 	onDisconnect?(clientId: string): void;
+	/** Supported runtime-interaction versions; delivery is gated per connection. */
+	interactionVersions?: readonly number[];
 }
 
 export interface Hub {
@@ -29,6 +33,12 @@ export interface Hub {
 	broadcast(frame: unknown): void;
 	send(clientId: string, frame: unknown): void;
 	clientCount(): number;
+	/** Accept/deny a negotiated interaction version for one connection. */
+	negotiateInteraction(clientId: string, version: number): boolean;
+	interactionVersion(clientId: string): number | null;
+	/** Version-gated typed delivery; false when the client did not negotiate. */
+	deliverInteractionEvent(clientId: string, event: RuntimeEvent): boolean;
+	broadcastInteractionEvent(event: RuntimeEvent): void;
 }
 
 /** Unsent bytes a client may fall behind by before it is disconnected. */
@@ -49,6 +59,8 @@ export function createHub(options: HubOptions): Hub {
 	let clientSeq = 0;
 	let server: net.Server | null = null;
 	let listening = false;
+	const interactionVersions = new Map<string, number>();
+	const supportedVersions = new Set<number>(options.interactionVersions ?? [RUNTIME_INTERACTIONS_VERSION]);
 
 	const write = (clientId: string, socket: net.Socket, line: string): boolean => {
 		if (socket.writableLength + Buffer.byteLength(line) > BACKLOG_LIMIT) {
@@ -132,10 +144,19 @@ export function createHub(options: HubOptions): Hub {
 		}
 	};
 
+	const deliverInteractionEvent = (clientId: string, event: RuntimeEvent): boolean => {
+		if (interactionVersions.get(clientId) !== RUNTIME_INTERACTIONS_VERSION) return false;
+		const socket = clients.get(clientId);
+		if (!socket) return false;
+		writeFrame(clientId, socket, eventFrame(event));
+		return true;
+	};
+
 	const removeClient = (clientId: string): void => {
 		if (!clients.delete(clientId)) return;
 		buffers.delete(clientId);
 		heldUpdates.delete(clientId);
+		interactionVersions.delete(clientId);
 		options.onDisconnect?.(clientId);
 	};
 
@@ -219,6 +240,18 @@ export function createHub(options: HubOptions): Hub {
 		},
 		clientCount(): number {
 			return clients.size;
+		},
+		negotiateInteraction(clientId: string, version: number): boolean {
+			if (!clients.has(clientId) || !supportedVersions.has(version)) return false;
+			interactionVersions.set(clientId, version);
+			return true;
+		},
+		interactionVersion(clientId: string): number | null {
+			return interactionVersions.get(clientId) ?? null;
+		},
+		deliverInteractionEvent,
+		broadcastInteractionEvent(event: RuntimeEvent): void {
+			for (const clientId of [...interactionVersions.keys()]) deliverInteractionEvent(clientId, event);
 		},
 	};
 }

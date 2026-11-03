@@ -1,250 +1,236 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Receipt } from "../pi-session-tools/permission-producer.js";
 import { InteractionAdapter } from "./interaction-adapter.js";
-import type {
-	CatalogEntry,
-	CommandDispatchRequest,
-	CommandEnginePort,
-	InteractionErrorView,
-	PermissionPresentation,
-	QueueSnapshotView,
-} from "./interaction-port.js";
+import type { CommandEnginePort, ErrorSourcePort, QueueEnginePort } from "./interaction-port.js";
+import type { RuntimeCommandCatalog } from "./protocol/runtime-interactions/v1/RuntimeCommandCatalog.js";
+import type { RuntimeCommandReceipt } from "./protocol/runtime-interactions/v1/RuntimeCommandReceipt.js";
+import type { RuntimeErrorSnapshot } from "./protocol/runtime-interactions/v1/RuntimeErrorSnapshot.js";
+import type { RuntimePermissionPresentation } from "./protocol/runtime-interactions/v1/RuntimePermissionPresentation.js";
+import type { RuntimeQueueSnapshot } from "./protocol/runtime-interactions/v1/RuntimeQueueSnapshot.js";
 
-const FIXTURES = join(import.meta.dir, "fixtures", "runtime-interactions");
-function fixture<T>(name: string): T {
-	return JSON.parse(readFileSync(join(FIXTURES, name), "utf8")) as T;
-}
+const catalog: RuntimeCommandCatalog = {
+	generation: "gen-7",
+	coverage: "registered_only",
+	commands: [
+		{
+			commandId: "cmd-subagent",
+			invocation: "subagent",
+			description: "Manage subagent delegation",
+			origin: "extension",
+			arguments: { kind: "raw_string" },
+			availability: { state: "available" },
+			requiredInteractions: [],
+		},
+	],
+};
 
-const catalogEntry = () => fixture<{ entry: CatalogEntry }>("catalog-entry.json").entry;
-const dispatchFixture = () =>
-	fixture<{ request: CommandDispatchRequest; receipt: { name: string; disposition: string } }>("dispatch-receipt.json");
+const receipt: RuntimeCommandReceipt = {
+	operationId: "op-1",
+	commandId: "cmd-subagent",
+	disposition: "started",
+	rejection: null,
+};
+
+const queue: RuntimeQueueSnapshot = {
+	cursor: { generation: 7, revision: 3 },
+	completeness: "complete",
+	steering: [{ itemId: null, text: "focus on the failing test" }],
+	followUp: [{ itemId: "item-2", text: "report back" }],
+	supportedActions: ["steer", "follow_up"],
+};
+
+const presentation: RuntimePermissionPresentation = {
+	handleId: "handle-1",
+	requestId: "req-1",
+	requestRevision: 0,
+	subject: null,
+	subjectDigest: "subject-digest",
+	operationDigest: "operation-digest",
+	ceilingDigest: "ceiling-digest",
+	expiresAtMs: 1_700_000_060_000,
+	options: [
+		{ optionId: "allow", model: null, effectDigest: "effect" },
+		{ optionId: "allow_with_model", model: "local/alternate", effectDigest: "effect-alt" },
+		{ optionId: "deny", model: null, effectDigest: "deny" },
+	],
+};
+
+const errors: RuntimeErrorSnapshot = {
+	cursor: { generation: 1, revision: 4 },
+	errors: [
+		{
+			eventId: "event-1",
+			operationId: "op-9",
+			source: "command",
+			code: "unknown_command",
+			message: "No such registered command",
+			phase: "dispatch",
+			recoverable: true,
+			uncertain: false,
+		},
+	],
+};
 
 class FakeCommands implements CommandEnginePort {
-	calls: CommandDispatchRequest[] = [];
-	generation?: string;
+	dispatched: unknown[] = [];
 	fail = false;
-	constructor(generation?: string) {
-		this.generation = generation;
-	}
+	constructor(private readonly override?: Partial<RuntimeCommandReceipt>) {}
 	catalog() {
-		return { entries: [catalogEntry()], ...(this.generation ? { generation: this.generation } : {}) };
+		return catalog;
 	}
-	dispatch(request: CommandDispatchRequest) {
+	dispatch(operation: { commandId: string; args: string; catalogGeneration: string | number }) {
 		if (this.fail) throw new Error("engine down");
-		this.calls.push(request);
-		return { name: request.name, disposition: "started" as const, operationId: "op-1" };
+		this.dispatched.push(operation);
+		return { ...receipt, ...this.override };
 	}
 }
 
-test("with no ports every capability is honestly unavailable", () => {
-	const adapter = new InteractionAdapter();
-	const expected = fixture<{ capabilities: unknown }>("provisional-capabilities.json").capabilities;
-	expect(adapter.capabilities()).toEqual(expected);
-	expect(adapter.capabilities().every((report) => report.state === "unavailable")).toBe(true);
+test("vendored DTOs alone never make a family available", () => {
+	const report = new InteractionAdapter().capabilities();
+	expect(report).toEqual([
+		{ family: "commands", state: "unavailable", reason: "sdk_engine_absent" },
+		{ family: "queue", state: "unavailable", reason: "sdk_engine_absent" },
+		{ family: "permissions", state: "unavailable", reason: "port_not_configured" },
+		{ family: "permission_config", state: "unavailable", reason: "unsupported_operation" },
+		{ family: "errors", state: "unavailable", reason: "port_not_configured" },
+	]);
 });
 
-test("dispatch never falls back to a prompt and is unavailable without an engine", async () => {
+test("no engine port means unavailable, never a prompt or a fabricated result", async () => {
 	const adapter = new InteractionAdapter();
-	const { request } = dispatchFixture();
-	expect(await adapter.dispatch(request)).toEqual({
+	expect(await adapter.catalog()).toMatchObject({ kind: "unavailable", family: "commands", reason: "sdk_engine_absent" });
+	expect(await adapter.dispatch({ commandId: "cmd", args: "", catalogGeneration: "g" })).toMatchObject({
 		kind: "unavailable",
-		capability: "commands",
-		reason: "sdk_engine_absent",
+		family: "commands",
 	});
-	// The adapter exposes no prompt/send method at all: the only command paths are
-	// catalog/dispatch through a real engine port.
-	const surface = Object.getOwnPropertyNames(Object.getPrototypeOf(adapter)).filter((name) => name !== "constructor");
+	expect(await adapter.queueSnapshot()).toMatchObject({ kind: "unavailable", family: "queue" });
+	expect(await adapter.errorSnapshot(null)).toMatchObject({ kind: "unavailable", family: "errors" });
+	const surface = Object.getOwnPropertyNames(Object.getPrototypeOf(adapter));
 	expect(surface.some((name) => /prompt|message|send/i.test(name))).toBe(false);
 });
 
-test("source files contain no raw-prompt shim and are not wired into active routing", () => {
-	// Scan code only: the doc comments deliberately *name* the rejected shim.
+test("bridge modules contain no raw-prompt shim and leave lease/reload read-only", () => {
 	const stripComments = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-	const source = ["interaction-port.ts", "interaction-adapter.ts"]
-		.map((name) => stripComments(readFileSync(join(import.meta.dir, name), "utf8")))
-		.join("\n");
-	for (const forbidden of ["sendUserMessage", "expandPromptTemplates", "hub.", "dispatchCommand", "lease."]) {
-		expect(source).not.toContain(forbidden);
+	const files = ["interaction-port.ts", "interaction-adapter.ts", "wire.ts"].map((name) =>
+		stripComments(readFileSync(join(import.meta.dir, name), "utf8"))
+	);
+	for (const source of files) {
+		for (const forbidden of ["sendUserMessage", "expandPromptTemplates", "dispatchCommand", "lease."]) {
+			expect(source).not.toContain(forbidden);
+		}
 	}
-	const index = readFileSync(join(import.meta.dir, "index.ts"), "utf8");
-	expect(index).not.toContain("interaction-adapter");
-	expect(index).not.toContain("interaction-port");
 });
 
-test("a real engine port provides catalog and dispatch receipts without inventing completion", async () => {
+test("catalog and dispatch pass canonical results through and never invent an operation id", async () => {
 	const commands = new FakeCommands();
 	const adapter = new InteractionAdapter({ ports: { commands } });
-	expect(adapter.capabilities().find((report) => report.capability === "commands")).toEqual({
-		capability: "commands",
+	expect(adapter.capabilities().find((entry) => entry.family === "commands")).toEqual({
+		family: "commands",
 		state: "available",
 	});
-	const catalog = await adapter.catalog();
-	expect(catalog).toEqual({ kind: "ok", value: [catalogEntry()] });
+	expect(await adapter.catalog()).toEqual({ kind: "ok", value: catalog });
 
-	const { request } = dispatchFixture();
-	const receipt = await adapter.dispatch(request);
-	expect(receipt.kind).toBe("ok");
-	if (receipt.kind !== "ok") throw new Error("expected receipt");
-	expect(receipt.value.disposition).toBe("started");
-	expect(Object.keys(receipt.value).sort()).toEqual(["disposition", "name", "operationId"]);
-	expect(commands.calls[0]).toEqual({ name: "subagent", args: "status" });
-});
+	const result = await adapter.dispatch({
+		commandId: "cmd-subagent",
+		args: "  --x='literal /name' ",
+		catalogGeneration: "gen-7",
+	});
+	expect(result).toEqual({ kind: "ok", value: receipt });
+	expect(commands.dispatched[0]).toEqual({
+		commandId: "cmd-subagent",
+		args: "  --x='literal /name' ",
+		catalogGeneration: "gen-7",
+	});
 
-test("catalog generation is compared, never ignored or synthesized", async () => {
-	const stale = new InteractionAdapter({ ports: { commands: new FakeCommands("gen-1") } });
-	const rejected = await stale.dispatch({ name: "subagent", args: "", generation: "gen-0" });
-	expect(rejected).toMatchObject({ kind: "rejected", code: "catalog_generation_unavailable" });
-
-	const noGeneration = new InteractionAdapter({ ports: { commands: new FakeCommands() } });
-	const unavailable = await noGeneration.dispatch({ name: "subagent", args: "", generation: "gen-1" });
-	expect(unavailable).toMatchObject({ kind: "unavailable", capability: "commands" });
-
-	const current = new InteractionAdapter({ ports: { commands: new FakeCommands("gen-1") } });
-	expect(await current.dispatch({ name: "subagent", args: "", generation: "gen-1" })).toMatchObject({ kind: "ok" });
-});
-
-test("engine failure and malformed catalog entries are rejected, not guessed", async () => {
-	const failing = new FakeCommands();
-	failing.fail = true;
-	const adapter = new InteractionAdapter({ ports: { commands: failing } });
-	expect(await adapter.dispatch({ name: "subagent", args: "" })).toMatchObject({
+	const missingId = new InteractionAdapter({ ports: { commands: new FakeCommands({ operationId: "" }) } });
+	expect(await missingId.dispatch({ commandId: "cmd", args: "", catalogGeneration: "g" })).toMatchObject({
 		kind: "rejected",
 		code: "engine_failure",
 	});
+});
 
-	const bad = new InteractionAdapter({
+test("malformed canonical outputs are engine failures, not coerced", async () => {
+	const badCatalog = new InteractionAdapter({
 		ports: {
 			commands: {
-				catalog: () => ({ entries: [{ ...catalogEntry(), source: "builtin" as never }] }),
-				dispatch: () => ({ name: "x", disposition: "started" as const }),
+				catalog: () => ({ ...catalog, generation: undefined as never }),
+				dispatch: () => receipt,
 			},
 		},
 	});
-	expect(await bad.catalog()).toMatchObject({ kind: "rejected", code: "invalid_request" });
+	expect(await badCatalog.catalog()).toMatchObject({ kind: "rejected", code: "engine_failure" });
+
+	const failing = new InteractionAdapter({ ports: { commands: new FakeCommands() } });
+	expect(await failing.dispatch({ commandId: "", args: "" })).toMatchObject({ kind: "rejected", code: "invalid_request" });
+
+	const throwing: CommandEnginePort = {
+		catalog: () => {
+			throw new Error("down");
+		},
+		dispatch: () => receipt,
+	};
+	expect(await new InteractionAdapter({ ports: { commands: throwing } }).catalog()).toMatchObject({
+		kind: "rejected",
+		code: "engine_failure",
+	});
 });
 
-test("queue snapshots are authoritative views, unavailable without an engine", async () => {
-	const snapshot = fixture<{ snapshot: QueueSnapshotView }>("queue-snapshot.json").snapshot;
-	const adapter = new InteractionAdapter({ ports: { queue: { snapshot: () => snapshot } } });
-	expect(await adapter.queueSnapshot()).toEqual({ kind: "ok", value: snapshot });
-	expect(new InteractionAdapter().queueSnapshot()).resolves.toMatchObject({
-		kind: "unavailable",
-		capability: "queue",
-	});
+test("queue snapshots are canonical and unavailable without an engine", async () => {
+	const port: QueueEnginePort = { snapshot: () => queue };
+	expect(await new InteractionAdapter({ ports: { queue: port } }).queueSnapshot()).toEqual({ kind: "ok", value: queue });
 
 	const invalid = new InteractionAdapter({
-		ports: { queue: { snapshot: () => ({ steering: [{ text: 1 as never }], followUp: [] }) } },
+		ports: { queue: { snapshot: () => ({ ...queue, cursor: { generation: 1, revision: -1 } }) } },
 	});
-	expect(await invalid.queueSnapshot()).toMatchObject({ kind: "rejected", code: "invalid_request" });
+	expect(await invalid.queueSnapshot()).toMatchObject({ kind: "rejected", code: "engine_failure" });
 });
 
-test("permission presentation is gated on vendored DTOs and never decides", async () => {
-	const { presentation, answer } = fixture<{
-		presentation: PermissionPresentation;
-		answer: { decision: "allow"; optionId: string };
-	}>("permission-presentation.json");
-	const calls: PermissionPresentation[] = [];
-	const permissions = {
-		present: (request: PermissionPresentation) => {
-			calls.push(request);
-			return answer;
-		},
-	};
-
-	// Port present but DTOs not vendored: no presentation, no default allow.
-	const notVendored = new InteractionAdapter({ ports: { permissions } });
-	expect(await notVendored.presentPermission(presentation)).toEqual({
-		kind: "unavailable",
-		capability: "permissions",
-		reason: "generated_dto_not_vendored",
-	});
-	expect(calls).toHaveLength(0);
-
-	// No presenter at all: unavailable, still no fabricated answer.
-	const noPort = new InteractionAdapter({ dtoVendored: true });
-	expect(await noPort.presentPermission(presentation)).toMatchObject({ kind: "unavailable", reason: "sdk_engine_absent" });
-
-	const adapter = new InteractionAdapter({ ports: { permissions }, dtoVendored: true, now: () => 1_700_000_000_000 });
-	expect(await adapter.presentPermission(presentation)).toEqual({ kind: "ok", value: answer });
-	expect(calls[0].serverNow).toBe(1_700_000_000_000);
-	expect(calls[0].options.map((option) => option.id)).toEqual(["allow", "allow_with_model", "deny"]);
-});
-
-test("a presenter answer must be explicit allow or deny", async () => {
-	const { presentation } = fixture<{ presentation: PermissionPresentation }>("permission-presentation.json");
+test("permission presentation is transport only and requires an explicit canonical decision", async () => {
+	const answers: RuntimePermissionPresentation[] = [];
 	const adapter = new InteractionAdapter({
-		dtoVendored: true,
-		ports: { permissions: { present: () => ({ decision: "maybe" as never }) } },
-	});
-	expect(await adapter.presentPermission(presentation)).toMatchObject({ kind: "rejected", code: "invalid_request" });
-});
-
-test("receipt projection keeps identity and reason and drops private detail", () => {
-	const receipt = {
-		version: 1,
-		runtimeGeneration: 1,
-		producerRevision: 7,
-		handleId: "handle-1",
-		requestId: "req-1",
-		revision: 0,
-		kind: "decision",
-		outcome: "allow",
-		optionId: "allow",
-		reason: "explicit_allow",
-		source: "adapter",
-		controllerId: "controller-1",
-		nativeSessionDigest: "digest",
-		subjectDigest: "subject",
-		operationDigest: "operation",
-		at: 1_700_000_000_000,
-		task: "PRIVATE TASK",
-	} as unknown as Receipt;
-	const view = new InteractionAdapter().permissionReceipt(receipt);
-	expect(view).toEqual({
-		handleId: "handle-1",
-		requestId: "req-1",
-		kind: "decision",
-		outcome: "allow",
-		reason: "explicit_allow",
-		at: 1_700_000_000_000,
-	});
-	expect(JSON.stringify(view)).not.toContain("PRIVATE TASK");
-});
-
-test("errors are a retained projection, not an invented journal", async () => {
-	const errors = fixture<{ errors: InteractionErrorView[] }>("errors.json").errors;
-	const adapter = new InteractionAdapter({ ports: { errors: { recent: () => errors } } });
-	expect(await adapter.recentErrors()).toEqual({ kind: "ok", value: errors });
-	expect(await new InteractionAdapter().recentErrors()).toMatchObject({
-		kind: "unavailable",
-		capability: "errors",
-		reason: "port_not_configured",
-	});
-	const failing = new InteractionAdapter({
 		ports: {
-			errors: {
-				recent: () => {
-					throw new Error("boom");
+			permissions: {
+				present: (value) => {
+					answers.push(value);
+					return { decision: "allow_once", optionId: "allow_with_model" };
 				},
 			},
 		},
+		now: () => 1_700_000_000_000,
 	});
-	expect(await failing.recentErrors()).toMatchObject({ kind: "rejected", code: "engine_failure" });
+	expect(adapter.capabilities().find((entry) => entry.family === "permissions")).toEqual({
+		family: "permissions",
+		state: "available",
+	});
+	expect(await adapter.presentPermission(presentation)).toEqual({
+		kind: "ok",
+		value: { decision: "allow_once", optionId: "allow_with_model" },
+	});
+	expect(answers[0].requestId).toBe("req-1");
+
+	// No port: unavailable, never a default allow.
+	expect(await new InteractionAdapter().presentPermission(presentation)).toMatchObject({
+		kind: "unavailable",
+		family: "permissions",
+		reason: "port_not_configured",
+	});
+
+	// A non-canonical answer (e.g. generic "allow") is rejected, not mapped.
+	const loose = new InteractionAdapter({
+		ports: { permissions: { present: () => ({ decision: "allow" as never, optionId: "allow" }) } },
+	});
+	expect(await loose.presentPermission(presentation)).toMatchObject({ kind: "rejected", code: "invalid_request" });
 });
 
-test("fixtures are explicitly provisional, never normative wire material", () => {
-	for (const name of [
-		"provisional-capabilities.json",
-		"dispatch-receipt.json",
-		"catalog-entry.json",
-		"queue-snapshot.json",
-		"permission-presentation.json",
-		"errors.json",
-	]) {
-		const body = fixture<{ provisional: boolean; normative: boolean }>(name);
-		expect(body.provisional).toBe(true);
-		expect(body.normative).toBe(false);
-	}
+test("error snapshots project retained canonical errors", async () => {
+	const port: ErrorSourcePort = { snapshot: (after) => ({ ...errors, cursor: { ...errors.cursor, revision: after ? 5 : 4 } }) };
+	const adapter = new InteractionAdapter({ ports: { errors: port } });
+	expect(await adapter.errorSnapshot(null)).toEqual({ kind: "ok", value: errors });
+	expect(await adapter.errorSnapshot("event-0")).toMatchObject({ kind: "ok", value: { cursor: { revision: 5 } } });
+
+	const invalid = new InteractionAdapter({
+		ports: { errors: { snapshot: () => ({ ...errors, errors: [{ ...errors.errors[0], eventId: "" }] }) } },
+	});
+	expect(await invalid.errorSnapshot(null)).toMatchObject({ kind: "rejected", code: "engine_failure" });
 });
