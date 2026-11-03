@@ -21,7 +21,14 @@
  */
 
 import * as path from "node:path";
-import { type ExtensionAPI, type ExtensionContext, defineTool } from "@earendil-works/pi-coding-agent";
+import {
+	type ExtensionAPI,
+	type ExtensionContext,
+	type MessageRenderer,
+	defineTool,
+	getMarkdownTheme,
+} from "@earendil-works/pi-coding-agent";
+import { Box, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import { herdrDrop, herdrResume, herdrSleeping } from "./herdr.js";
@@ -48,8 +55,13 @@ import {
 import { buildLink, parseOwnedSchedules, removeSchedule, runSkdlr } from "./skdlr.js";
 import {
 	DEFAULT_SLEEP_CONFIG,
+	NOTE_MAX_CHARS,
 	type SleepConfig,
+	WAKE_MESSAGE_TYPE,
+	type Wake,
+	type WakeDetails,
 	addWake,
+	clampNote,
 	clearWake,
 	formatClock,
 	formatWakes,
@@ -59,7 +71,9 @@ import {
 	resolveDuration,
 	sleepNotice,
 	sleepStatus,
+	wakeDetails,
 	wakeMessage,
+	wakeSummary,
 } from "./sleep.js";
 
 const SLEEP_TOOL_NAME = "sleep";
@@ -69,7 +83,56 @@ interface SleepDetails {
 	durationMs: number;
 	fireAt: string;
 	note: string;
+	/** The note was longer than the cue budget and was trimmed. */
+	noteTruncated: boolean;
 }
+
+/** A delivery that carries structured identity instead of a bare user prompt. */
+interface CustomDelivery {
+	customType: string;
+	content: string;
+	display: boolean;
+	details: unknown;
+}
+
+type Delivery = string | CustomDelivery;
+
+/**
+ * The extension API types the senders as `void`, while the session methods behind
+ * them return promises. Attach the failure path when a promise comes back, so a
+ * rejected delivery is reported instead of becoming an unhandled rejection.
+ */
+function settleDelivery(sent: unknown, failed: (error: unknown) => void): void {
+	if (sent && typeof (sent as Promise<unknown>).then === "function") void (sent as Promise<unknown>).catch(failed);
+}
+
+/**
+ * Draw a wake-up as its own block instead of a "You" bubble: the header carries
+ * the timings, the note is the body. Collapsed hides the envelope the model
+ * needs; expanding adds the ids and any extra latency.
+ */
+const renderWakeMessage: MessageRenderer<WakeDetails> = (message, { expanded }, theme) => {
+	const details = message.details;
+	const box = new Box(1, 1, (t) => theme.bg("customMessageBg", t));
+	const label = theme.fg("customMessageLabel", "\x1b[1mWake-up\x1b[22m");
+	box.addChild(new Text(details ? `${label} ${theme.fg("dim", wakeSummary(details))}` : label, 0, 0));
+	box.addChild(new Spacer(1));
+	const note = details?.note.trim() ?? "";
+	if (note)
+		box.addChild(
+			new Markdown(note, 0, 0, getMarkdownTheme(), {
+				color: (value: string) => theme.fg("customMessageText", value),
+			})
+		);
+	else box.addChild(new Text(theme.fg("dim", "no note was set"), 0, 0));
+	if (expanded && details) {
+		const ids = `${details.id} · due ${formatClock(details.fireAt)} · woke ${formatClock(details.wokeAt)}`;
+		const pending = details.pending > 0 ? ` · ${details.pending} still pending` : "";
+		box.addChild(new Spacer(1));
+		box.addChild(new Text(theme.fg("dim", `${ids}${pending}`), 0, 0));
+	}
+	return box;
+};
 
 /** A failed tool result that still explains the fix. */
 const sleepError = (text: string): { content: [{ type: "text"; text: string }]; details: undefined; isError: true } => ({
@@ -87,8 +150,8 @@ interface ArmedAction {
 export default function piSchedule(pi: ExtensionAPI): void {
 	let armed: ArmedAction[] = [];
 	let ctxRef: ExtensionContext | undefined;
-	/** Prompts parked because pi was compacting when the timer fired. */
-	let parked: string[] = [];
+	/** Deliveries parked because pi was compacting when a timer fired. */
+	let parked: Delivery[] = [];
 	let compacting = false;
 
 	const sessionKey = (ctx: ExtensionContext): string => ctx.sessionManager.getSessionId();
@@ -108,24 +171,50 @@ export default function piSchedule(pi: ExtensionAPI): void {
 		}
 	};
 
-	const deliver = (text: string): void => {
-		const ctx = ctxRef;
-		if (!ctx) return;
-		if (compacting) {
-			parked.push(text);
-			return;
-		}
-		try {
-			if (ctx.isIdle()) pi.sendUserMessage(text);
-			else pi.sendUserMessage(text, { deliverAs: "followUp" });
-		} catch (error) {
+	/** Send one delivery now: a plain prompt, or an attributed custom message. */
+	const sendNow = (ctx: ExtensionContext, delivery: Delivery): void => {
+		const failed = (error: unknown): void => {
 			if (/compaction is in progress/i.test((error as Error)?.message ?? "")) {
 				compacting = true;
-				parked.push(text);
+				parked.push(delivery);
 				return;
 			}
 			ctx.ui.notify(`schedule: delivery failed: ${(error as Error)?.message ?? error}`, "error");
+		};
+		try {
+			if (typeof delivery === "string") {
+				settleDelivery(
+					ctx.isIdle() ? pi.sendUserMessage(delivery) : pi.sendUserMessage(delivery, { deliverAs: "followUp" }),
+					failed
+				);
+				return;
+			}
+			const message = {
+				customType: delivery.customType,
+				content: delivery.content,
+				display: delivery.display,
+				details: delivery.details,
+			};
+			// triggerTurn: a wake-up has to start a run, exactly as a user prompt would.
+			settleDelivery(
+				ctx.isIdle()
+					? pi.sendMessage(message, { triggerTurn: true })
+					: pi.sendMessage(message, { triggerTurn: true, deliverAs: "followUp" }),
+				failed
+			);
+		} catch (error) {
+			failed(error);
 		}
+	};
+
+	const deliver = (delivery: Delivery): void => {
+		const ctx = ctxRef;
+		if (!ctx) return;
+		if (compacting) {
+			parked.push(delivery);
+			return;
+		}
+		sendNow(ctx, delivery);
 	};
 
 	/** Re-read stores and re-arm. Cheap enough to call on every change. */
@@ -487,12 +576,24 @@ export default function piSchedule(pi: ExtensionAPI): void {
 		sleepTimers.set(wakeId, timer);
 	};
 
+	/** Deliver a wake as an attributed custom message, never as a bare user prompt. */
+	const deliverWake = (key: string, wake: Wake, now = Date.now()): void => {
+		const pending = readWakes(key);
+		const details = wakeDetails(wake, now, pending);
+		deliver({
+			customType: WAKE_MESSAGE_TYPE,
+			content: wakeMessage(wake, now, pending),
+			display: true,
+			details,
+		});
+	};
+
 	/** Re-read the store before firing so a cancel that raced the timer wins. */
 	const fireWake = (ctx: ExtensionContext, key: string, wakeId: string): void => {
 		const wake = readWakes(key).find((candidate) => candidate.id === wakeId);
 		if (!wake) return;
 		clearWake(key, wakeId);
-		deliver(wakeMessage(wake));
+		deliverWake(key, wake);
 		publishSleepStatus(ctx);
 	};
 
@@ -508,7 +609,7 @@ export default function piSchedule(pi: ExtensionAPI): void {
 			}
 			if (fireAt <= now) {
 				clearWake(key, wake.id);
-				deliver(wakeMessage(wake, now));
+				deliverWake(key, wake, now);
 			} else {
 				armWake(ctx, key, wake.id, wake.fireAt);
 			}
@@ -516,19 +617,26 @@ export default function piSchedule(pi: ExtensionAPI): void {
 		publishSleepStatus(ctx);
 	};
 
+	pi.registerMessageRenderer(WAKE_MESSAGE_TYPE, renderWakeMessage);
+
 	pi.registerTool(
 		defineTool({
 			name: SLEEP_TOOL_NAME,
 			label: "Sleep",
 			description:
-				'End your turn and get woken after a delay. Use this instead of a long-running `sleep` bash command when you are waiting for a build, job or callback and nothing useful can be done meanwhile: the timer holds nothing, your turn ends at once, and a "[wake-up]" user message carrying your note arrives when it fires.',
+				'End your turn and get woken after a delay. Use this instead of a long-running `sleep` bash command when you are waiting for a build, job or callback and nothing useful can be done meanwhile: the timer holds nothing, your turn ends at once, and a "[wake-up]" message carrying your note arrives when it fires.',
 			promptGuidelines: [
 				"Prefer the sleep tool over `sleep <n>` bash commands for waits of a minute or more; pass a note saying what to check or continue when you wake.",
+				`Keep the note a resume cue, not a status dump: at most ${NOTE_MAX_CHARS} characters ("check run B ~07:45; QA ETA 18:35"). Your context survives the sleep, and the note is also shown to the human.`,
 				"After a sleep call that was the turn's only tool call, end your turn; the wake-up arrives as a new message.",
 			],
 			parameters: Type.Object({
 				duration: Type.String({ description: 'How long to sleep, e.g. "20m", "90s", "1h"' }),
-				note: Type.Optional(Type.String({ description: "Delivered to you in the wake-up message: what to check or continue" })),
+				note: Type.Optional(
+					Type.String({
+						description: `Resume cue delivered in the wake-up message and shown to the human: what to check or continue when you wake (max ${NOTE_MAX_CHARS} chars)`,
+					})
+				),
 			}),
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 				if (sleepConfig.mode === "off") return sleepError('sleep is disabled (sleep.mode "off" in pi-schedule.json)');
@@ -544,18 +652,27 @@ export default function piSchedule(pi: ExtensionAPI): void {
 					return sleepError(
 						`at most ${sleepConfig.maxPending} wake-up(s) can be pending; wait for one to fire or ask the user to run /sleep cancel`
 					);
-				const note = (params.note ?? "").trim();
-				const { wake } = addWake(key, { note, durationMs: parsed.durationMs });
+				const cue = clampNote(params.note ?? "");
+				const { wake } = addWake(key, { note: cue.note, durationMs: parsed.durationMs });
 				armWake(ctx, key, wake.id, wake.fireAt);
 				publishSleepStatus(ctx);
+				const truncation = cue.truncated
+					? `\nNote trimmed to ${NOTE_MAX_CHARS} chars: keep it a resume cue (what to check when you wake), not a status dump — your context survives the sleep.`
+					: "";
 				return {
 					content: [
 						{
 							type: "text",
-							text: `Sleeping for ${formatInterval(wake.durationMs)} (wake ${wake.id}, fires at ${formatClock(wake.fireAt)}). Your turn ends now; the "[wake-up]" message${note ? " with your note" : ""} will wake you.`,
+							text: `Sleeping for ${formatInterval(wake.durationMs)} (wake ${wake.id}, fires at ${formatClock(wake.fireAt)}). Your turn ends now; the "[wake-up]" message${cue.note ? " with your note" : ""} will wake you.${truncation}`,
 						},
 					],
-					details: { id: wake.id, durationMs: wake.durationMs, fireAt: wake.fireAt, note } satisfies SleepDetails,
+					details: {
+						id: wake.id,
+						durationMs: wake.durationMs,
+						fireAt: wake.fireAt,
+						note: cue.note,
+						noteTruncated: cue.truncated,
+					} satisfies SleepDetails,
 					terminate: true,
 				};
 			},
@@ -718,10 +835,9 @@ export default function piSchedule(pi: ExtensionAPI): void {
 		parked = [];
 		const ctx = ctxRef;
 		if (!ctx) return;
-		for (const text of queued) {
+		for (const delivery of queued) {
 			try {
-				if (ctx.isIdle()) pi.sendUserMessage(text);
-				else pi.sendUserMessage(text, { deliverAs: "followUp" });
+				sendNow(ctx, delivery);
 			} catch {
 				// The next tick will run it again; do not spin on a broken delivery.
 			}

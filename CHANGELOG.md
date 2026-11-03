@@ -4,6 +4,29 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Attributed wake-ups and a note cue budget (3.15.0)
+
+- **pi-schedule**: a `sleep` wake-up is now delivered as an attributed
+  `custom_message` (`pi-schedule:wake`, `display: true`) with structured
+  `details` (`id`, `durationMs`, `fireAt`, `wokeAt`, `lateMs`, `note`,
+  `pending`, `nextFireAt`) and a registered message renderer, instead of a bare
+  `sendUserMessage` prompt. It renders as its own `Wake-up` block (header with
+  timings, note as the body, ids and pending count on expand) rather than a
+  "You" bubble, and the stored entry is `role: "custom"` so transcripts,
+  history tooling and exports can tell an agent nudge from the human. Provider
+  role is unchanged (a custom message is still sent to the model as a user
+  turn), so the delivered text now carries the attribution itself.
+- The model-facing wake-up text is structured instead of one run-on sentence:
+  a header naming the wake, due/woke times and the next pending wake, then the
+  note as an indented block. Late catch-up delivery keeps its wording.
+- `note` is capped at 280 characters (`NOTE_MAX_CHARS`), trimmed on a clause
+  boundary, with the truncation reported in the tool result and the note
+  guideline reframed: a resume cue, not a status dump — the model's context
+  survives the sleep.
+- Delivery plumbing takes a `string | CustomDelivery` union so scheduled prompts
+  stay plain user prompts while wakes carry identity; parked deliveries (during
+  compaction) preserve the distinction.
+
 ### Host-neutral consumer package + honest coverage evidence (3.14.0)
 
 - **runtime-interactions**: extracted the consumer contract into the host-neutral

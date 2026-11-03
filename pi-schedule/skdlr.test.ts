@@ -80,7 +80,9 @@ extension({
   on: (event, handler) => events.set(event, handler),
   registerCommand: (name, value) => commands.set(name, value.handler),
   registerTool: () => {}, registerShortcut: () => {}, appendEntry: () => {},
+  registerMessageRenderer: () => {},
   sendUserMessage: (text) => messages.push(text),
+  sendMessage: (message) => messages.push(message),
   events: { on: () => () => {}, emit: () => {} },
 });
 

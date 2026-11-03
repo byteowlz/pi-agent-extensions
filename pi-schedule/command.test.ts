@@ -64,8 +64,10 @@ extension({
   registerCommand: (name, value) => commands.set(name, value.handler),
   registerTool: () => {},
   registerShortcut: () => {},
+  registerMessageRenderer: () => {},
   appendEntry: () => {},
   sendUserMessage: (text) => messages.push(text),
+  sendMessage: (message) => messages.push(message),
   events: { on: () => () => {}, emit: () => {} },
 });
 
@@ -164,6 +166,32 @@ assert.equal(JSON.parse(fs.readFileSync(projectStore, 'utf8')).actions.length, 0
 
 // status badge reports armed actions only
 assert.ok(statuses.some((entry) => entry.key === 'schedule'), 'publishes a schedule status');
+
+// --- 6. a wake-up arrives as an attributed custom message -----------------
+const wakeFile = path.join(agentDir, 'schedule', 'wakes', 'sess-1.json');
+fs.mkdirSync(path.dirname(wakeFile), { recursive: true });
+fs.writeFileSync(wakeFile, JSON.stringify({
+  version: 1,
+  wakes: [{
+    id: 'sleep-9',
+    note: 'check teacher run B ~07:45',
+    durationMs: 1200000,
+    createdAt: new Date().toISOString(),
+    fireAt: new Date(Date.now() + 300).toISOString(),
+  }],
+}));
+await events.get('session_start')({ reason: 'reload' }, ctx);
+await sleep(900);
+const wakes = messages.filter((message) => typeof message === 'object');
+assert.equal(wakes.length, 1, 'one wake-up delivered, and never as a bare user prompt');
+assert.equal(wakes[0].customType, 'pi-schedule:wake');
+assert.equal(wakes[0].display, true);
+assert.match(wakes[0].content, /^\\[wake-up\\] sleep-9 · your 20m sleep is over\\./m);
+assert.match(wakes[0].content, /Your note \\(what to check or continue\\):\\n  check teacher run B ~07:45/);
+assert.equal(wakes[0].details.id, 'sleep-9');
+assert.equal(wakes[0].details.note, 'check teacher run B ~07:45');
+assert.ok(wakes[0].details.lateMs >= 0 && wakes[0].details.lateMs < 5000, 'not a catch-up delivery');
+assert.equal(JSON.parse(fs.readFileSync(wakeFile, 'utf8')).wakes.length, 0, 'firing clears the pending wake');
 
 await events.get('session_shutdown')({ reason: 'quit' }, ctx);
 console.log('schedule verified');

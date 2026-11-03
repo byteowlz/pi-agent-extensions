@@ -5,8 +5,10 @@ import * as path from "node:path";
 
 import {
 	DEFAULT_SLEEP_CONFIG,
+	NOTE_MAX_CHARS,
 	type Wake,
 	addWake,
+	clampNote,
 	clearWake,
 	findWake,
 	formatWakes,
@@ -17,8 +19,10 @@ import {
 	resolveDuration,
 	sleepNotice,
 	sleepStatus,
+	wakeDetails,
 	wakeMessage,
 	wakeStorePath,
+	wakeSummary,
 } from "./sleep";
 
 function tmp(prefix = "sleep-"): string {
@@ -115,7 +119,7 @@ describe("wake store", () => {
 });
 
 describe("wake messages and presentation", () => {
-	test("on-time delivery carries the duration and note", () => {
+	test("on-time delivery is a structured header plus an indented note", () => {
 		const now = Date.parse("2026-10-29T10:20:00.000Z");
 		const wake = {
 			id: "sleep-1",
@@ -124,21 +128,91 @@ describe("wake messages and presentation", () => {
 			createdAt: "",
 			fireAt: "2026-10-29T10:20:00.000Z",
 		};
-		expect(wakeMessage(wake, now)).toBe("[wake-up] Your 20m sleep is over. Note: check the build");
+		const text = wakeMessage(wake, now);
+		const lines = text.split("\n");
+		expect(lines[0]).toBe("[wake-up] sleep-1 · your 20m sleep is over.");
+		expect(lines[1]).toMatch(/^Due \d\d:\d\d, woke \d\d:\d\d\.$/);
+		expect(text).toContain("Your note (what to check or continue):\n  check the build");
+	});
+
+	test("multi-line notes stay indented instead of collapsing into prose", () => {
+		const now = Date.parse("2026-10-29T10:20:00.000Z");
+		const wake = {
+			id: "sleep-1",
+			note: "check run B\nQA v3 ETA 18:35",
+			durationMs: 60_000,
+			createdAt: "",
+			fireAt: "2026-10-29T10:20:00.000Z",
+		};
+		expect(wakeMessage(wake, now)).toContain("  check run B\n  QA v3 ETA 18:35");
 	});
 
 	test("late delivery says how late and why", () => {
 		const now = Date.parse("2026-10-29T11:35:00.000Z");
-		const wake = { id: "sleep-1", note: "resume", durationMs: 3_600_000, createdAt: "", fireAt: "2026-10-29T11:00:00.000Z" };
-		expect(wakeMessage(wake, now)).toBe("[wake-up] Your 1h sleep ended 35m ago (the session was not running). Note: resume");
+		const wake = {
+			id: "sleep-1",
+			note: "resume",
+			durationMs: 3_600_000,
+			createdAt: "",
+			fireAt: "2026-10-29T11:00:00.000Z",
+		};
+		const text = wakeMessage(wake, now);
+		expect(text.split("\n")[0]).toBe("[wake-up] sleep-1 · your 1h sleep ended 35m ago (the session was not running).");
+		expect(wakeDetails(wake, now).lateMs).toBe(2_100_000);
 	});
 
 	test("no note says so explicitly", () => {
 		const now = Date.parse("2026-10-29T10:20:00.000Z");
 		const wake = { id: "sleep-1", note: "", durationMs: 60_000, createdAt: "", fireAt: "2026-10-29T10:20:00.000Z" };
-		expect(wakeMessage(wake, now)).toBe("[wake-up] Your 1m sleep is over. No note was set.");
+		expect(wakeMessage(wake, now)).toContain("No note was set — resume from the conversation above.");
 	});
 
+	test("pending wakes are named in the header line, not the note", () => {
+		const now = Date.parse("2026-10-29T10:20:00.000Z");
+		const fired = { id: "sleep-1", note: "", durationMs: 1_200_000, createdAt: "", fireAt: "2026-10-29T10:20:00.000Z" };
+		const later = { id: "sleep-2", note: "", durationMs: 3_600_000, createdAt: "", fireAt: "2026-10-29T10:55:00.000Z" };
+		const text = wakeMessage(fired, now, [later]);
+		expect(text.split("\n")[1]).toContain("Next wake");
+		const details = wakeDetails(fired, now, [later, fired]);
+		expect(details.pending).toBe(1);
+		expect(details.nextFireAt).toBe(later.fireAt);
+		expect(wakeSummary(details)).toContain("next wake");
+	});
+
+	test("wakeSummary reports the timings and catch-up latency", () => {
+		const wake = { id: "sleep-3", note: "x", durationMs: 60_000, createdAt: "", fireAt: "2026-10-29T11:00:00.000Z" };
+		const onTime = wakeSummary(wakeDetails(wake, Date.parse("2026-10-29T11:00:00.000Z")));
+		expect(onTime).toContain("1m · due");
+		expect(onTime).toContain("woke");
+		expect(onTime).not.toContain("late");
+		const late = wakeSummary(wakeDetails(wake, Date.parse("2026-10-29T11:35:00.000Z")));
+		expect(late).toContain("late 35m");
+	});
+});
+
+describe("note cue budget", () => {
+	test("short notes pass unchanged", () => {
+		expect(clampNote("  check the build  ")).toEqual({ note: "check the build", truncated: false });
+		const exact = "x".repeat(NOTE_MAX_CHARS);
+		expect(clampNote(exact)).toEqual({ note: exact, truncated: false });
+	});
+
+	test("long notes are trimmed to the budget with an ellipsis", () => {
+		const long = `${"status dump ".repeat(60)}`.trim();
+		const { note, truncated } = clampNote(long);
+		expect(truncated).toBe(true);
+		expect(note.length).toBeLessThanOrEqual(NOTE_MAX_CHARS);
+		expect(note.endsWith("…")).toBe(true);
+	});
+
+	test("trimming prefers a clause boundary over a mid-word cut", () => {
+		const long = `${"a".repeat(200)}; ${"b".repeat(200)}`;
+		const { note } = clampNote(long);
+		expect(note.endsWith(";…")).toBe(true);
+	});
+});
+
+describe("wake status and listings", () => {
 	test("formatWakes lists countdowns or a hint", () => {
 		const now = Date.parse("2026-10-29T10:00:00.000Z");
 		expect(formatWakes([], now)).toContain("no pending wake-ups");

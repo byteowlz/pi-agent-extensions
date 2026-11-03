@@ -23,9 +23,32 @@ Minimum 10s (a CLI guard; the store stays authoritative for hand edits).
 The `sleep` tool lets the MODEL set a one-shot wake-up instead of running a
 long `sleep <n>` bash command: the tool arms a timer and returns with
 `terminate: true`, so the agent's turn ends immediately — nothing is blocked,
-no tool-timeout budget is burned — and when the timer fires a
-`[wake-up] Your 20m sleep is over. Note: …` user message is delivered into the
-same session, which starts a new run with full context.
+no tool-timeout budget is burned — and when the timer fires a wake-up is
+delivered into the same session, which starts a new run with full context.
+
+A wake-up is **not** a user prompt. It is delivered as a `custom_message`
+(`pi-schedule:wake`, `display: true`) with structured `details` (`id`,
+`durationMs`, `fireAt`, `wokeAt`, `lateMs`, `note`, `pending`, `nextFireAt`),
+so it renders as its own `Wake-up` block — header with the timings, note as the
+body — instead of impersonating the human with a "You" bubble. Transcript
+consumers see `role: "custom"`; the model still receives the content as a user
+turn (that is the only role a provider accepts), formatted as a header plus an
+indented note:
+
+```text
+[wake-up] sleep-1 · your 20m sleep is over.
+Due 13:41, woke 13:41.
+
+Your note (what to check or continue):
+  check run B ~07:45; QA ETA 18:35
+```
+
+The **note is a resume cue, not a status dump**: it is capped at 280 characters
+(`NOTE_MAX_CHARS`), trimmed on a clause boundary, and the truncation is reported
+in the tool result. The model's context survives the sleep, and the note is also
+read by the human, so restating state, ids or plans only adds a wall of text.
+Late delivery is labelled (`ended 35m ago (the session was not running)`), and
+the next pending wake is named in the header line.
 
 - Who may call it is config (`pi-schedule.json` → `sleep.mode`, searched `./`,
   `./.pi/`, `~/.pi/agent/`; schema in `pi-schedule.schema.json`):
@@ -49,7 +72,8 @@ delivered late on the next start, labelled with its delay. Forks do not inherit
   and `/sleep clear` cancel them; the footer shows a live `zzz <remaining>/<total>`
   segment (e.g. `zzz 12m/20m`, re-published every 30s) while one is pending.
 - The tool result records the fire time (`fires at 15:42`), so the transcript
-  shows both when the sleep was set and when it triggers.
+  shows both when the sleep was set and when it triggers; a note longer than the
+  cue budget comes back flagged as trimmed.
 - Status for external consumers: while a wake is pending inside a herdr pane,
   the extension reports the pane **idle** with a notice — `sleeping 20m
   (started 15:22) — sleep-1 wakes 15:42 · check the build` — via the same

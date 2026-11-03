@@ -224,15 +224,88 @@ export function clearWake(sessionId: string, id: string, agentDir?: string): voi
 // Presentation
 // ---------------------------------------------------------------------------
 
-/** The user message delivered when a wake fires; `now` after fireAt means late. */
-export function wakeMessage(wake: Wake, now = Date.now()): string {
-	const duration = formatInterval(wake.durationMs);
-	const note = wake.note.trim() ? ` Note: ${wake.note.trim()}` : " No note was set.";
-	const fireAt = Date.parse(wake.fireAt);
-	const lateMs = Number.isFinite(fireAt) ? now - fireAt : 0;
-	if (lateMs > 60_000)
-		return `[wake-up] Your ${duration} sleep ended ${formatDuration(lateMs)} ago (the session was not running).${note}`;
-	return `[wake-up] Your ${duration} sleep is over.${note}`;
+/** custom_message type of a delivered wake-up; the renderer draws it as a block. */
+export const WAKE_MESSAGE_TYPE = "pi-schedule:wake";
+
+/**
+ * A note is read by a human in the transcript as well as by the model, so it is
+ * a resume cue ("check run B ~07:45"), not a status dump: the model's own
+ * context survives the sleep, and a journal only adds a wall of text.
+ */
+export const NOTE_MAX_CHARS = 280;
+
+/** Trim a note to the cue budget, preferring a sentence or clause boundary. */
+export function clampNote(raw: string): { note: string; truncated: boolean } {
+	const note = raw.trim();
+	if (note.length <= NOTE_MAX_CHARS) return { note, truncated: false };
+	const cut = note.slice(0, NOTE_MAX_CHARS - 1);
+	const boundary = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("; "), cut.lastIndexOf(", "));
+	const body = boundary > NOTE_MAX_CHARS * 0.6 ? cut.slice(0, boundary + 1) : cut;
+	return { note: `${body.trimEnd()}…`, truncated: true };
+}
+
+/** Structured payload of the wake-up custom message (rendered, never sent to the model). */
+export interface WakeDetails {
+	id: string;
+	durationMs: number;
+	fireAt: string;
+	/** When the wake-up is actually delivered (later than fireAt after a closed session). */
+	wokeAt: string;
+	/** Milliseconds between due time and delivery; over a minute means a catch-up. */
+	lateMs: number;
+	note: string;
+	/** Wakes still pending at delivery time. */
+	pending: number;
+	nextFireAt?: string;
+}
+
+/** Everything the wake-up message says about itself, derived once at delivery. */
+export function wakeDetails(wake: Wake, now = Date.now(), pending: readonly Wake[] = []): WakeDetails {
+	const due = Date.parse(wake.fireAt);
+	const lateMs = Number.isFinite(due) ? Math.max(0, now - due) : 0;
+	const upcoming = pending
+		.filter((candidate) => candidate.id !== wake.id)
+		.sort((a, b) => Date.parse(a.fireAt) - Date.parse(b.fireAt));
+	return {
+		id: wake.id,
+		durationMs: wake.durationMs,
+		fireAt: wake.fireAt,
+		wokeAt: new Date(now).toISOString(),
+		lateMs,
+		note: wake.note.trim(),
+		pending: upcoming.length,
+		nextFireAt: upcoming[0]?.fireAt,
+	};
+}
+
+/** One header line: what fired, when it was due, when it woke, what is still armed. */
+export function wakeSummary(details: WakeDetails): string {
+	const parts = [formatInterval(details.durationMs), `due ${formatClock(details.fireAt)}`, `woke ${formatClock(details.wokeAt)}`];
+	if (details.lateMs > 60_000) parts.push(`late ${formatDuration(details.lateMs)}`);
+	if (details.nextFireAt) parts.push(`next wake ${formatClock(details.nextFireAt)}`);
+	return parts.join(" · ");
+}
+
+/**
+ * Model-facing text of a wake-up; `now` after fireAt means late. Structured
+ * rather than one run-on sentence: a header says which wake fired and when, and
+ * the note follows as an indented block so it reads as a cue, not a paragraph.
+ */
+export function wakeMessage(wake: Wake, now = Date.now(), pending: readonly Wake[] = []): string {
+	const details = wakeDetails(wake, now, pending);
+	const ended = details.lateMs > 60_000 ? `ended ${formatDuration(details.lateMs)} ago (the session was not running)` : "is over";
+	const lines = [
+		`[wake-up] ${details.id} · your ${formatInterval(details.durationMs)} sleep ${ended}.`,
+		`Due ${formatClock(details.fireAt)}, woke ${formatClock(details.wokeAt)}.${details.nextFireAt ? ` Next wake ${formatClock(details.nextFireAt)}.` : ""}`,
+		"",
+	];
+	if (details.note) {
+		lines.push("Your note (what to check or continue):");
+		for (const line of details.note.split("\n")) lines.push(`  ${line}`);
+	} else {
+		lines.push("No note was set — resume from the conversation above.");
+	}
+	return lines.join("\n");
 }
 
 /** Numbered listing for /sleep; numbers match findWake selectors. */
