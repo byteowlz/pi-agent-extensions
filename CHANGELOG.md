@@ -4,6 +4,24 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Ten-row placement coverage (3.13.0)
+
+- **pi-tui-rpc**: new `interaction-coverage.ts` encodes Core's exact ten
+  mandatory rows in contract order (catalog, dispatch, permission menu/snapshot,
+  explicit decision, owner configuration, retained notifications,
+  errors/outcomes, queue snapshot, queue actions, reconnect/headless) and derives
+  each cell from the supplied ports for both placements. Genuine Pi SDK gaps
+  (dispatch, queue snapshot/actions, catalog) are marked `sdkGap` with
+  `sdk_engine_absent`, separately from unwired producers, missing retention, the
+  separate owner-write authority and the missing headless CLI. Both placements
+  report identical states/reasons for identical capabilities.
+- Terminal obligations are enumerated per row: source helpers exist for picker,
+  prompt/decision, queue view/actions and errors; retained notifications and the
+  headless CLI are explicitly `renderer_missing`, owner config `unavailable`.
+- The runtime exposes `coverage(placement)`; no wire/schema change.
+- Tests: exact rows/order, SDK-gap separation, full-producer availability,
+  placement parity, canonical-ops-only and terminal obligation coverage.
+
 ### Terminal-renderable interaction contract (3.12.0)
 
 - **pi-tui-rpc**: new `interaction-terminal.ts` renders the shared contract for

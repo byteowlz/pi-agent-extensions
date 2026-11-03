@@ -13,6 +13,7 @@
  * permission, and a binding/permission is re-read after every await.
  */
 
+import { type CoverageOptions, type InteractionPlacement, type RowCoverage, coverageFor } from "./interaction-coverage.js";
 import type { InteractionPorts } from "./interaction-port.js";
 import type { RuntimeBinding } from "./protocol/runtime-interactions/v1/RuntimeBinding.js";
 import type { RuntimeCapability } from "./protocol/runtime-interactions/v1/RuntimeCapability.js";
@@ -44,6 +45,8 @@ export interface InteractionRuntime {
 	capabilities(): RuntimeCapability[];
 	/** Canonical events from the supplied port; delivery gating stays with the caller. */
 	subscribe(listener: (event: RuntimeEvent) => void): () => void;
+	/** The ten mandatory placement rows, derived from the supplied ports. */
+	coverage(placement: InteractionPlacement, options?: CoverageOptions): RowCoverage[];
 }
 
 function validBinding(binding: RuntimeBinding | undefined): binding is RuntimeBinding {
@@ -164,6 +167,9 @@ export function createInteractionRuntime(ports: InteractionPorts, admission: Int
 
 	return {
 		capabilities,
+		coverage(placement, options) {
+			return coverageFor(placement, ports, options);
+		},
 		subscribe(listener) {
 			return ports.events?.subscribe(listener) ?? (() => {});
 		},
