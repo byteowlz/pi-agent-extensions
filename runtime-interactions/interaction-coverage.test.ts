@@ -115,8 +115,8 @@ test("explicit engine evidence distinguishes known SDK absence from unwired adap
 
 	const partial = byRow(coverageFor("managed", {}, { catalog: "partial", queueSnapshot: "partial" }));
 	expect(partial.catalog).toMatchObject({ state: "unavailable", reason: "adapter_unwired" });
-	expect(partial.catalog.detail).toContain("discovery");
-	expect(partial.queue_snapshot.detail).toContain("queue updates");
+	expect(partial.catalog.detail).toContain("enumerable");
+	expect(partial.queue_snapshot.detail).toContain("hasPendingMessages");
 });
 
 test("retained errors alone do not implement the combined errors/outcomes row", () => {
