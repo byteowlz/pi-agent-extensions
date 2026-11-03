@@ -81,6 +81,19 @@ wired** into the socket yet: dispatch and queue return honest `unavailable`
 results until a public Pi SDK seam exists, and permission presentation waits for
 Core's generated DTOs. See `docs/runtime-interaction-adapter.md`.
 
+### Native source-result frames (read-only)
+
+`runtime_interactions_source_v1` is advertised separately from engine
+availability. After the normal `interaction_negotiate`/v1 acceptance, a client
+may send `{"type":"interaction_source","request":…}`; the bridge answers with a
+generated-schema `interaction_source_response` or an `interaction_source_status`
+(`invalid_request`, `not_negotiated`, `source_unavailable`, `source_changed`,
+`unsupported_operation`). Source identity is only the native session id plus the
+source runtime epoch; there is no public binding or host authority on this
+boundary. Served: capabilities, command catalog, queue snapshot, error list and
+an unavailable receipt lookup. Everything else refuses without effects. See
+`docs/runtime-interaction-adapter.md`.
+
 ### Reloading every live Pi
 
 `/reload-when-idle` (also behind the `reload` command) reloads a Pi now, or queues it until

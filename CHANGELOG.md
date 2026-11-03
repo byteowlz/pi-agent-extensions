@@ -4,6 +4,30 @@ All notable changes to pi-agent-extensions will be documented in this file.
 
 ## [Unreleased]
 
+### Native source-result framing, pin 811bc5ac (3.10.0)
+
+- **pi-tui-rpc**: re-vendored the whole Core bundle at
+  `811bc5ac0971da9c3b96bc1ef6768ff6d985954e` (68 files, manifest SHA
+  `94e3530b…aba13`, 7 inputs); SOURCE.json updated. New source schemas, corpus and
+  transport contract are validated by test.
+- New `interaction-source.ts`: parses/validates `interaction_source`,
+  `interaction_source_response` and `interaction_source_status`; implements
+  Core's exact `matches_request` correlation (request id, native identity, exact
+  generation representation, operation/result family and ids); re-checks the
+  actual native session + continuity epoch and the negotiation gate before and
+  after every await. Absent → `source_unavailable`, changed → `source_changed`,
+  unnegotiated → `not_negotiated`.
+- Read-only tranche only: capabilities, catalog, queue snapshot, error list and
+  an unavailable receipt lookup. All other operations refuse with the canonical
+  `unsupported_operation`; no command, permission, policy or queue effect runs.
+- `runtime_interactions_source_v1` is advertised from `transport.json` separately
+  from engine availability; the existing `interaction_negotiate` v1 acceptance
+  gates source requests and direct replies. Canonical public `interaction`
+  requests remain `binding_unavailable`; source results are not host admission.
+- Tests: 103 pi-tui-rpc tests, including the full shared source corpus (11
+  pairs / 28 frames / 12 denials / 9 correlation mismatches), negotiation loss
+  and continuity change during an await, and exact epoch-representation matching.
+
 ### Source-owned interaction runtime continuity in get_state (3.9.0)
 
 - **pi-tui-rpc**: `get_state` now carries an optional

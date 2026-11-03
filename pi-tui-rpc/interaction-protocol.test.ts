@@ -28,13 +28,13 @@ test("the vendored bundle is complete, unchanged and pinned by SOURCE.json", () 
 		file_count: number;
 		core_path: string;
 	};
-	expect(source.core_commit).toBe("b9fdfee929388dabfdb69cdcb822bfc8a08b6bf2");
-	expect(source.manifest_sha256).toBe("1cc56745660ce8700b9864a458826abd41408eb4bde40da289f38e71c9a9f488");
+	expect(source.core_commit).toBe("811bc5ac0971da9c3b96bc1ef6768ff6d985954e");
+	expect(source.manifest_sha256).toBe("94e3530b56379182f894aefedebb37f9d4771186d46e7652ec6ceb85600aba13");
 	expect(source.core_path).toBe("backend/crates/oqto-protocol/contracts/runtime-interactions/v1");
 
 	const files = filesUnder(V1);
-	expect(files.length).toBe(57);
-	expect(source.file_count).toBe(57);
+	expect(files.length).toBe(68);
+	expect(source.file_count).toBe(68);
 	expect(sha256(join(V1, "manifest.json"))).toBe(source.manifest_sha256);
 });
 
@@ -53,7 +53,8 @@ test("every manifest hash matches the vendored byte content", () => {
 	expect(manifest.scope).toContain("DTO/codec conformance");
 
 	const names = Object.keys(manifest.files);
-	expect(names.length).toBe(56);
+	expect(names.length).toBe(67);
+	expect(Object.keys(manifest.inputs).length).toBe(7);
 	for (const name of names) {
 		expect({ name, hash: sha256(join(V1, name)) }).toEqual({ name, hash: manifest.files[name] });
 	}
@@ -127,6 +128,41 @@ test("the actual wire boundary accepts every Core positive and rejects every Cor
 	expect(rejected).toHaveLength(20);
 	for (const name of ["forged_authority", "answer_cannot_change_model", "answer_cannot_write_policy"]) {
 		expect(rejected).toContain(name);
+	}
+});
+
+test("native source framing is vendored with its own schemas, corpus and transport", () => {
+	const transport = JSON.parse(readFileSync(join(V1, "transport.json"), "utf8")) as {
+		sourceCapability: string;
+		version: number;
+		continuityField: string;
+		hostBindingOnNativeWire: boolean;
+		sourceResultIsHostAdmission: boolean;
+		automaticReplay: boolean;
+	};
+	expect(transport.sourceCapability).toBe("runtime_interactions_source_v1");
+	expect(transport.version).toBe(1);
+	expect(transport.continuityField).toBe("interactionRuntimeGeneration");
+	expect(transport.hostBindingOnNativeWire).toBe(false);
+	expect(transport.sourceResultIsHostAdmission).toBe(false);
+	expect(transport.automaticReplay).toBe(false);
+
+	const fixtures = JSON.parse(readFileSync(join(V1, "source-fixtures.json"), "utf8")) as {
+		normative: boolean;
+		scope: string;
+		pairs: unknown[];
+		frames: unknown[];
+		invalid: unknown[];
+		mismatches: unknown[];
+	};
+	expect(fixtures.normative).toBe(true);
+	expect(fixtures.scope).toContain("never authenticated host admission");
+	expect(fixtures.pairs.length).toBe(11);
+	expect(fixtures.frames.length).toBe(28);
+	expect(fixtures.invalid.length).toBe(12);
+	expect(fixtures.mismatches.length).toBe(9);
+	for (const name of ["source-request.schema.json", "source-response.schema.json", "source-frame.schema.json"]) {
+		expect(JSON.parse(readFileSync(join(V1, name), "utf8")).$schema).toBe("http://json-schema.org/draft-07/schema#");
 	}
 });
 

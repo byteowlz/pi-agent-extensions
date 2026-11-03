@@ -55,6 +55,7 @@ import { type ModelSummary, type RpcDeps, dispatchCommand, dispatchInteractionRe
 import { type Hub, createHub } from "./hub.js";
 import { InteractionAdapter } from "./interaction-adapter.js";
 import { createInteractionContinuity, interactionRuntimeMetadata } from "./interaction-continuity.js";
+import { RUNTIME_INTERACTIONS_SOURCE_CAPABILITY, handleSourceFrame } from "./interaction-source.js";
 import { createLease, takeoverDecision } from "./lease.js";
 import {
 	COMMAND_TYPES,
@@ -594,7 +595,13 @@ export default function (pi: ExtensionAPI) {
 					pid: process.pid,
 					lease: lease.owner(),
 					commands: COMMAND_TYPES,
-					capabilities: ["connection_leases_v1", "reload_when_idle_v1", RUNTIME_INTERACTIONS_CAPABILITY],
+					capabilities: [
+						"connection_leases_v1",
+						"reload_when_idle_v1",
+						RUNTIME_INTERACTIONS_CAPABILITY,
+						// Source-frame support is advertised separately from engine availability.
+						RUNTIME_INTERACTIONS_SOURCE_CAPABILITY,
+					],
 				});
 			},
 			onDisconnect: (clientId) => lease.disconnect(clientId),
@@ -605,6 +612,30 @@ export default function (pi: ExtensionAPI) {
 					if (version === null) hub?.clearInteraction(clientId);
 					else hub?.negotiateInteraction(clientId, version);
 					reply(negotiatedFrame(version));
+					return;
+				}
+				if (typeof value === "object" && value !== null && (value as { type?: unknown }).type === "interaction_source") {
+					void handleSourceFrame(value, {
+						adapter: interactionAdapter,
+						// Actual bridge context only: native session + owning continuity.
+						currentSource: () => {
+							const native = currentCtx?.sessionManager.getSessionId();
+							const epoch = interactionContinuity.current();
+							if (!native || !epoch) return undefined;
+							return { nativeSessionId: native, runtimeGeneration: epoch };
+						},
+						negotiated: () => hub?.interactionVersion(clientId) === RUNTIME_INTERACTIONS_VERSION,
+					}).then((frame) => {
+						// Direct replies are gated too: a source result never bypasses negotiation.
+						if (
+							frame.type === "interaction_source_response" &&
+							hub?.interactionVersion(clientId) !== RUNTIME_INTERACTIONS_VERSION
+						) {
+							reply({ type: "interaction_source_status", requestId: frame.response.requestId, code: "not_negotiated" });
+							return;
+						}
+						reply(frame);
+					});
 					return;
 				}
 				if (typeof value === "object" && value !== null && (value as { type?: unknown }).type === "interaction") {

@@ -83,6 +83,9 @@ interface Schemas {
 	request: ValidateFunction;
 	response: ValidateFunction;
 	event: ValidateFunction;
+	sourceRequest: ValidateFunction;
+	sourceResponse: ValidateFunction;
+	sourceFrame: ValidateFunction;
 	pieces: Record<CanonicalSchemaName, ValidateFunction>;
 }
 
@@ -109,6 +112,9 @@ function compiled(): Schemas {
 	const requestSchema = readSchema("request.schema.json");
 	const responseSchema = readSchema("response.schema.json");
 	const eventSchema = readSchema("event.schema.json");
+	const sourceRequestSchema = readSchema("source-request.schema.json");
+	const sourceResponseSchema = readSchema("source-response.schema.json");
+	const sourceFrameSchema = readSchema("source-frame.schema.json");
 	const names: CanonicalSchemaName[] = [
 		"RuntimeCommandCatalog",
 		"RuntimeCommandReceipt",
@@ -123,6 +129,9 @@ function compiled(): Schemas {
 		request: ajv.compile(requestSchema),
 		response: ajv.compile(responseSchema),
 		event: ajv.compile(eventSchema),
+		sourceRequest: ajv.compile(sourceRequestSchema),
+		sourceResponse: ajv.compile(sourceResponseSchema),
+		sourceFrame: ajv.compile(sourceFrameSchema),
 		pieces,
 	};
 	return schemas;
@@ -136,6 +145,15 @@ export function validateRuntimeResponse(value: unknown): boolean {
 }
 export function validateRuntimeEvent(value: unknown): boolean {
 	return compiled().event(value) === true;
+}
+export function validateSourceRequest(value: unknown): boolean {
+	return compiled().sourceRequest(value) === true;
+}
+export function validateSourceResponse(value: unknown): boolean {
+	return compiled().sourceResponse(value) === true;
+}
+export function validateSourceFrame(value: unknown): boolean {
+	return compiled().sourceFrame(value) === true;
 }
 /** Validate one canonical piece (port output) against the generated response schema. */
 export function validateCanonicalPiece(name: CanonicalSchemaName, value: unknown): boolean {
